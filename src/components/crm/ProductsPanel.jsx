@@ -107,8 +107,14 @@ export default function ProductsPanel({ profile }) {
                   <input type="checkbox" checked={!!draft.track_inventory} onChange={e => setDraft({ ...draft, track_inventory: e.target.checked })} className="accent-ember" />
                   Track in inventory (serial-tracked hardware)
                 </label>
+                <div><label className={label}>Default supplier</label>
+                  <select className={input} value={draft.supplier_id || ''} onChange={e => setDraft({ ...draft, supplier_id: e.target.value })}>
+                    <option value="">None</option>
+                    {suppliers.map(su => <option key={su.id} value={su.id}>{su.name}</option>)}
+                  </select>
+                  {suppliers.length === 0 && <div className="text-[10px] text-dim mt-1">No suppliers yet — add them under Inventory → Suppliers.</div>}</div>
                 {draft.track_inventory && (
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 gap-3">
                     <div><label className={label}>Hardware category</label>
                       <select className={input} value={draft.inv_category || ''} onChange={e => setDraft({ ...draft, inv_category: e.target.value })}>
                         <option value="">Select…</option>
@@ -116,11 +122,6 @@ export default function ProductsPanel({ profile }) {
                       </select></div>
                     <div><label className={label}>Low-stock threshold</label>
                       <input type="number" min="0" className={input} value={draft.default_threshold ?? ''} onChange={e => setDraft({ ...draft, default_threshold: e.target.value })} placeholder="3" /></div>
-                    <div><label className={label}>Default supplier</label>
-                      <select className={input} value={draft.supplier_id || ''} onChange={e => setDraft({ ...draft, supplier_id: e.target.value })}>
-                        <option value="">None</option>
-                        {suppliers.map(su => <option key={su.id} value={su.id}>{su.name}</option>)}
-                      </select></div>
                   </div>
                 )}
               </div>
@@ -148,6 +149,7 @@ export default function ProductsPanel({ profile }) {
                           {!p.active && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-slate-100 text-slate-500">Inactive</span>}
                         </div>
                         {p.description && <div className="text-xs text-muted line-clamp-1">{p.description}</div>}
+                        {p.supplier_id && <div className="text-[10px] text-dim mt-0.5">Supplier: {suppliers.find(s => s.id === p.supplier_id)?.name || '—'}</div>}
                       </div>
                       <div className="text-right shrink-0">
                         <div className="text-sm font-mono text-paper">{money(p.default_price)}</div>
