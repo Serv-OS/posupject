@@ -124,7 +124,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       const contact = contacts.find(c => c.id === inv.contact_id);
       const addr = (o) => o ? [o.address, o.city, o.postcode].filter(Boolean).join(', ') : '';
       await downloadInvoicePdf({
-        inv, lines,
+        inv: { ...inv, terms: inv.terms || globalTerms }, lines,
         totals: { subtotal, tax: taxAmount, total, paid: inv.amount_paid },
         seller: {
           name: seller?.business_name, address: seller?.business_address,

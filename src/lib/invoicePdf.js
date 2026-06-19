@@ -64,10 +64,14 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
     leftBottom = y + 28
   }
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(110, 110, 110)
-  for (const line of [seller.address, [seller.email, seller.phone].filter(Boolean).join('   ·   ')].filter(Boolean)) {
-    doc.text(String(line), M, leftBottom + 3)
-    leftBottom += 13
-  }
+  const leftW = 300 // keep seller text clear of the right-hand invoice meta column
+  const sellerLines = []
+  if (seller.address) sellerLines.push(...doc.splitTextToSize(String(seller.address), leftW))
+  const sellerContact = [seller.email, seller.phone].filter(Boolean).join('   ·   ')
+  if (sellerContact) sellerLines.push(...doc.splitTextToSize(sellerContact, leftW))
+  let sy = leftBottom + 3
+  for (const line of sellerLines) { doc.text(line, M, sy); sy += 12 }
+  leftBottom = sy
 
   doc.setFont('helvetica', 'bold').setFontSize(22).setTextColor(ar, ag, ab)
   doc.text('INVOICE', W - M, y + 16, { align: 'right' })
@@ -104,16 +108,19 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
   doc.setDrawColor(232).line(M, y, W - M, y)
   y += 20
   const col2 = M + (W - 2 * M) / 2
+  const billW = col2 - M - 16   // wrap each column to its own width so they never collide
+  const locW = (W - M) - col2
+  const wrapParts = (parts, w) => parts.filter(Boolean).flatMap((p) => doc.splitTextToSize(String(p), w))
   doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(150, 150, 150)
   doc.text('BILL TO', M, y)
-  const billLines = [billTo.companyName, billTo.companyAddress, billTo.contactName, billTo.contactEmail].filter(Boolean)
-  const locLines = [billTo.locationName, billTo.locationAddress].filter(Boolean)
+  const billLines = wrapParts([billTo.companyName, billTo.companyAddress, billTo.contactName, billTo.contactEmail], billW)
+  const locLines = wrapParts([billTo.locationName, billTo.locationAddress], locW)
   if (locLines.length) doc.text('SERVICE LOCATION', col2, y)
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(45, 45, 45)
   let by = y + 15
-  for (const l of (billLines.length ? billLines : ['—'])) { doc.text(String(l), M, by); by += 13 }
+  for (const l of (billLines.length ? billLines : ['—'])) { doc.text(l, M, by); by += 13 }
   let ly = y + 15
-  for (const l of locLines) { doc.text(String(l), col2, ly); ly += 13 }
+  for (const l of locLines) { doc.text(l, col2, ly); ly += 13 }
   y = Math.max(by, ly) + 8
 
   // ── Line items ─────────────────────────────────────────────────────────────
