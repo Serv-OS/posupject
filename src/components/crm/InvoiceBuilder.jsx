@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { ArrowLeft, Send, Link2, Trash2, Plus, Check, Ban, Repeat } from 'lucide-react';
+import { ArrowLeft, Send, Link2, Trash2, Plus, Check, Ban, Repeat, FileDown } from 'lucide-react';
 import { money, invStatus, INV_BADGE } from './InvoicesPanel.jsx';
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
@@ -16,6 +16,8 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
   const [globalTerms, setGlobalTerms] = useState('');
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
+  const [seller, setSeller] = useState(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [flash, setFlash] = useState('');
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -23,10 +25,10 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
     const [i, li, c, l, ct, st, pr, sk] = await Promise.all([
       supabase.from('invoices').select('*').eq('id', invoiceId).single(),
       supabase.from('invoice_line_items').select('*').eq('invoice_id', invoiceId).order('sort'),
-      supabase.from('companies').select('id, name').order('name'),
-      supabase.from('locations').select('id, name, company_id').order('name'),
+      supabase.from('companies').select('id, name, address, city, postcode').order('name'),
+      supabase.from('locations').select('id, name, company_id, address, city, postcode').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
-      supabase.from('support_settings').select('invoice_terms').eq('id', 1).maybeSingle(),
+      supabase.from('support_settings').select('invoice_terms, business_name, business_address, business_email, business_phone, logo_url, quote_accent').eq('id', 1).maybeSingle(),
       supabase.from('products').select('id, name, description, default_price, category').eq('active', true).order('name'),
       supabase.from('inv_serials').select('product_id').eq('status', 'in_stock'),
     ]);
@@ -38,6 +40,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
     (sk.data || []).forEach(r => { counts[r.product_id] = (counts[r.product_id] || 0) + 1; });
     setStockCounts(counts);
     setGlobalTerms(st.data?.invoice_terms || '');
+    setSeller(st.data || {});
   }, [invoiceId]);
   useEffect(() => { load(); }, [load]);
 
@@ -109,6 +112,38 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
     try { await navigator.clipboard.writeText(url); notify('Link copied'); } catch { prompt('Invoice link:', url); }
   };
 
+  // One-click PDF. Persists edits first (unless locked) so the file matches the
+  // saved invoice, then renders client-side via the lazy-loaded generator.
+  const downloadPdf = async () => {
+    setPdfBusy(true);
+    try {
+      if (!locked && !(await save())) { setPdfBusy(false); return; }
+      const { downloadInvoicePdf } = await import('../../lib/invoicePdf');
+      const company = companies.find(c => c.id === inv.company_id);
+      const location = locations.find(l => l.id === inv.location_id);
+      const contact = contacts.find(c => c.id === inv.contact_id);
+      const addr = (o) => o ? [o.address, o.city, o.postcode].filter(Boolean).join(', ') : '';
+      await downloadInvoicePdf({
+        inv, lines,
+        totals: { subtotal, tax: taxAmount, total, paid: inv.amount_paid },
+        seller: {
+          name: seller?.business_name, address: seller?.business_address,
+          email: seller?.business_email, phone: seller?.business_phone,
+          logo_url: seller?.logo_url, accent: seller?.quote_accent,
+        },
+        billTo: {
+          companyName: company?.name, companyAddress: addr(company),
+          contactName: contact ? [contact.first_name, contact.last_name].filter(Boolean).join(' ') : '',
+          contactEmail: contact?.email,
+          locationName: location?.name, locationAddress: addr(location),
+        },
+        fmt: money, taxLabel: 'VAT', dateLocale: 'en-GB',
+      });
+      notify('PDF downloaded');
+    } catch (e) { alert('PDF failed: ' + e.message); }
+    setPdfBusy(false);
+  };
+
   const markPaid = async () => {
     if (!confirm('Mark this invoice as paid (received outside Stripe)?')) return;
     await save({ status: 'paid', paid_at: new Date().toISOString(), amount_paid: total });
@@ -141,6 +176,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
           <div className="flex gap-2 ml-auto flex-wrap">
             {!locked && <button onClick={() => save().then(ok => ok && notify('Saved'))} disabled={saving} className="btn-ghost px-4 py-2 rounded-xl text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>}
             <button onClick={copyLink} className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5"><Link2 size={14} /> Copy link</button>
+            <button onClick={downloadPdf} disabled={pdfBusy} title="Download this invoice as a PDF" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 disabled:opacity-50"><FileDown size={14} /> {pdfBusy ? 'Preparing…' : 'PDF'}</button>
             {!locked && <button onClick={sendInvoice} disabled={sending} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50"><Send size={14} /> {sending ? 'Sending…' : inv.sent_at ? 'Resend' : 'Send'}</button>}
             {!locked && <button onClick={markPaid} className="px-3 py-2 rounded-xl text-sm font-semibold bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 flex items-center gap-1.5"><Check size={14} /> Mark paid</button>}
             {!locked && <button onClick={voidInvoice} title="Void" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 text-muted"><Ban size={14} /></button>}
