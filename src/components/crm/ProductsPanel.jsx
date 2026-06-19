@@ -55,11 +55,13 @@ export default function ProductsPanel({ profile }) {
       default_threshold: draft.default_threshold === '' || draft.default_threshold == null ? null : parseInt(draft.default_threshold),
       supplier_id: draft.supplier_id || null,
     };
-    if (editing === 'new') await supabase.from('products').insert(payload);
-    else await supabase.from('products').update(payload).eq('id', editing);
+    const { error } = editing === 'new'
+      ? await supabase.from('products').insert(payload)
+      : await supabase.from('products').update(payload).eq('id', editing);
+    if (error) { alert('Could not save product:\n\n' + error.message + '\n\nYour details are still here — fix the issue and try again.'); return; }
     setEditing(null); load();
   };
-  const remove = async (p) => { if (!confirm(`Delete product "${p.name}"?`)) return; await supabase.from('products').delete().eq('id', p.id); load(); };
+  const remove = async (p) => { if (!confirm(`Delete product "${p.name}"?`)) return; const { error } = await supabase.from('products').delete().eq('id', p.id); if (error) { alert('Could not delete: ' + error.message); return; } load(); };
 
   const money = (v) => `£${Number(v || 0).toLocaleString('en-GB', { minimumFractionDigits: 0 })}`;
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
