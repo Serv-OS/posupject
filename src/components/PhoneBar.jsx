@@ -15,6 +15,7 @@ export default function PhoneBar({ profile }) {
   const timerRef = useRef(null);
   const deviceRef = useRef(null);
   const pendingCallRef = useRef(null);
+  const autoOnlineRef = useRef(false);
 
   useEffect(() => {
     supabase.from('support_settings').select('twilio_number').eq('id', 1).maybeSingle()
@@ -183,6 +184,14 @@ export default function PhoneBar({ profile }) {
     setIsMuted(false);
     setStatus(deviceRef.current ? 'online' : 'offline');
   };
+
+  // Auto go online once on login, so incoming calls ring without clicking "Go Online".
+  useEffect(() => {
+    if (autoOnlineRef.current) return;
+    autoOnlineRef.current = true;
+    goOnline();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Heartbeat: keep agent status fresh
   useEffect(() => {
