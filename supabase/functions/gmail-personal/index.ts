@@ -62,6 +62,21 @@ function header(headers: any[], name: string): string {
   return headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || "";
 }
 
+// Best-effort: drop quoted history from a plain-text reply so each message in a
+// thread shows only its new content (Gmail has no uniqueBody equivalent).
+function stripQuoted(text: string): string {
+  if (!text) return "";
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (/^On .+wrote:$/.test(t) || /^-{3,}\s*Original Message/i.test(t) || /^_{10,}/.test(t)) break;
+    if (t.startsWith(">")) continue;
+    out.push(line);
+  }
+  const r = out.join("\n").trim();
+  return r || text.trim();
+}
+
 // Walk MIME parts; prefer text/plain, fall back to text/html (stripped).
 function extractBody(payload: any): { text: string; html: string } {
   let text = "", html = "";
@@ -126,6 +141,28 @@ serve(async (req) => {
         };
       }));
       return json({ messages, nextPageToken: list.nextPageToken || null });
+    }
+
+    // ---- THREAD: every message in a conversation (Gmail) ----
+    if (action === "thread") {
+      if (!body.threadId) return json({ error: "Missing threadId" }, 422);
+      const r = await fetch(GMAIL + "/threads/" + body.threadId + "?format=full", { headers: H });
+      const d = await r.json();
+      if (!r.ok) return json({ error: d.error?.message || "Could not load thread." }, 400);
+      const messages = (d.messages || []).map((m: any) => {
+        const hs = m.payload?.headers || [];
+        const { text, html } = extractBody(m.payload);
+        return {
+          id: m.id, threadId: m.threadId, messageId: header(hs, "Message-ID") || header(hs, "Message-Id"),
+          from: header(hs, "From"),
+          to: header(hs, "To"),
+          subject: header(hs, "Subject"),
+          date: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : "",
+          unread: (m.labelIds || []).includes("UNREAD"),
+          text: stripQuoted(text), html,
+        };
+      });
+      return json({ messages, subject: messages[messages.length - 1]?.subject || "" });
     }
 
     // ---- GET: full message with decoded body ----
