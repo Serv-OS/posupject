@@ -26,7 +26,7 @@ export default function PurchasingView({ profile, initialTab = 'orders' }) {
       supabase.from('inv_orders').select('*, lines:inv_order_lines(*)').order('created_at', { ascending: false }),
       supabase.from('inv_shipments').select('*, lines:inv_shipment_lines(*), warehouse:inv_warehouses(name)').order('created_at', { ascending: false }),
       supabase.from('inv_suppliers').select('*').order('name'),
-      supabase.from('products').select('id, name, inv_category, default_price, cost_price').eq('active', true).order('name'),
+      supabase.from('products').select('id, name, inv_category, default_price, cost_price, cost_tax_rate').eq('active', true).order('name'),
       supabase.from('inv_warehouses').select('*'),
     ]);
     setOrders(o.data || []); setShipments(sh.data || []); setSuppliers(su.data || []);
@@ -166,16 +166,18 @@ function ShipmentCard({ s, canWrite, onReceive }) {
 function POModal({ products, suppliers, profile, onClose, onSaved }) {
   const [supplierName, setSupplierName] = useState('');
   const [expectedBy, setExpectedBy] = useState('');
-  const [taxRate, setTaxRate] = useState('');
   const [taxAmount, setTaxAmount] = useState('');
   const [taxRef, setTaxRef] = useState('');
-  const [rows, setRows] = useState([{ product_id: '', product_name: '', category: '', qty: 1, unit_cost: '' }]);
+  const [rows, setRows] = useState([{ product_id: '', product_name: '', category: '', qty: 1, unit_cost: '', tax_rate: '' }]);
   const [saving, setSaving] = useState(false);
   const set = (i, k, v) => setRows(p => p.map((r, x) => x === i ? { ...r, [k]: v } : r));
-  const pick = (i, id) => { const p = products.find(x => x.id === id); setRows(prev => prev.map((r, x) => x === i ? { ...r, product_id: id, product_name: p?.name || '', category: p?.inv_category || '', unit_cost: r.unit_cost || p?.cost_price || '' } : r)); };
+  const pick = (i, id) => { const p = products.find(x => x.id === id); setRows(prev => prev.map((r, x) => x === i ? { ...r, product_id: id, product_name: p?.name || '', category: p?.inv_category || '', unit_cost: r.unit_cost || p?.cost_price || '', tax_rate: (r.tax_rate !== '' && r.tax_rate != null) ? r.tax_rate : (p?.cost_tax_rate ?? 20) } : r)); };
 
   const subtotal = rows.reduce((s, r) => s + (Number(r.unit_cost) || 0) * (Number(r.qty) || 0), 0);
-  const resolvedTax = taxAmount !== '' ? Number(taxAmount) : (taxRate !== '' ? subtotal * Number(taxRate) / 100 : 0);
+  // VAT is auto-computed per line from each product's purchase VAT rate; a typed
+  // "Tax amount" overrides (e.g. to match a supplier invoice to the penny).
+  const lineTax = rows.reduce((s, r) => s + (Number(r.unit_cost) || 0) * (Number(r.qty) || 0) * (Number(r.tax_rate) || 0) / 100, 0);
+  const resolvedTax = taxAmount !== '' ? Number(taxAmount) : lineTax;
 
   const save = async () => {
     setSaving(true);
@@ -184,18 +186,23 @@ function POModal({ products, suppliers, profile, onClose, onSaved }) {
       if (!supplierName.trim()) throw new Error('Supplier is required.');
       if (!lines.length) throw new Error('Add at least one line.');
       const poNumber = `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`;
-      // proportional tax split -> landed unit cost (same as the old app)
+      // Per-line VAT from each product's rate → landed unit cost. If a total VAT
+      // was typed to match a supplier invoice, split it proportionally instead.
+      const manualOverride = taxAmount !== '';
       const withTax = lines.map(r => {
         const lineValue = (Number(r.unit_cost) || 0) * Number(r.qty);
-        const taxShare = subtotal > 0 ? (lineValue / subtotal) * resolvedTax : 0;
+        const taxShare = manualOverride
+          ? (subtotal > 0 ? (lineValue / subtotal) * resolvedTax : 0)
+          : lineValue * (Number(r.tax_rate) || 0) / 100;
         const taxPerUnit = Number(r.qty) > 0 ? taxShare / Number(r.qty) : 0;
         return { ...r, taxShare, taxPerUnit, landed: (Number(r.unit_cost) || 0) + taxPerUnit };
       });
+      const blendedRate = subtotal > 0 ? +((resolvedTax / subtotal) * 100).toFixed(2) : null;
       const { data: order, error } = await supabase.from('inv_orders').insert({
         po_number: poNumber, supplier_name: supplierName.trim(),
         supplier_id: suppliers.find(s => s.name === supplierName.trim())?.id || null,
         expected_by: expectedBy || null, status: 'pending',
-        subtotal: +subtotal.toFixed(2), tax_rate: taxRate === '' ? null : Number(taxRate),
+        subtotal: +subtotal.toFixed(2), tax_rate: blendedRate,
         tax_amount: +resolvedTax.toFixed(2), tax_ref: taxRef || null,
         total_with_tax: +(subtotal + resolvedTax).toFixed(2), created_by: profile.id,
       }).select().single();
@@ -222,24 +229,23 @@ function POModal({ products, suppliers, profile, onClose, onSaved }) {
           <div><label className={label}>Tax ref</label><input className={input} value={taxRef} onChange={e => setTaxRef(e.target.value)} placeholder="VAT invoice #" /></div>
         </div>
         {rows.map((r, i) => (
-          <div key={i} className="grid grid-cols-[1fr_90px_110px_32px] gap-2 items-end">
+          <div key={i} className="grid grid-cols-[1fr_64px_84px_64px_32px] gap-2 items-end">
             <div><label className={label}>Product</label>
               <select className={input} value={r.product_id} onChange={e => pick(i, e.target.value)}>
                 <option value="">Select…</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select></div>
             <div><label className={label}>Qty</label><input type="number" min="1" className={input} value={r.qty} onChange={e => set(i, 'qty', e.target.value)} /></div>
             <div><label className={label}>Unit £</label><input className={input} value={r.unit_cost} onChange={e => set(i, 'unit_cost', e.target.value)} /></div>
+            <div><label className={label}>VAT %</label><input className={input} value={r.tax_rate ?? ''} onChange={e => set(i, 'tax_rate', e.target.value)} placeholder="20" /></div>
             <button onClick={() => setRows(p => p.filter((_, x) => x !== i))} className="text-dim hover:text-red-600 pb-2"><Trash2 size={15} /></button>
           </div>
         ))}
-        <button onClick={() => setRows(p => [...p, { product_id: '', product_name: '', category: '', qty: 1, unit_cost: '' }])}
+        <button onClick={() => setRows(p => [...p, { product_id: '', product_name: '', category: '', qty: 1, unit_cost: '', tax_rate: '' }])}
           className="text-xs text-ember hover:text-ember-deep font-medium">+ Add line</button>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className={label}>Tax rate % (or)</label><input className={input} value={taxRate} onChange={e => { setTaxRate(e.target.value); setTaxAmount(''); }} placeholder="20" /></div>
-          <div><label className={label}>Tax amount £</label><input className={input} value={taxAmount} onChange={e => { setTaxAmount(e.target.value); setTaxRate(''); }} placeholder="overrides rate" /></div>
-        </div>
-        <div className="text-sm text-muted">Subtotal <b className="text-paper">{fmtGBP(subtotal)}</b> · Tax <b className="text-paper">{fmtGBP(resolvedTax)}</b> · Total <b className="text-paper">{fmtGBP(subtotal + resolvedTax)}</b>
-          <div className="text-[11px] text-dim mt-0.5">Tax is split across lines proportionally — landed unit cost locks onto received serials.</div></div>
+        <div><label className={label}>Override total VAT £ (optional)</label>
+          <input className={input + ' max-w-xs'} value={taxAmount} onChange={e => setTaxAmount(e.target.value)} placeholder="auto-calculated from each product's VAT" /></div>
+        <div className="text-sm text-muted">Subtotal <b className="text-paper">{fmtGBP(subtotal)}</b> · VAT <b className="text-paper">{fmtGBP(resolvedTax)}</b> · Total <b className="text-paper">{fmtGBP(subtotal + resolvedTax)}</b>
+          <div className="text-[11px] text-dim mt-0.5">VAT is calculated per line from each product's purchase VAT rate (set on the product). Override above to match a supplier invoice. Landed unit cost locks onto received serials.</div></div>
         <div className="flex gap-2"><button onClick={save} disabled={saving} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50">Create PO</button>
           <button onClick={onClose} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>
       </div>
