@@ -53,7 +53,7 @@ const ACTIVE_MAP = {
   release_detail: 'releases', invoice_detail: 'invoices', quote_detail: 'quotes',
 };
 
-const DEFAULT_GROUPS = { appbuild: false, sales: true, inventory: true, delivery: false, support: false, product: false, workforce: false, insights: false };
+const DEFAULT_GROUPS = { appbuild: true, sales: true, inventory: true, delivery: false, support: false, product: false, workforce: false, insights: false };
 
 export default function Sidebar({ profile, projects, activeProject, setActiveProject, view, setView, onSignOut, onRefresh, theme }) {
   const [logos, setLogos] = useState({ light: null, dark: null });
@@ -117,9 +117,22 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
             )}
             {projects.map(p => {
               const Icon = PROJECT_ICON[(p.name || '').toLowerCase()] || Package;
-              const active = view === 'board' && activeProject?.id === p.id;
-              return <NavItem key={p.id} icon={Icon} label={p.name} active={active}
-                onClick={() => { setActiveProject(p); setView('board'); }} />;
+              const isActive = activeProject?.id === p.id;
+              const onProjectView = isActive && (view === 'board' || view === 'features');
+              return (
+                <div key={p.id}>
+                  <NavItem icon={Icon} label={p.name} active={view === 'board' && isActive}
+                    onClick={() => { setActiveProject(p); setView('board'); }} />
+                  {onProjectView && (
+                    <div className="ml-4 pl-2 border-l border-bdr space-y-0.5">
+                      <NavItem icon={LayoutGrid} label="Board" active={view === 'board'}
+                        onClick={() => { setActiveProject(p); setView('board'); }} />
+                      <NavItem icon={Star} label="Features" active={view === 'features'}
+                        onClick={() => { setActiveProject(p); setView('features'); }} />
+                    </div>
+                  )}
+                </div>
+              );
             })}
           </div>
         )}
