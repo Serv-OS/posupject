@@ -25,7 +25,7 @@ export default function ItemDetail({ itemId, profile, onClose }) {
       const [b, m, f, c, a] = await Promise.all([
         supabase.from('buckets').select('*').eq('backlog_project_id', i.backlog_project_id).order('position'),
         supabase.from('profiles').select('id, email, display_name'),
-        supabase.from('features').select('*').eq('project_id', i.backlog_project_id).order('name'),
+        supabase.from('features').select('*').order('name'), // shared pool across all App Build projects
         supabase.from('comments').select('*').eq('item_id', itemId).order('created_at'),
         supabase.from('activity').select('*').eq('item_id', itemId).order('created_at', { ascending: false }),
       ]);

@@ -47,7 +47,7 @@ export default function Board({ project, profile, onOpenItem }) {
       supabase.from('buckets').select('*').eq('backlog_project_id', project.id).order('position'),
       supabase.from('backlog_items').select('*').eq('backlog_project_id', project.id).order('position'),
       supabase.from('profiles').select('id, email, display_name'),
-      supabase.from('features').select('*').eq('project_id', project.id).order('name'),
+      supabase.from('features').select('*').order('name'), // shared pool across all App Build projects
     ]);
     setBuckets(b.data || []);
     setItems(i.data || []);

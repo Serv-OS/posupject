@@ -23,9 +23,11 @@ export default function FeaturesPanel({ project, profile }) {
   useEffect(() => { load(); }, [project.id]);
 
   const load = async () => {
+    // Features are a single shared pool across ALL App Build projects (not per-project),
+    // and counts span every project's items so a feature shows all its bugs/tasks anywhere.
     const [f, i] = await Promise.all([
-      supabase.from('features').select('*').eq('project_id', project.id).order('name'),
-      supabase.from('backlog_items').select('id, type, feature_id, bucket_id, closed_at').eq('backlog_project_id', project.id),
+      supabase.from('features').select('*').order('name'),
+      supabase.from('backlog_items').select('id, type, feature_id, bucket_id, closed_at'),
     ]);
     setFeatures(f.data || []);
     setItems(i.data || []);
@@ -106,8 +108,8 @@ export default function FeaturesPanel({ project, profile }) {
     <div className="h-full flex flex-col">
       <div className="px-6 py-4 border-b border-bdr flex items-center justify-between">
         <div>
-          <div className="text-lg font-bold text-paper">{project.icon} {project.name} — Features</div>
-          <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">{features.length} features · {items.length} total items · {untagged} untagged</div>
+          <div className="text-lg font-bold text-paper">Features</div>
+          <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">Shared across all App Build projects · {features.length} features · {untagged} items untagged</div>
         </div>
         {canWrite && !adding && (
           <button onClick={() => setAdding(true)}
