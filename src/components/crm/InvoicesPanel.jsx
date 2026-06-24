@@ -120,6 +120,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                         <div className="font-mono text-xs text-dim w-20 shrink-0">INV-{inv.invoice_number}</div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm text-paper font-medium truncate">{custName(inv)}</div>
+                          {inv.viewed_at && <div className="text-[10px] text-emerald-600">👁 Viewed {new Date(inv.viewed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>}
                           {inv.recurring_id && <div className="text-[10px] text-uv flex items-center gap-1"><Repeat size={10} /> recurring</div>}
                         </div>
                         <div className="text-xs text-muted shrink-0 w-24 text-right">Due {fmtD(inv.due_date)}</div>

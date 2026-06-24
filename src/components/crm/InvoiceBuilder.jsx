@@ -170,6 +170,9 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
         <button onClick={onClose} className="text-muted hover:text-paper"><ArrowLeft size={18} /></button>
         <div className="text-xl font-bold text-paper">INV-{inv.invoice_number}</div>
         <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg ${INV_BADGE[st]}`}>{st}</span>
+        {inv.viewed_at
+          ? <span className="text-[10px] font-semibold text-emerald-600" title={`Customer opened the invoice ${new Date(inv.viewed_at).toLocaleString('en-GB')}`}>👁 Viewed {new Date(inv.viewed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+          : inv.sent_at && <span className="text-[10px] text-muted">Sent {new Date(inv.sent_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · not opened yet</span>}
         {inv.recurring_id && <span className="text-[10px] text-uv flex items-center gap-1"><Repeat size={11} /> from recurring schedule</span>}
         {flash && <span className="text-xs text-emerald-600 font-semibold">✓ {flash}</span>}
         {canWrite && (
