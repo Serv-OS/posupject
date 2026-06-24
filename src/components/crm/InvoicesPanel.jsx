@@ -177,8 +177,10 @@ function Stat({ label, value, sub, tone }) {
   );
 }
 
-const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
-const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
+// Solid, clearly-bordered fields so the boxes are readable on the white modal
+// (the translucent bg-card + white border made them blend in). Theme-aware.
+const input = "w-full px-3 py-2 rounded-xl text-sm bg-white/85 dark:bg-white/[0.06] border border-slate-300 dark:border-white/20 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-white/35 focus:outline-none focus:border-ember focus:ring-2 focus:ring-ember/30";
+const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-dim mb-1 block";
 
 function ScheduleModal({ schedule, companies, locations, contacts, products = [], profile, onClose, onSaved }) {
   const s = schedule || {};
