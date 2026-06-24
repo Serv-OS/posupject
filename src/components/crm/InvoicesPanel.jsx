@@ -177,10 +177,11 @@ function Stat({ label, value, sub, tone }) {
   );
 }
 
-// Solid, clearly-bordered fields so the boxes are readable on the white modal
-// (the translucent bg-card + white border made them blend in). Theme-aware.
-const input = "w-full px-3 py-2 rounded-xl text-sm bg-white/85 dark:bg-white/[0.06] border border-slate-300 dark:border-white/20 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-white/35 focus:outline-none focus:border-ember focus:ring-2 focus:ring-ember/30";
-const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-dim mb-1 block";
+// Solid, always-readable fields (.r-field lives in index.css) — palette-independent,
+// so the recurring-invoice modal stays readable on the white modal and matches the
+// normal invoice editor's look.
+const input = "w-full r-field";
+const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted mb-1 block";
 
 function ScheduleModal({ schedule, companies, locations, contacts, products = [], profile, onClose, onSaved }) {
   const s = schedule || {};
@@ -281,14 +282,19 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
               </div>
             </div>
             {lines.map((l, i) => (
-              <div key={i} className="flex gap-2 items-start">
-                <div className="flex-1 space-y-1">
-                  <input className={input} value={l.name} onChange={e => setLine(i, 'name', e.target.value)} placeholder="Item name" />
-                  <input className={input + ' text-xs'} value={l.description || ''} onChange={e => setLine(i, 'description', e.target.value)} placeholder="Description (optional)" />
+              <div key={i} className="glass-inner rounded-xl p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input className={input + ' flex-1'} value={l.name} onChange={e => setLine(i, 'name', e.target.value)} placeholder="Item name — e.g. Monthly subscription" />
+                  <button onClick={() => setLines(p => p.filter((_, j) => j !== i))} title="Remove line" className="text-red-500 hover:text-red-600 text-lg leading-none shrink-0 px-1">&times;</button>
                 </div>
-                <input className={input + ' w-16 text-right'} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} placeholder="Qty" />
-                <input className={input + ' w-24 text-right'} value={l.unit_price} onChange={e => setLine(i, 'unit_price', e.target.value)} placeholder="Price" />
-                <button onClick={() => setLines(p => p.filter((_, j) => j !== i))} className="text-dim hover:text-red-600 p-2"><Trash2 size={14} /></button>
+                <input className={input + ' text-xs'} value={l.description || ''} onChange={e => setLine(i, 'description', e.target.value)} placeholder="Description (optional, shown on the invoice)" />
+                <div className="grid grid-cols-2 gap-2">
+                  <div><span className="text-[9px] text-muted block mb-0.5">Qty</span>
+                    <input type="number" className={input} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} placeholder="1" /></div>
+                  <div><span className="text-[9px] text-muted block mb-0.5">Unit £ (ex VAT)</span>
+                    <input type="number" className={input} value={l.unit_price} onChange={e => setLine(i, 'unit_price', e.target.value)} placeholder="0.00" /></div>
+                </div>
+                <div className="text-right text-xs text-muted">Line total: <span className="text-paper font-mono font-semibold">{money((Number(l.qty) || 0) * (Number(l.unit_price) || 0))}</span></div>
               </div>
             ))}
             <div className="flex justify-end gap-4 text-sm pt-1">
