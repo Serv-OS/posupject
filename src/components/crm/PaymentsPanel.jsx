@@ -334,6 +334,13 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
   // live preview: derive each row's volume/txns from the channel totals + split + avg txn
   const totals = accountSavings(RATE_CATEGORIES.map(c => ({ ...rates[c.key], ...deriveRow(channelTotal(c.channel), rates[c.key].split, f.avg_txn_size) })));
   const splitSum = (ch) => catsForChannel(ch).reduce((s, c) => s + (Number(rates[c.key].split) || 0), 0);
+  // Flag any priced row where we'd charge below our own buy cost (rate or per-txn) — usually a pence/pounds mistake.
+  const belowCost = RATE_CATEGORIES.filter(c => {
+    const r = rates[c.key]; if (!isPriced(r)) return false;
+    const rateUnder = Number(r.our_rate_pct) < Number(r.buy_rate_pct);
+    const txnUnder = r.our_txn_fee !== '' && r.our_txn_fee != null && Number(r.our_txn_fee) < Number(r.buy_txn_fee);
+    return rateUnder || txnUnder;
+  });
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -379,7 +386,12 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
             <Mini value={totals.vol ? gbp0(totals.savingYr) : '—'} label="Customer saves / yr" tone="emerald" />
             <Mini value={totals.vol ? gbp2(totals.margin) : '—'} label="We earn / mo" tone="amber" />
           </div>
-          <div className="text-[10px] text-dim">“We earn” is your margin (our rate − buy rate) — internal only, never shown on the customer quote. Volumes auto-split by industry-standard card mix; adjust Split % per row if you have the customer's real breakdown.</div>
+          {belowCost.length > 0 && (
+            <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700">
+              ⚠ You're priced <b>below your buy cost</b> on: {belowCost.map(c => `${c.channelLabel} ${c.label}`).join(', ')}. TXN fees are in <b>pence</b> — enter <b>8</b> for 8p (not 0.08); match the Buy txn column (6 / 10). Make sure Our % ≥ Buy % and Our txn ≥ Buy txn.
+            </div>
+          )}
+          <div className="text-[10px] text-dim">“We earn” is your margin (our rate − buy rate, plus txn markup) — internal only, never shown on the customer quote. Volumes auto-split by industry-standard card mix; adjust Split % per row if you have the customer's real breakdown.</div>
 
           <div className="flex gap-2 pt-1"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save quote</button>
             <button onClick={onClose} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>
@@ -432,7 +444,7 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum }) {
                   <td className="px-1"><input className={cell} value={r.current_txn_fee} onChange={e => setRate(c.key, 'current_txn_fee', e.target.value)} placeholder="0" /></td>
                   <td className="px-1"><input className={cell} value={r.our_txn_fee} onChange={e => setRate(c.key, 'our_txn_fee', e.target.value)} placeholder="—" /></td>
                   <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_txn_fee} onChange={e => setRate(c.key, 'buy_txn_fee', e.target.value)} placeholder={String(c.buyTxn)} /></td>
-                  <td className="pl-2 text-right text-sm font-semibold tabular-nums text-emerald-600">{calc.vol ? gbp0(calc.saving) : '—'}</td>
+                  <td className={`pl-2 text-right text-sm font-semibold tabular-nums ${calc.saving < -0.5 ? 'text-red-600' : 'text-emerald-600'}`}>{calc.vol ? gbp0(calc.saving) : '—'}</td>
                 </tr>
               );
             })}
