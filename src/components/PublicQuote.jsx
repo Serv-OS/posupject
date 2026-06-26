@@ -152,45 +152,28 @@ export default function PublicQuote({ token }) {
         {q.go_live_date && <div className="text-xs text-slate-500 mt-3">Planned go-live: <strong>{fmtDate(q.go_live_date)}</strong></div>}
       </div>
 
-      {/* Card-processing rates + savings */}
+      {/* Card-processing rates */}
       {q.card_processing && (q.card_processing.rows || []).length > 0 && (
         <div className="px-6 sm:px-8 py-5 border-b border-slate-200">
-          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-3">Your card processing</div>
-          <div className="rounded-xl p-5 mb-4" style={{ backgroundColor: accent + '14' }}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-center">
-              <div>
-                <div className="text-3xl sm:text-4xl font-bold" style={{ color: accent }}>{pct(q.card_processing.our_eff)}</div>
-                <div className="text-sm text-slate-500 mt-1">your effective rate with us{Number(q.card_processing.current_eff) > Number(q.card_processing.our_eff) ? ` · down from ${pct(q.card_processing.current_eff)}` : ''}</div>
-              </div>
-              {Number(q.card_processing.saving_yr) > 0 && (
-                <div>
-                  <div className="text-3xl sm:text-4xl font-bold text-emerald-600">{money0(q.card_processing.saving_yr)}<span className="text-base font-semibold opacity-70"> / year</span></div>
-                  <div className="text-sm text-slate-500 mt-1">{money(q.card_processing.saving_mo)} / month saved</div>
-                </div>
-              )}
-            </div>
-          </div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-3">Your card processing rates</div>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-[10px] font-bold uppercase tracking-wide text-slate-400 border-b border-slate-200">
                 <th className="text-left py-2">Card type</th>
-                <th className="text-right py-2">Your rate now</th>
-                <th className="text-right py-2">With us</th>
-                <th className="text-right py-2">You save / mo</th>
+                <th className="text-right py-2">Rate</th>
+                <th className="text-right py-2">Per transaction</th>
               </tr>
             </thead>
             <tbody>
               {(q.card_processing.rows || []).map((r, i) => (
                 <tr key={i} className="border-b border-slate-100">
                   <td className="py-2 text-slate-700">{r.label}{r.channel ? <span className="text-slate-400 text-xs"> · {r.channel}</span> : ''}</td>
-                  <td className="py-2 text-right text-slate-500">{pct(r.current)}</td>
-                  <td className="py-2 text-right text-slate-800 font-medium">{pct(r.our)}</td>
-                  <td className="py-2 text-right font-mono text-emerald-600">{money(r.saving)}</td>
+                  <td className="py-2 text-right text-slate-800 font-medium">{pct(r.rate)}</td>
+                  <td className="py-2 text-right text-slate-800 font-medium">{r.txn != null ? `${r.txn}p` : '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div className="text-[10px] text-slate-400 mt-2">Effective rate includes per-transaction fees based on your average transaction size. Figures based on the volumes provided.</div>
         </div>
       )}
 

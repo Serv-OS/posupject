@@ -5,18 +5,22 @@ import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc, isP
 
 // Build the customer-safe card-processing breakdown frozen onto the quote.
 // Excludes buy rate & margin — customer only sees current vs our effective rate + saving.
+// Customer-facing snapshot = the rate card we're offering: our % + per-transaction fee
+// per card type. No current rates, no savings, no effective-rate headline.
 const cardSnapshot = (acc) => {
   if (!acc) return null;
-  const s = accountSavings(acc.rates);
-  if (!s.vol) return null;
   const rows = (acc.rates || [])
-    .filter(r => Number(r.monthly_volume || 0) > 0 && isPriced(r))
+    .filter(r => isPriced(r))
     .map(r => {
       const cat = RATE_CATEGORIES.find(c => c.key === r.category);
-      const calc = rowCalc(r);
-      return { channel: cat?.channelLabel || '', label: cat?.label || r.category, current: calc.currentEff, our: calc.ourEff, saving: calc.saving };
+      return {
+        channel: cat?.channelLabel || '',
+        label: cat?.label || r.category,
+        rate: Number(r.our_rate_pct),
+        txn: (r.our_txn_fee === '' || r.our_txn_fee == null) ? null : Number(r.our_txn_fee),
+      };
     });
-  return { rows, saving_mo: s.saving, saving_yr: s.savingYr, current_eff: s.currentEff, our_eff: s.ourEff };
+  return rows.length ? { rows } : null;
 };
 
 const CAT_LABEL = { hardware: 'Hardware', services: 'Services', saas: 'SaaS', payments: 'Payments' };
