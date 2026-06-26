@@ -152,13 +152,23 @@ export default function PublicQuote({ token }) {
         {q.go_live_date && <div className="text-xs text-slate-500 mt-3">Planned go-live: <strong>{fmtDate(q.go_live_date)}</strong></div>}
       </div>
 
-      {/* Card-processing savings */}
-      {q.card_processing && Number(q.card_processing.saving_yr) > 0 && (
+      {/* Card-processing rates + savings */}
+      {q.card_processing && (q.card_processing.rows || []).length > 0 && (
         <div className="px-6 sm:px-8 py-5 border-b border-slate-200">
-          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-3">Your card-processing savings</div>
-          <div className="rounded-xl p-5 text-center mb-4" style={{ backgroundColor: accent + '14' }}>
-            <div className="text-3xl sm:text-4xl font-bold" style={{ color: accent }}>{money0(q.card_processing.saving_yr)}<span className="text-base font-semibold opacity-70"> / year</span></div>
-            <div className="text-sm text-slate-500 mt-1">{money(q.card_processing.saving_mo)} / month · {pct(q.card_processing.current_eff)} → {pct(q.card_processing.our_eff)} effective rate</div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-3">Your card processing</div>
+          <div className="rounded-xl p-5 mb-4" style={{ backgroundColor: accent + '14' }}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-center">
+              <div>
+                <div className="text-3xl sm:text-4xl font-bold" style={{ color: accent }}>{pct(q.card_processing.our_eff)}</div>
+                <div className="text-sm text-slate-500 mt-1">your effective rate with us{Number(q.card_processing.current_eff) > Number(q.card_processing.our_eff) ? ` · down from ${pct(q.card_processing.current_eff)}` : ''}</div>
+              </div>
+              {Number(q.card_processing.saving_yr) > 0 && (
+                <div>
+                  <div className="text-3xl sm:text-4xl font-bold text-emerald-600">{money0(q.card_processing.saving_yr)}<span className="text-base font-semibold opacity-70"> / year</span></div>
+                  <div className="text-sm text-slate-500 mt-1">{money(q.card_processing.saving_mo)} / month saved</div>
+                </div>
+              )}
+            </div>
           </div>
           <table className="w-full text-sm">
             <thead>
