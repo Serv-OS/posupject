@@ -43,14 +43,20 @@ export function applyBrandingValues(s = {}) {
   if (name) document.title = name;
 }
 
+// Per-deployment tax regime (e.g. 'UK_VAT'), cached at load. Gates UK-only Finance
+// features (VAT reclaim, MTD export) so non-UK clones aren't forced into UK tax logic.
+let _taxRegime = null;
+export function taxRegime() { return _taxRegime; }
+export function isUkVat() { return _taxRegime === 'UK_VAT'; }
+
 // Fetch this instance's branding and apply it. Safe if columns don't exist yet.
 export async function loadBranding() {
   try {
     const { data } = await supabase
       .from('public_branding')
-      .select('app_name, business_name, primary_color, secondary_color')
+      .select('app_name, business_name, primary_color, secondary_color, tax_regime')
       .maybeSingle();
-    if (data) applyBrandingValues(data);
+    if (data) { applyBrandingValues(data); _taxRegime = data.tax_regime ?? null; }
   } catch {
     /* columns may not exist on older instances — keep compiled defaults */
   }

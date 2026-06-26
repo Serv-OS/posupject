@@ -1,12 +1,14 @@
 {
   "name": "posupject",
   "private": true,
-  "version": "0.4.22",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
@@ -23,6 +25,7 @@
     "autoprefixer": "^10.4.19",
     "postcss": "^8.4.40",
     "tailwindcss": "^3.4.7",
-    "vite": "^5.3.5"
+    "vite": "^5.3.5",
+    "vitest": "^2.1.8"
   }
 }
