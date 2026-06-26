@@ -15,6 +15,8 @@ export const CHANNELS = [
 
 // Preset BUY rates (our cost, incl. interchange) per scheme. Same for both channels.
 export const BUY_PRESETS = { vm_credit: 0.65, vm_debit: 0.55, amex: 2.0 };
+// Preset BUY per-transaction cost (PENCE) — what each transaction costs us. We mark this up in "Our txn".
+export const BUY_TXN_PRESETS = { vm_credit: 6, vm_debit: 6, amex: 10 };
 
 // Industry-standard UK card mix (% of each channel's volume), editable per quote.
 // Sources: UK Finance UK Payment Markets, BRC Payments Survey, Worldpay GPR.
@@ -37,6 +39,7 @@ export const RATE_CATEGORIES = CHANNELS.flatMap(ch =>
     sk: s.sk, scheme: s.scheme, tier: s.tier,
     label: `${s.scheme}${s.tier ? ' ' + s.tier : ''}`,
     buy: BUY_PRESETS[s.sk],
+    buyTxn: BUY_TXN_PRESETS[s.sk],
     split: CARD_SPLIT[ch.key][s.sk],
   }))
 );
@@ -50,18 +53,20 @@ export const deriveRow = (channelTotal, splitPct, avgTxn) => {
 export const catsForChannel = (ch) => RATE_CATEGORIES.filter(c => c.channel === ch);
 
 // ---- precise per-row savings math --------------------------------------
-// A row carries: current/our/buy rate %, current/our/buy per-txn fee (£),
+// A row carries: current/our/buy rate %, current/our/buy per-txn fee (PENCE),
 // monthly_volume (£) and monthly_txns (count). The per-txn fee matters more
 // on small baskets, so we fold it into an effective rate via avg txn size.
+// Cost = volume × rate% + txns × (pence/100). Adding a txn fee the customer
+// doesn't currently pay raises ourCost and reduces (or removes) the saving.
 export function rowCalc(r = {}) {
   const vol = Number(r.monthly_volume || 0);
   const txns = Number(r.monthly_txns || 0);
   const avg = txns > 0 ? vol / txns : 0;
   const cur = Number(r.current_rate_pct || 0), our = Number(r.our_rate_pct || 0), buy = Number(r.buy_rate_pct || 0);
   const curTxn = Number(r.current_txn_fee || 0), ourTxn = Number(r.our_txn_fee || 0), buyTxn = Number(r.buy_txn_fee || 0);
-  const currentCost = vol * cur / 100 + txns * curTxn;
-  const ourCost = vol * our / 100 + txns * ourTxn;
-  const buyCost = vol * buy / 100 + txns * buyTxn;
+  const currentCost = vol * cur / 100 + txns * curTxn / 100;
+  const ourCost = vol * our / 100 + txns * ourTxn / 100;
+  const buyCost = vol * buy / 100 + txns * buyTxn / 100;
   return {
     vol, txns, avg,
     currentCost, ourCost, buyCost,
@@ -249,7 +254,7 @@ const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-
 
 const emptyRates = () => Object.fromEntries(RATE_CATEGORIES.map(c => [c.key, {
   current_rate_pct: '', our_rate_pct: '', buy_rate_pct: String(c.buy),
-  current_txn_fee: '', our_txn_fee: '', split: String(c.split),
+  current_txn_fee: '', our_txn_fee: '', buy_txn_fee: String(c.buyTxn), split: String(c.split),
 }]));
 
 export function AccountModal({ account, companies, locations, onClose, onSaved }) {
@@ -278,6 +283,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
             current_rate_pct: r.current_rate_pct ?? '', our_rate_pct: r.our_rate_pct ?? '',
             buy_rate_pct: r.buy_rate_pct ?? next[r.category].buy_rate_pct,
             current_txn_fee: r.current_txn_fee ?? '', our_txn_fee: r.our_txn_fee ?? '',
+            buy_txn_fee: r.buy_txn_fee ?? next[r.category].buy_txn_fee,
             split: r.volume_split_pct ?? String(c?.split ?? ''),
           };
         });
@@ -309,6 +315,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
             current_rate_pct: num(r.current_rate_pct), our_rate_pct: num(r.our_rate_pct),
             buy_rate_pct: num(r.buy_rate_pct) ?? c.buy,
             current_txn_fee: num(r.current_txn_fee), our_txn_fee: num(r.our_txn_fee),
+            buy_txn_fee: num(r.buy_txn_fee) ?? c.buyTxn,
             volume_split_pct: num(r.split) ?? c.split,
             monthly_volume: d.monthly_volume, monthly_txns: d.monthly_txns,
           }, { onConflict: 'account_id,category' });
@@ -388,7 +395,7 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum }) {
         <div className={`text-[10px] font-mono ${Math.round(splitSum) === 100 ? 'text-dim' : 'text-amber-600'}`}>split {splitSum}%{Math.round(splitSum) !== 100 ? ' — should total 100' : ''}</div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px]">
+        <table className="w-full min-w-[860px]">
           <thead>
             <tr className="text-[9px] font-mono font-bold uppercase tracking-[0.1em] text-dim">
               <th className="text-left font-bold pb-1.5">Card type</th>
@@ -398,8 +405,9 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum }) {
               <th className="font-bold pb-1.5 px-1">Their %</th>
               <th className="font-bold pb-1.5 px-1">Our %</th>
               <th className="font-bold pb-1.5 px-1">Buy %</th>
-              <th className="font-bold pb-1.5 px-1">Their txn</th>
-              <th className="font-bold pb-1.5 px-1">Our txn</th>
+              <th className="font-bold pb-1.5 px-1">Their txn p</th>
+              <th className="font-bold pb-1.5 px-1">Our txn p</th>
+              <th className="font-bold pb-1.5 px-1">Buy txn p</th>
               <th className="font-bold pb-1.5 pl-2 text-right">Saves/mo</th>
             </tr>
           </thead>
@@ -417,8 +425,9 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum }) {
                   <td className="px-1"><input className={cell} value={r.current_rate_pct} onChange={e => setRate(c.key, 'current_rate_pct', e.target.value)} placeholder="—" /></td>
                   <td className="px-1"><input className={cell} value={r.our_rate_pct} onChange={e => setRate(c.key, 'our_rate_pct', e.target.value)} placeholder="—" /></td>
                   <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_rate_pct} onChange={e => setRate(c.key, 'buy_rate_pct', e.target.value)} placeholder={String(c.buy)} /></td>
-                  <td className="px-1"><input className={cell} value={r.current_txn_fee} onChange={e => setRate(c.key, 'current_txn_fee', e.target.value)} placeholder="—" /></td>
+                  <td className="px-1"><input className={cell} value={r.current_txn_fee} onChange={e => setRate(c.key, 'current_txn_fee', e.target.value)} placeholder="0" /></td>
                   <td className="px-1"><input className={cell} value={r.our_txn_fee} onChange={e => setRate(c.key, 'our_txn_fee', e.target.value)} placeholder="—" /></td>
+                  <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_txn_fee} onChange={e => setRate(c.key, 'buy_txn_fee', e.target.value)} placeholder={String(c.buyTxn)} /></td>
                   <td className="pl-2 text-right text-sm font-semibold tabular-nums text-emerald-600">{calc.vol ? gbp0(calc.saving) : '—'}</td>
                 </tr>
               );
