@@ -44,10 +44,11 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
   }, [expenseId]);
   useEffect(() => { load(); }, [load]);
 
-  const ytd = useMemo(() => exp?.type === 'mileage' && exp.journey_date ? ytdMilesBefore(priorMileage, exp.journey_date, expenseId) : 0, [exp, priorMileage, expenseId]);
+  const jd = exp?.journey_date || exp?.expense_date;  // journey date defaults to the expense date
+  const ytd = useMemo(() => exp?.type === 'mileage' && jd ? ytdMilesBefore(priorMileage, jd, expenseId) : 0, [exp, jd, priorMileage, expenseId]);
   const mileage = useMemo(() => exp?.type === 'mileage'
-    ? computeMileage({ amapRows, vehicleType: exp.vehicle_type || 'car_van', journeyDate: exp.journey_date, miles: exp.miles, ytdMilesBefore: ytd, passengers: exp.passengers })
-    : null, [exp, amapRows, ytd]);
+    ? computeMileage({ amapRows, vehicleType: exp.vehicle_type || 'car_van', journeyDate: jd, miles: exp.miles, ytdMilesBefore: ytd, passengers: exp.passengers })
+    : null, [exp, jd, amapRows, ytd]);
 
   if (!exp) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading…</div>;
 
