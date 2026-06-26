@@ -1,6 +1,23 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
+import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc } from './PaymentsPanel.jsx';
+
+// Build the customer-safe card-processing breakdown frozen onto the quote.
+// Excludes buy rate & margin — customer only sees current vs our effective rate + saving.
+const cardSnapshot = (acc) => {
+  if (!acc) return null;
+  const s = accountSavings(acc.rates);
+  if (!s.vol) return null;
+  const rows = (acc.rates || [])
+    .filter(r => Number(r.monthly_volume || 0) > 0)
+    .map(r => {
+      const cat = RATE_CATEGORIES.find(c => c.key === r.category);
+      const calc = rowCalc(r);
+      return { channel: cat?.channelLabel || '', label: cat?.label || r.category, current: calc.currentEff, our: calc.ourEff, saving: calc.saving };
+    });
+  return { rows, saving_mo: s.saving, saving_yr: s.savingYr, current_eff: s.currentEff, our_eff: s.ourEff };
+};
 
 const CAT_LABEL = { hardware: 'Hardware', services: 'Services', saas: 'SaaS', payments: 'Payments' };
 const STATUS_STYLES = {
@@ -25,6 +42,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const [company, setCompany] = useState(null);
   const [contact, setContact] = useState(null);
   const [locations, setLocations] = useState([]);
+  const [procAccounts, setProcAccounts] = useState([]);
+  const [newProc, setNewProc] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -43,11 +62,21 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     setProducts(pr.data || []);
     if (q.data?.company_id) {
       supabase.from('companies').select('id, name').eq('id', q.data.company_id).single().then(r => setCompany(r.data));
-      supabase.from('locations').select('id, name').eq('company_id', q.data.company_id).order('name').then(r => setLocations(r.data || []));
+      supabase.from('locations').select('id, name, company_id').eq('company_id', q.data.company_id).order('name').then(r => setLocations(r.data || []));
+      loadProc(q.data.company_id);
     } else {
-      supabase.from('locations').select('id, name').order('name').limit(200).then(r => setLocations(r.data || []));
+      supabase.from('locations').select('id, name, company_id').order('name').limit(200).then(r => setLocations(r.data || []));
     }
     if (q.data?.contact_id) supabase.from('contacts').select('id, first_name, last_name, email').eq('id', q.data.contact_id).single().then(r => setContact(r.data));
+  };
+
+  // Card-processing proposals for this company (with their per-row rates), for the attach picker + savings preview.
+  const loadProc = async (companyId) => {
+    const { data: accs } = await supabase.from('processing_accounts').select('*, location:locations(name)').eq('company_id', companyId).order('created_at', { ascending: false });
+    const ids = (accs || []).map(a => a.id);
+    let rates = [];
+    if (ids.length) { const { data } = await supabase.from('processing_rates').select('*').in('account_id', ids); rates = data || []; }
+    setProcAccounts((accs || []).map(a => ({ ...a, rates: rates.filter(r => r.account_id === a.id) })));
   };
 
   const setQ = (k, v) => setQuote(prev => ({ ...prev, [k]: v }));
@@ -78,6 +107,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
       payment_terms: quote.payment_terms, deposit_percent: Number(quote.deposit_percent) || 0,
       tax_rate: Number(quote.tax_rate) || 0, terms: quote.terms || null, notes: quote.notes || null,
       status: quote.status, location_id: quote.location_id || null,
+      processing_account_id: quote.processing_account_id || null,
+      card_processing: cardSnapshot(procAccounts.find(a => a.id === quote.processing_account_id)),
       one_off_subtotal: totals.oneOff, tax_amount: totals.tax, one_off_total: totals.oneOffTotal,
       recurring_arr: totals.recurringArr,
     }).eq('id', quoteId);
@@ -223,6 +254,31 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               </div>
             </div>
 
+            <div className="glass-card rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-bold text-paper">Card-processing savings</div>
+                {canWrite && company && <button onClick={() => setNewProc(true)} className="ml-auto text-xs text-ember hover:text-ember-deep font-medium">+ New</button>}
+              </div>
+              {!company ? <div className="text-[11px] text-dim">Add a company to the quote to attach a savings proposal.</div> : (<>
+                <select className={input} value={quote.processing_account_id || ''} onChange={e => setQ('processing_account_id', e.target.value || null)}>
+                  <option value="">— None —</option>
+                  {procAccounts.map(a => <option key={a.id} value={a.id}>{(a.label || a.location?.name || 'Proposal')} · saves {gbp0(accountSavings(a.rates).saving)}/mo</option>)}
+                </select>
+                {(() => {
+                  const a = procAccounts.find(x => x.id === quote.processing_account_id);
+                  if (!a) return <div className="text-[11px] text-dim">Pick or create a proposal to show the customer their card-processing savings on the quote.</div>;
+                  const s = accountSavings(a.rates);
+                  return (
+                    <div className="glass-inner rounded-xl p-3 text-center">
+                      <div className="text-xl font-bold text-emerald-600 tabular-nums">{gbp0(s.savingYr)}<span className="text-xs text-emerald-700/70"> /yr</span></div>
+                      <div className="text-[11px] text-muted">{s.vol ? `${gbp0(s.saving)}/mo · ${pct2(s.currentEff)} → ${pct2(s.ourEff)} effective` : 'Add volumes to this proposal to calculate savings'}</div>
+                    </div>
+                  );
+                })()}
+                <div className="text-[10px] text-dim">Shown to the customer on the quote as their savings. Buy rate &amp; margin are never shown.</div>
+              </>)}
+            </div>
+
             <div className="glass-card rounded-2xl p-4">
               <div className="text-sm font-bold text-paper mb-2">Customer link</div>
               <div className="flex gap-2">
@@ -234,6 +290,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
           </div>
         </div>
       </div>
+      {newProc && company && <AccountModal account={{ company_id: company.id }} companies={[company]} locations={locations}
+        onClose={() => setNewProc(false)} onSaved={() => { setNewProc(false); loadProc(company.id); }} />}
     </div>
   );
 }

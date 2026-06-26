@@ -46,6 +46,7 @@ serve(async (req) => {
           one_off_subtotal: quote.one_off_subtotal, tax_amount: quote.tax_amount, one_off_total: quote.one_off_total,
           recurring_arr: quote.recurring_arr, terms: quote.terms || s.quote_terms || "",
           signed: !!quote.signed_at, signed_by_name: quote.signed_by_name, created_at: quote.created_at, expired,
+          card_processing: quote.card_processing || null,
         },
         seller: {
           name: s.business_name || "ServOS", address: s.business_address || "",
