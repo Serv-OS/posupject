@@ -20,6 +20,9 @@ import InvReportsView from './inventory/InvReportsView.jsx';
 import InvoiceBuilder from './crm/InvoiceBuilder.jsx';
 import BillsPanel from './finance/BillsPanel.jsx';
 import BillBuilder from './finance/BillBuilder.jsx';
+import WhatIOwePanel from './finance/WhatIOwePanel.jsx';
+import CategoriesPanel from './finance/CategoriesPanel.jsx';
+import RatesPanel from './finance/RatesPanel.jsx';
 import ScheduleView from './staffing/ScheduleView.jsx';
 import TimeOffView from './staffing/TimeOffView.jsx';
 import StaffView from './staffing/StaffView.jsx';
@@ -249,6 +252,12 @@ export default function Shell({ session }) {
         return <BillsPanel profile={profile} onNavigate={navigateTo} />;
       case 'bill_detail':
         return <BillBuilder billId={detailId} profile={profile} onClose={() => setView('bills')} onNavigate={navigateTo} />;
+      case 'what_i_owe':
+        return <WhatIOwePanel profile={profile} onNavigate={navigateTo} />;
+      case 'finance_categories':
+        return <CategoriesPanel profile={profile} />;
+      case 'finance_rates':
+        return <RatesPanel profile={profile} />;
       case 'schedule':
         return <ScheduleView profile={profile} />;
       case 'timeoff':
