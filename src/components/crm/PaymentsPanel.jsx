@@ -16,6 +16,13 @@ export const CHANNELS = [
 // Preset BUY rates (our cost, incl. interchange) per scheme. Same for both channels.
 export const BUY_PRESETS = { vm_credit: 0.65, vm_debit: 0.55, amex: 2.0 };
 
+// Industry-standard UK card mix (% of each channel's volume), editable per quote.
+// Sources: UK Finance UK Payment Markets, BRC Payments Survey, Worldpay GPR.
+export const CARD_SPLIT = {
+  cp: { vm_credit: 15, vm_debit: 82, amex: 3 },
+  cnp: { vm_credit: 35, vm_debit: 60, amex: 5 },
+};
+
 const SCHEMES = [
   { sk: 'vm_credit', scheme: 'Visa / Mastercard', tier: 'Credit' },
   { sk: 'vm_debit', scheme: 'Visa / Mastercard', tier: 'Debit' },
@@ -30,8 +37,16 @@ export const RATE_CATEGORIES = CHANNELS.flatMap(ch =>
     sk: s.sk, scheme: s.scheme, tier: s.tier,
     label: `${s.scheme}${s.tier ? ' ' + s.tier : ''}`,
     buy: BUY_PRESETS[s.sk],
+    split: CARD_SPLIT[ch.key][s.sk],
   }))
 );
+
+// Derive a row's monthly volume + txn count from a channel total, its split %, and the avg transaction size.
+export const deriveRow = (channelTotal, splitPct, avgTxn) => {
+  const vol = (Number(channelTotal) || 0) * (Number(splitPct) || 0) / 100;
+  const txns = Number(avgTxn) > 0 ? Math.round(vol / Number(avgTxn)) : 0;
+  return { monthly_volume: vol, monthly_txns: txns };
+};
 export const catsForChannel = (ch) => RATE_CATEGORIES.filter(c => c.channel === ch);
 
 // ---- precise per-row savings math --------------------------------------
@@ -234,13 +249,14 @@ const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-
 
 const emptyRates = () => Object.fromEntries(RATE_CATEGORIES.map(c => [c.key, {
   current_rate_pct: '', our_rate_pct: '', buy_rate_pct: String(c.buy),
-  current_txn_fee: '', our_txn_fee: '', monthly_volume: '', monthly_txns: '',
+  current_txn_fee: '', our_txn_fee: '', split: String(c.split),
 }]));
 
 export function AccountModal({ account, companies, locations, onClose, onSaved }) {
   const a = account || {};
   const [f, setF] = useState({
     company_id: a.company_id || '', location_id: a.location_id || '', label: a.label || '', status: a.status || 'prospect',
+    cp_volume: a.cp_volume ?? '', cnp_volume: a.cnp_volume ?? '', avg_txn_size: a.avg_txn_size ?? '',
     partner: a.partner || '', merchant_ref: a.merchant_ref || '',
   });
   const [rates, setRates] = useState(emptyRates());
@@ -257,11 +273,12 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
         const next = { ...prev };
         data.forEach(r => {
           if (!next[r.category]) return; // ignore legacy 3-category keys
+          const c = RATE_CATEGORIES.find(x => x.key === r.category);
           next[r.category] = {
             current_rate_pct: r.current_rate_pct ?? '', our_rate_pct: r.our_rate_pct ?? '',
             buy_rate_pct: r.buy_rate_pct ?? next[r.category].buy_rate_pct,
             current_txn_fee: r.current_txn_fee ?? '', our_txn_fee: r.our_txn_fee ?? '',
-            monthly_volume: r.monthly_volume ?? '', monthly_txns: r.monthly_txns ?? '',
+            split: r.volume_split_pct ?? String(c?.split ?? ''),
           };
         });
         return next;
@@ -269,10 +286,13 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     });
   }, [a.id]);
 
+  const channelTotal = (ch) => ch === 'cp' ? f.cp_volume : f.cnp_volume;
+
   const save = async () => {
     if (!f.company_id) { alert('Pick a customer (company)'); return; }
     const row = {
       company_id: f.company_id, location_id: f.location_id || null, label: f.label.trim() || null, status: f.status,
+      cp_volume: num(f.cp_volume), cnp_volume: num(f.cnp_volume), avg_txn_size: num(f.avg_txn_size),
       partner: f.partner.trim() || null, merchant_ref: f.merchant_ref.trim() || null, updated_at: new Date().toISOString(),
     };
     let accId = a.id;
@@ -281,15 +301,16 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     if (accId) {
       for (const c of RATE_CATEGORIES) {
         const r = rates[c.key];
-        const fields = ['current_rate_pct', 'our_rate_pct', 'current_txn_fee', 'our_txn_fee', 'monthly_volume', 'monthly_txns'];
-        const has = fields.some(k => r[k] !== '' && r[k] != null);
+        const d = deriveRow(channelTotal(c.channel), r.split, f.avg_txn_size);
+        const has = ['current_rate_pct', 'our_rate_pct', 'current_txn_fee', 'our_txn_fee'].some(k => r[k] !== '' && r[k] != null) || d.monthly_volume > 0;
         if (has) {
           await supabase.from('processing_rates').upsert({
             account_id: accId, category: c.key,
             current_rate_pct: num(r.current_rate_pct), our_rate_pct: num(r.our_rate_pct),
             buy_rate_pct: num(r.buy_rate_pct) ?? c.buy,
             current_txn_fee: num(r.current_txn_fee), our_txn_fee: num(r.our_txn_fee),
-            monthly_volume: num(r.monthly_volume), monthly_txns: num(r.monthly_txns),
+            volume_split_pct: num(r.split) ?? c.split,
+            monthly_volume: d.monthly_volume, monthly_txns: d.monthly_txns,
           }, { onConflict: 'account_id,category' });
         } else {
           await supabase.from('processing_rates').delete().eq('account_id', accId).eq('category', c.key);
@@ -299,8 +320,9 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     onSaved();
   };
 
-  // running total preview across all rows
-  const totals = accountSavings(RATE_CATEGORIES.map(c => ({ ...rates[c.key] })));
+  // live preview: derive each row's volume/txns from the channel totals + split + avg txn
+  const totals = accountSavings(RATE_CATEGORIES.map(c => ({ ...rates[c.key], ...deriveRow(channelTotal(c.channel), rates[c.key].split, f.avg_txn_size) })));
+  const splitSum = (ch) => catsForChannel(ch).reduce((s, c) => s + (Number(rates[c.key].split) || 0), 0);
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -324,20 +346,29 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
               <option value="prospect">Prospect</option><option value="live">Live</option><option value="churned">Churned</option></select></div>
           </div>
 
-          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} />)}
+          {/* The three figures that drive everything */}
+          <div className="glass-inner rounded-xl p-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div><label className={label}>Total in-store volume £/mo</label><input className={input} value={f.cp_volume} onChange={e => set('cp_volume', e.target.value)} placeholder="30000" /></div>
+            <div><label className={label}>Total online volume £/mo</label><input className={input} value={f.cnp_volume} onChange={e => set('cnp_volume', e.target.value)} placeholder="10000" /></div>
+            <div><label className={label}>Avg transaction size £</label><input className={input} value={f.avg_txn_size} onChange={e => set('avg_txn_size', e.target.value)} placeholder="20" /></div>
+          </div>
+
+          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} channelTotal={channelTotal(ch.key)} avgTxn={f.avg_txn_size} splitSum={splitSum(ch.key)} />)}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div><label className={label}>Processing partner</label><input className={input} value={f.partner} onChange={e => set('partner', e.target.value)} placeholder="e.g. Adyen" /></div>
             <div><label className={label}>Merchant ref</label><input className={input} value={f.merchant_ref} onChange={e => set('merchant_ref', e.target.value)} placeholder="MID" /></div>
           </div>
 
-          {/* Live savings preview */}
-          <div className="glass-inner rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+          {/* Live preview incl. what WE make (internal) */}
+          <div className="glass-inner rounded-xl p-4 grid grid-cols-2 md:grid-cols-5 gap-3 text-center">
             <Mini value={gbp0(totals.vol)} label="Monthly volume" />
             <Mini value={totals.vol ? pct2(totals.currentEff) + ' → ' + pct2(totals.ourEff) : '—'} label="Eff. rate (their → ours)" />
             <Mini value={totals.vol ? gbp2(totals.saving) : '—'} label="Customer saves / mo" tone="emerald" />
-            <Mini value={totals.vol ? gbp0(totals.savingYr) : '—'} label="Saves / yr" tone="emerald" />
+            <Mini value={totals.vol ? gbp0(totals.savingYr) : '—'} label="Customer saves / yr" tone="emerald" />
+            <Mini value={totals.vol ? gbp2(totals.margin) : '—'} label="We earn / mo" tone="amber" />
           </div>
+          <div className="text-[10px] text-dim">“We earn” is your margin (our rate − buy rate) — internal only, never shown on the customer quote. Volumes auto-split by industry-standard card mix; adjust Split % per row if you have the customer's real breakdown.</div>
 
           <div className="flex gap-2 pt-1"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save quote</button>
             <button onClick={onClose} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>
@@ -349,15 +380,19 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
 
 const cell = "w-full px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper text-right focus:outline-none focus:border-ember";
 
-function RateChannel({ ch, rates, setRate }) {
+function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum }) {
   return (
     <div className="glass-inner rounded-xl p-3">
-      <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-paper mb-2">{ch.label} <span className="text-dim font-mono font-normal normal-case">· {ch.sub}</span></div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-paper">{ch.label} <span className="text-dim font-mono font-normal normal-case">· {ch.sub}</span></div>
+        <div className={`text-[10px] font-mono ${Math.round(splitSum) === 100 ? 'text-dim' : 'text-amber-600'}`}>split {splitSum}%{Math.round(splitSum) !== 100 ? ' — should total 100' : ''}</div>
+      </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[680px]">
+        <table className="w-full min-w-[720px]">
           <thead>
             <tr className="text-[9px] font-mono font-bold uppercase tracking-[0.1em] text-dim">
               <th className="text-left font-bold pb-1.5">Card type</th>
+              <th className="font-bold pb-1.5 px-1">Split %</th>
               <th className="font-bold pb-1.5 px-1">Vol £/mo</th>
               <th className="font-bold pb-1.5 px-1">Txns/mo</th>
               <th className="font-bold pb-1.5 px-1">Their %</th>
@@ -371,15 +406,14 @@ function RateChannel({ ch, rates, setRate }) {
           <tbody>
             {catsForChannel(ch.key).map(c => {
               const r = rates[c.key];
-              const calc = rowCalc(r);
+              const d = deriveRow(channelTotal, r.split, avgTxn);
+              const calc = rowCalc({ ...r, ...d });
               return (
                 <tr key={c.key}>
-                  <td className="py-1 pr-2">
-                    <div className="text-sm text-paper leading-tight">{c.scheme}{c.tier ? <span className="text-dim"> {c.tier}</span> : ''}</div>
-                    {calc.avg > 0 && <div className="text-[10px] text-dim">avg £{calc.avg.toFixed(2)}/txn</div>}
-                  </td>
-                  <td className="px-1"><input className={cell} value={r.monthly_volume} onChange={e => setRate(c.key, 'monthly_volume', e.target.value)} placeholder="—" /></td>
-                  <td className="px-1"><input className={cell} value={r.monthly_txns} onChange={e => setRate(c.key, 'monthly_txns', e.target.value)} placeholder="—" /></td>
+                  <td className="py-1 pr-2"><div className="text-sm text-paper leading-tight">{c.scheme}{c.tier ? <span className="text-dim"> {c.tier}</span> : ''}</div></td>
+                  <td className="px-1"><input className={cell} value={r.split} onChange={e => setRate(c.key, 'split', e.target.value)} placeholder={String(c.split)} /></td>
+                  <td className="px-1 text-right text-sm tabular-nums text-dim">{d.monthly_volume ? gbp0(d.monthly_volume) : '—'}</td>
+                  <td className="px-1 text-right text-sm tabular-nums text-dim">{d.monthly_txns || '—'}</td>
                   <td className="px-1"><input className={cell} value={r.current_rate_pct} onChange={e => setRate(c.key, 'current_rate_pct', e.target.value)} placeholder="—" /></td>
                   <td className="px-1"><input className={cell} value={r.our_rate_pct} onChange={e => setRate(c.key, 'our_rate_pct', e.target.value)} placeholder="—" /></td>
                   <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_rate_pct} onChange={e => setRate(c.key, 'buy_rate_pct', e.target.value)} placeholder={String(c.buy)} /></td>
@@ -397,6 +431,6 @@ function RateChannel({ ch, rates, setRate }) {
 }
 
 function Mini({ value, label, tone }) {
-  const color = tone === 'emerald' ? 'text-emerald-600' : 'text-paper';
+  const color = tone === 'emerald' ? 'text-emerald-600' : tone === 'amber' ? 'text-amber-600' : 'text-paper';
   return <div><div className={`text-lg font-bold tabular-nums ${color}`}>{value}</div><div className="text-[10px] text-dim">{label}</div></div>;
 }
