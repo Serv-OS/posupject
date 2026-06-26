@@ -76,9 +76,13 @@ export function rowCalc(r = {}) {
     ourEff: vol > 0 ? ourCost / vol * 100 : our,
   };
 }
+// A row counts toward totals only once it's been PRICED (an "our rate" is set).
+// Unpriced rows still carry split volume but shouldn't read as cost/loss.
+export const isPriced = (r) => r && r.our_rate_pct !== null && r.our_rate_pct !== '' && r.our_rate_pct !== undefined;
+
 export function accountSavings(rates = []) {
   const t = { vol: 0, txns: 0, currentCost: 0, ourCost: 0, buyCost: 0, saving: 0 };
-  for (const r of rates) { const c = rowCalc(r); t.vol += c.vol; t.txns += c.txns; t.currentCost += c.currentCost; t.ourCost += c.ourCost; t.buyCost += c.buyCost; }
+  for (const r of rates) { if (!isPriced(r)) continue; const c = rowCalc(r); t.vol += c.vol; t.txns += c.txns; t.currentCost += c.currentCost; t.ourCost += c.ourCost; t.buyCost += c.buyCost; }
   t.saving = t.currentCost - t.ourCost;
   return {
     ...t,

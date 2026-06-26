@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
-import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc } from './PaymentsPanel.jsx';
+import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
 
 // Build the customer-safe card-processing breakdown frozen onto the quote.
 // Excludes buy rate & margin — customer only sees current vs our effective rate + saving.
@@ -10,7 +10,7 @@ const cardSnapshot = (acc) => {
   const s = accountSavings(acc.rates);
   if (!s.vol) return null;
   const rows = (acc.rates || [])
-    .filter(r => Number(r.monthly_volume || 0) > 0)
+    .filter(r => Number(r.monthly_volume || 0) > 0 && isPriced(r))
     .map(r => {
       const cat = RATE_CATEGORIES.find(c => c.key === r.category);
       const calc = rowCalc(r);
