@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { X, Pencil, Plus, Trash2, Building2 } from 'lucide-react';
-import { AccountModal, gbp0, marginPct, marginTxn, revenueOf, blendedRate, RATE_CATEGORIES } from './PaymentsPanel.jsx';
+import { X, Pencil, Plus, Trash2, Building2, PiggyBank } from 'lucide-react';
+import { AccountModal, gbp0, gbp2, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
 
-const gbp2 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const thisMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const periodLabel = (p) => new Date(p).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
 
@@ -32,18 +31,10 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
   };
   useEffect(() => { loadVolumes(); loadRates(); }, [acc.id]);
 
-  // account enriched with its per-category rate lines for all calcs
   const accCalc = { ...acc, rates };
   const name = acc.label || acc.location?.name || acc.company?.name || 'Account';
-
-  // rate comparison on their stated monthly volume (blended across card types)
-  const refVol = Number(acc.current_monthly_volume || 0);
-  const blendedCurrent = blendedRate(accCalc, 'current_rate_pct') || 0;
-  const blendedOur = blendedRate(accCalc, 'our_rate_pct') || 0;
-  const theirCost = refVol * blendedCurrent / 100;
-  const ourCharge = refVol * blendedOur / 100;
-  const saving = theirCost - ourCharge;
-  const ourMonthlyRev = refVol * marginPct(accCalc) / 100;
+  const rateFor = (key) => rates.find(r => r.category === key) || {};
+  const totals = accountSavings(rates);
 
   const addVolume = async () => {
     const amount = Number(vform.amount_processed);
@@ -68,7 +59,7 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full max-w-xl h-full glass-card border-l border-bdr overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="relative w-full max-w-2xl h-full glass-card border-l border-bdr overflow-y-auto" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="px-6 py-4 border-b border-bdr flex items-center gap-3 sticky top-0 glass-card z-10">
           <div className="flex-1 min-w-0">
@@ -84,43 +75,62 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
         </div>
 
         <div className="p-6 space-y-5">
-          {/* Rates by card type */}
-          <div className="glass-inner rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-bdr text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim flex">
-              <span className="flex-1">Card type</span><span className="w-14 text-right">Their</span><span className="w-14 text-right">Our</span><span className="w-14 text-right">Buy</span><span className="w-16 text-right">Margin</span>
-            </div>
-            {RATE_CATEGORIES.map(c => {
-              const r = rates.find(x => x.category === c.key) || {};
-              const m = (r.our_rate_pct != null && r.buy_rate_pct != null) ? (Number(r.our_rate_pct) - Number(r.buy_rate_pct)) : null;
-              const [scheme, present] = c.label.split(' — ');
-              const pct = (v) => v != null ? `${Number(v).toFixed(2)}%` : '—';
-              return (
-                <div key={c.key} className="px-4 py-2 border-b border-bdr/50 last:border-0 flex items-center text-sm">
-                  <div className="flex-1 min-w-0"><div className="text-paper leading-tight">{scheme}</div><div className="text-[10px] text-dim">{present}</div></div>
-                  <span className="w-14 text-right tabular-nums text-muted">{pct(r.current_rate_pct)}</span>
-                  <span className="w-14 text-right tabular-nums text-paper">{pct(r.our_rate_pct)}</span>
-                  <span className="w-14 text-right tabular-nums text-dim">{pct(r.buy_rate_pct)}</span>
-                  <span className="w-16 text-right tabular-nums font-semibold text-emerald-600">{m != null ? `${m.toFixed(2)}%` : '—'}</span>
-                </div>
-              );
-            })}
-            <div className="px-4 py-2 text-[11px] text-muted">Per-txn fees: their £{Number(acc.current_txn_fee || 0).toFixed(2)} · our £{Number(acc.our_txn_fee || 0).toFixed(2)} · buy £{Number(acc.buy_txn_fee || 0).toFixed(2)}</div>
+          {/* Savings hero */}
+          <div className="glass-inner rounded-xl p-5 text-center bg-emerald-50/40">
+            <div className="flex items-center justify-center gap-2 text-emerald-700 mb-1"><PiggyBank size={18} /><span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em]">Customer saves</span></div>
+            <div className="text-3xl font-bold tabular-nums text-emerald-600">{totals.vol ? gbp0(totals.savingYr) : '—'}<span className="text-base font-semibold text-emerald-700/70"> / yr</span></div>
+            <div className="text-xs text-muted mt-0.5">{totals.vol ? `${gbp2(totals.saving)} / mo · ${pct2(totals.currentEff)} → ${pct2(totals.ourEff)} effective rate` : 'Add volumes & rates to calculate savings'}</div>
           </div>
 
+          {/* Per-channel rate breakdown */}
+          {CHANNELS.map(ch => {
+            const cats = catsForChannel(ch.key);
+            const chHasData = cats.some(c => Number(rateFor(c.key).monthly_volume || 0) > 0 || rateFor(c.key).our_rate_pct != null);
+            if (!chHasData) return null;
+            return (
+              <div key={ch.key} className="glass-inner rounded-xl overflow-hidden">
+                <div className="px-4 py-2.5 border-b border-bdr text-[11px] font-bold uppercase tracking-[0.12em] text-paper">{ch.label} <span className="text-dim font-mono font-normal normal-case">· {ch.sub}</span></div>
+                <div className="px-4 py-2 border-b border-bdr text-[9px] font-mono font-bold uppercase tracking-[0.1em] text-dim flex">
+                  <span className="flex-1">Card type</span>
+                  <span className="w-20 text-right">Vol/mo</span>
+                  <span className="w-16 text-right">Their</span>
+                  <span className="w-16 text-right">Our</span>
+                  <span className="w-20 text-right">Saves/mo</span>
+                </div>
+                {cats.map(c => {
+                  const r = rateFor(c.key);
+                  const calc = rowCalc(r);
+                  return (
+                    <div key={c.key} className="px-4 py-2 border-b border-bdr/50 last:border-0 flex items-center text-sm">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-paper leading-tight">{c.scheme}{c.tier ? <span className="text-dim"> {c.tier}</span> : ''}</div>
+                        {calc.avg > 0 && <div className="text-[10px] text-dim">avg £{calc.avg.toFixed(2)} · {calc.txns} txns</div>}
+                      </div>
+                      <span className="w-20 text-right tabular-nums text-muted">{calc.vol ? gbp0(calc.vol) : '—'}</span>
+                      <span className="w-16 text-right tabular-nums text-muted">{calc.vol ? pct2(calc.currentEff) : pct2(r.current_rate_pct)}</span>
+                      <span className="w-16 text-right tabular-nums text-paper">{calc.vol ? pct2(calc.ourEff) : pct2(r.our_rate_pct)}</span>
+                      <span className="w-20 text-right tabular-nums font-semibold text-emerald-600">{calc.vol ? gbp2(calc.saving) : '—'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+
           <div className="glass-inner rounded-xl p-4 grid grid-cols-3 gap-3 text-center">
-            <Metric value={refVol ? gbp0(saving) : '—'} label="Customer saves / mo" tone={saving >= 0 ? 'emerald' : 'red'} />
-            <Metric value={`${marginPct(accCalc).toFixed(2)}%`} label="Blended margin" tone="emerald" />
-            <Metric value={refVol ? gbp0(ourMonthlyRev) : '—'} label="Our rev (est) / mo" />
+            <Metric value={totals.vol ? gbp0(totals.vol) : '—'} label="Volume / mo" />
+            <Metric value={totals.vol ? gbp0(totals.saving) : '—'} label="Customer saves / mo" tone={totals.saving >= 0 ? 'emerald' : 'red'} />
+            <Metric value={totals.vol ? gbp0(totals.margin) : '—'} label="Our margin / mo" tone="emerald" />
           </div>
-          {!refVol && <div className="text-[11px] text-dim -mt-2">Add their monthly volume to estimate savings & revenue.</div>}
+          <div className="text-[11px] text-dim">Effective rate folds the per-transaction fee into a single % using each card type's average transaction size, so small-basket fees are reflected. Buy rate &amp; margin are internal and never shown to the customer.</div>
           {(acc.partner || acc.merchant_ref) && (
             <div className="text-xs text-muted">Partner: <span className="text-paper">{acc.partner || '—'}</span> · MID: <span className="text-paper font-mono">{acc.merchant_ref || '—'}</span></div>
           )}
 
-          {/* Monthly volumes */}
+          {/* Monthly volumes (live processing tracker) */}
           <div className="glass-inner rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-bdr flex items-center justify-between">
-              <div className="text-[13px] font-bold text-paper">Monthly volume &amp; revenue</div>
+              <div className="text-[13px] font-bold text-paper">Actual monthly volume &amp; revenue</div>
               {canWrite && <button onClick={() => setAdding(v => !v)} className="text-xs text-ember hover:text-ember-deep font-medium flex items-center gap-1"><Plus size={13} /> Add month</button>}
             </div>
 

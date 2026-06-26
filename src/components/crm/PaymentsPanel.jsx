@@ -1,19 +1,76 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { CreditCard, Plus, X, TrendingUp, Banknote } from 'lucide-react';
+import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-react';
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
 
 export const gbp0 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 });
+export const gbp2 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const pct2 = (v) => v == null || v === '' ? '—' : `${Number(v).toFixed(2)}%`;
 
-// Card scheme × presentment categories
-export const RATE_CATEGORIES = [
-  { key: 'visa_mc_cp', label: 'Visa / Mastercard — Card present' },
-  { key: 'visa_mc_cnp', label: 'Visa / Mastercard — Card not present' },
-  { key: 'amex', label: 'American Express' },
+// Two presentment channels: in-store (card present) and online (card not present)
+export const CHANNELS = [
+  { key: 'cp', label: 'In-store', sub: 'Card present' },
+  { key: 'cnp', label: 'Online', sub: 'Card not present' },
 ];
 
-// Blended (averaged) value of a per-category rate field across defined lines.
-// Falls back to the legacy account-level field when no category rates exist.
+// Preset BUY rates (our cost, incl. interchange) per scheme. Same for both channels.
+export const BUY_PRESETS = { vm_credit: 0.65, vm_debit: 0.55, amex: 2.0 };
+
+const SCHEMES = [
+  { sk: 'vm_credit', scheme: 'Visa / Mastercard', tier: 'Credit' },
+  { sk: 'vm_debit', scheme: 'Visa / Mastercard', tier: 'Debit' },
+  { sk: 'amex', scheme: 'American Express', tier: '' },
+];
+
+// 6-row matrix = 2 channels × 3 schemes. key = `${channel}_${scheme}`.
+export const RATE_CATEGORIES = CHANNELS.flatMap(ch =>
+  SCHEMES.map(s => ({
+    key: `${ch.key}_${s.sk}`,
+    channel: ch.key, channelLabel: ch.label,
+    sk: s.sk, scheme: s.scheme, tier: s.tier,
+    label: `${s.scheme}${s.tier ? ' ' + s.tier : ''}`,
+    buy: BUY_PRESETS[s.sk],
+  }))
+);
+export const catsForChannel = (ch) => RATE_CATEGORIES.filter(c => c.channel === ch);
+
+// ---- precise per-row savings math --------------------------------------
+// A row carries: current/our/buy rate %, current/our/buy per-txn fee (£),
+// monthly_volume (£) and monthly_txns (count). The per-txn fee matters more
+// on small baskets, so we fold it into an effective rate via avg txn size.
+export function rowCalc(r = {}) {
+  const vol = Number(r.monthly_volume || 0);
+  const txns = Number(r.monthly_txns || 0);
+  const avg = txns > 0 ? vol / txns : 0;
+  const cur = Number(r.current_rate_pct || 0), our = Number(r.our_rate_pct || 0), buy = Number(r.buy_rate_pct || 0);
+  const curTxn = Number(r.current_txn_fee || 0), ourTxn = Number(r.our_txn_fee || 0), buyTxn = Number(r.buy_txn_fee || 0);
+  const currentCost = vol * cur / 100 + txns * curTxn;
+  const ourCost = vol * our / 100 + txns * ourTxn;
+  const buyCost = vol * buy / 100 + txns * buyTxn;
+  return {
+    vol, txns, avg,
+    currentCost, ourCost, buyCost,
+    saving: currentCost - ourCost,        // shown to customer
+    margin: ourCost - buyCost,            // internal only
+    currentEff: vol > 0 ? currentCost / vol * 100 : cur,   // true rate incl. txn fee
+    ourEff: vol > 0 ? ourCost / vol * 100 : our,
+  };
+}
+export function accountSavings(rates = []) {
+  const t = { vol: 0, txns: 0, currentCost: 0, ourCost: 0, buyCost: 0, saving: 0 };
+  for (const r of rates) { const c = rowCalc(r); t.vol += c.vol; t.txns += c.txns; t.currentCost += c.currentCost; t.ourCost += c.ourCost; t.buyCost += c.buyCost; }
+  t.saving = t.currentCost - t.ourCost;
+  return {
+    ...t,
+    savingYr: t.saving * 12,
+    margin: t.ourCost - t.buyCost,
+    avg: t.txns > 0 ? t.vol / t.txns : 0,
+    currentEff: t.vol > 0 ? t.currentCost / t.vol * 100 : 0,
+    ourEff: t.vol > 0 ? t.ourCost / t.vol * 100 : 0,
+  };
+}
+
+// ---- legacy blended helpers (used by the monthly volume tracker) --------
 export const blendedRate = (a, field) => {
   const rows = (a.rates || []).filter(r => r[field] != null && r[field] !== '');
   if (rows.length) return rows.reduce((s, r) => s + Number(r[field]), 0) / rows.length;
@@ -70,6 +127,8 @@ export default function PaymentsPanel({ profile, onNavigate }) {
     if (v) { totalProcessed += Number(v.amount_processed || 0); totalRevenue += revenueOf(acc, v); }
   }
   const liveCount = accounts.filter(a => a.status === 'live').length;
+  // potential customer savings across all accounts (from the per-row quote model)
+  const totalSavingMo = accounts.reduce((s, a) => s + accountSavings(a.rates).saving, 0);
 
   const accName = (a) => a.label || a.location?.name || a.company?.name || 'Unnamed account';
 
@@ -80,13 +139,13 @@ export default function PaymentsPanel({ profile, onNavigate }) {
           <CreditCard size={20} className="text-ember" />
           <div>
             <div className="text-xl font-bold text-paper">Card Processing</div>
-            <div className="text-xs text-muted">Rates, volume processed and our revenue</div>
+            <div className="text-xs text-muted">Rates, savings calculator and our revenue</div>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <input type="month" value={month} onChange={e => setMonth(e.target.value)}
             className="px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper" />
-          {canWrite && <button onClick={() => setCreating(true)} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5"><Plus size={15} /> Add account</button>}
+          {canWrite && <button onClick={() => setCreating(true)} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5"><Plus size={15} /> New quote</button>}
         </div>
       </div>
 
@@ -95,16 +154,16 @@ export default function PaymentsPanel({ profile, onNavigate }) {
 
           {/* Headline */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Headline icon={<PiggyBank size={18} />} value={gbp0(totalSavingMo)} label="Customer savings / mo" sub={`${gbp0(totalSavingMo * 12)} / yr potential`} accent />
             <Headline icon={<Banknote size={18} />} value={gbp0(totalProcessed)} label="Amount processed" sub={`in ${new Date(period).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}`} accent />
-            <Headline icon={<TrendingUp size={18} />} value={gbp0(totalRevenue)} label="Our revenue" sub="margin this month" accent />
+            <Headline icon={<TrendingUp size={18} />} value={gbp0(totalRevenue)} label="Our revenue" sub="margin this month" />
             <Headline value={liveCount} label="Live accounts" sub={`${accounts.length} total`} />
-            <Headline value={totalProcessed > 0 ? ((totalRevenue / totalProcessed) * 100).toFixed(2) + '%' : '—'} label="Effective margin" sub="revenue ÷ processed" />
           </div>
 
           {/* Accounts */}
           <div className="glass-card rounded-2xl overflow-hidden">
             <div className="px-5 py-3.5 border-b border-bdr flex items-center gap-2">
-              <h3 className="text-[13px] font-bold text-paper">Accounts</h3>
+              <h3 className="text-[13px] font-bold text-paper">Quotes &amp; accounts</h3>
               <span className="text-xs text-dim font-mono">({accounts.length})</span>
             </div>
             <div className="overflow-x-auto">
@@ -113,18 +172,19 @@ export default function PaymentsPanel({ profile, onNavigate }) {
                   <tr className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim border-b border-bdr">
                     <th className="text-left px-5 py-2 font-bold">Customer</th>
                     <th className="text-left px-3 py-2 font-bold">Status</th>
-                    <th className="text-right px-3 py-2 font-bold">Their rate</th>
-                    <th className="text-right px-3 py-2 font-bold">Our rate</th>
+                    <th className="text-right px-3 py-2 font-bold">Their eff. rate</th>
+                    <th className="text-right px-3 py-2 font-bold">Our eff. rate</th>
+                    <th className="text-right px-3 py-2 font-bold">Saving / mo</th>
                     <th className="text-right px-3 py-2 font-bold">Margin</th>
-                    <th className="text-right px-3 py-2 font-bold">Processed</th>
                     <th className="text-right px-5 py-2 font-bold">Our revenue</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? <tr><td colSpan={7} className="px-5 py-8 text-center text-dim">Loading…</td></tr>
-                    : accounts.length === 0 ? <tr><td colSpan={7} className="px-5 py-8 text-center text-dim italic">No processing accounts yet.</td></tr>
+                    : accounts.length === 0 ? <tr><td colSpan={7} className="px-5 py-8 text-center text-dim italic">No quotes yet.</td></tr>
                     : accounts.map(a => {
                       const v = volFor(a.id);
+                      const s = accountSavings(a.rates);
                       return (
                         <tr key={a.id} onClick={() => setSelected(a)} className="border-b border-bdr/60 hover:bg-card/50 cursor-pointer">
                           <td className="px-5 py-2.5">
@@ -132,10 +192,10 @@ export default function PaymentsPanel({ profile, onNavigate }) {
                             {a.location?.name && a.company?.name && <div className="text-[11px] text-dim">{a.company.name}</div>}
                           </td>
                           <td className="px-3 py-2.5"><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg ${STATUS_STYLE[a.status]}`}>{a.status}</span></td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-muted">{blendedRate(a, 'current_rate_pct') != null ? `${blendedRate(a, 'current_rate_pct').toFixed(2)}%` : '—'}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-paper">{blendedRate(a, 'our_rate_pct') != null ? `${blendedRate(a, 'our_rate_pct').toFixed(2)}%` : '—'}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-emerald-600 font-semibold">{marginPct(a).toFixed(2)}%</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-paper">{v ? gbp0(v.amount_processed) : '—'}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-muted">{s.vol ? pct2(s.currentEff) : '—'}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-paper">{s.vol ? pct2(s.ourEff) : '—'}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-600">{s.vol ? gbp0(s.saving) : '—'}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-emerald-600">{marginPct(a).toFixed(2)}%</td>
                           <td className="px-5 py-2.5 text-right tabular-nums font-semibold text-paper">{v ? gbp0(revenueOf(a, v)) : '—'}</td>
                         </tr>
                       );
@@ -163,7 +223,7 @@ function Headline({ icon, value, label, sub, accent }) {
         {icon && <span className={accent ? 'text-ember' : 'text-dim'}>{icon}</span>}
         <span className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim">{label}</span>
       </div>
-      <div className={`text-2xl font-bold tabular-nums ${accent ? 'text-paper' : 'text-paper'}`}>{value}</div>
+      <div className="text-2xl font-bold tabular-nums text-paper">{value}</div>
       {sub && <div className="text-[11px] text-dim mt-0.5">{sub}</div>}
     </div>
   );
@@ -172,14 +232,15 @@ function Headline({ icon, value, label, sub, accent }) {
 const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
 const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
-const emptyRates = () => Object.fromEntries(RATE_CATEGORIES.map(c => [c.key, { current_rate_pct: '', our_rate_pct: '', buy_rate_pct: '' }]));
+const emptyRates = () => Object.fromEntries(RATE_CATEGORIES.map(c => [c.key, {
+  current_rate_pct: '', our_rate_pct: '', buy_rate_pct: String(c.buy),
+  current_txn_fee: '', our_txn_fee: '', monthly_volume: '', monthly_txns: '',
+}]));
 
 export function AccountModal({ account, companies, locations, onClose, onSaved }) {
   const a = account || {};
   const [f, setF] = useState({
     company_id: a.company_id || '', location_id: a.location_id || '', label: a.label || '', status: a.status || 'prospect',
-    current_monthly_volume: a.current_monthly_volume ?? '',
-    current_txn_fee: a.current_txn_fee ?? '', our_txn_fee: a.our_txn_fee ?? '', buy_txn_fee: a.buy_txn_fee ?? '',
     partner: a.partner || '', merchant_ref: a.merchant_ref || '',
   });
   const [rates, setRates] = useState(emptyRates());
@@ -194,7 +255,15 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
       if (!data?.length) return;
       setRates(prev => {
         const next = { ...prev };
-        data.forEach(r => { next[r.category] = { current_rate_pct: r.current_rate_pct ?? '', our_rate_pct: r.our_rate_pct ?? '', buy_rate_pct: r.buy_rate_pct ?? '' }; });
+        data.forEach(r => {
+          if (!next[r.category]) return; // ignore legacy 3-category keys
+          next[r.category] = {
+            current_rate_pct: r.current_rate_pct ?? '', our_rate_pct: r.our_rate_pct ?? '',
+            buy_rate_pct: r.buy_rate_pct ?? next[r.category].buy_rate_pct,
+            current_txn_fee: r.current_txn_fee ?? '', our_txn_fee: r.our_txn_fee ?? '',
+            monthly_volume: r.monthly_volume ?? '', monthly_txns: r.monthly_txns ?? '',
+          };
+        });
         return next;
       });
     });
@@ -204,8 +273,6 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     if (!f.company_id) { alert('Pick a customer (company)'); return; }
     const row = {
       company_id: f.company_id, location_id: f.location_id || null, label: f.label.trim() || null, status: f.status,
-      current_monthly_volume: num(f.current_monthly_volume),
-      current_txn_fee: num(f.current_txn_fee), our_txn_fee: num(f.our_txn_fee), buy_txn_fee: num(f.buy_txn_fee),
       partner: f.partner.trim() || null, merchant_ref: f.merchant_ref.trim() || null, updated_at: new Date().toISOString(),
     };
     let accId = a.id;
@@ -214,11 +281,15 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     if (accId) {
       for (const c of RATE_CATEGORIES) {
         const r = rates[c.key];
-        const has = [r.current_rate_pct, r.our_rate_pct, r.buy_rate_pct].some(v => v !== '' && v != null);
+        const fields = ['current_rate_pct', 'our_rate_pct', 'current_txn_fee', 'our_txn_fee', 'monthly_volume', 'monthly_txns'];
+        const has = fields.some(k => r[k] !== '' && r[k] != null);
         if (has) {
           await supabase.from('processing_rates').upsert({
             account_id: accId, category: c.key,
-            current_rate_pct: num(r.current_rate_pct), our_rate_pct: num(r.our_rate_pct), buy_rate_pct: num(r.buy_rate_pct),
+            current_rate_pct: num(r.current_rate_pct), our_rate_pct: num(r.our_rate_pct),
+            buy_rate_pct: num(r.buy_rate_pct) ?? c.buy,
+            current_txn_fee: num(r.current_txn_fee), our_txn_fee: num(r.our_txn_fee),
+            monthly_volume: num(r.monthly_volume), monthly_txns: num(r.monthly_txns),
           }, { onConflict: 'account_id,category' });
         } else {
           await supabase.from('processing_rates').delete().eq('account_id', accId).eq('category', c.key);
@@ -228,17 +299,18 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     onSaved();
   };
 
-  const cell = "w-full px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper text-right focus:outline-none focus:border-ember";
+  // running total preview across all rows
+  const totals = accountSavings(RATE_CATEGORIES.map(c => ({ ...rates[c.key] })));
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="glass-card rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="glass-card rounded-2xl w-full max-w-5xl max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-bdr flex items-center justify-between sticky top-0 glass-card z-10">
-          <div className="text-base font-bold text-paper">{a.id ? 'Edit account' : 'New processing account'}</div>
+          <div className="text-base font-bold text-paper">{a.id ? 'Edit card-processing quote' : 'New card-processing quote'}</div>
           <button onClick={onClose} className="text-muted hover:text-paper"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div><label className={label}>Customer</label>
               <select className={input} value={f.company_id} onChange={e => { set('company_id', e.target.value); set('location_id', ''); }}>
                 <option value="">Select…</option>{companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -247,55 +319,27 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
               <select className={input} value={f.location_id} onChange={e => set('location_id', e.target.value)}>
                 <option value="">All / not set</option>{locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
             <div><label className={label}>Label (optional)</label><input className={input} value={f.label} onChange={e => set('label', e.target.value)} placeholder="Merchant name" /></div>
             <div><label className={label}>Status</label><select className={input} value={f.status} onChange={e => set('status', e.target.value)}>
               <option value="prospect">Prospect</option><option value="live">Live</option><option value="churned">Churned</option></select></div>
           </div>
 
-          {/* Per-category rate grid: scheme × presentment */}
-          <Group title="Processing rates by card type">
-            <table className="w-full">
-              <thead>
-                <tr className="text-[10px] font-mono font-bold uppercase tracking-[0.12em] text-dim">
-                  <th className="text-left font-bold pb-1.5">Card type</th>
-                  <th className="font-bold pb-1.5 px-1">Their %</th>
-                  <th className="font-bold pb-1.5 px-1">Our %</th>
-                  <th className="font-bold pb-1.5 px-1">Buy %</th>
-                  <th className="font-bold pb-1.5 pl-2 text-right">Margin</th>
-                </tr>
-              </thead>
-              <tbody>
-                {RATE_CATEGORIES.map(c => {
-                  const r = rates[c.key];
-                  const m = Number(r.our_rate_pct || 0) - Number(r.buy_rate_pct || 0);
-                  const [scheme, present] = c.label.split(' — ');
-                  return (
-                    <tr key={c.key}>
-                      <td className="py-1 pr-2"><div className="text-sm text-paper leading-tight">{scheme}</div><div className="text-[10px] text-dim">{present}</div></td>
-                      <td className="px-1"><input className={cell} value={r.current_rate_pct} onChange={e => setRate(c.key, 'current_rate_pct', e.target.value)} placeholder="—" /></td>
-                      <td className="px-1"><input className={cell} value={r.our_rate_pct} onChange={e => setRate(c.key, 'our_rate_pct', e.target.value)} placeholder="—" /></td>
-                      <td className="px-1"><input className={cell} value={r.buy_rate_pct} onChange={e => setRate(c.key, 'buy_rate_pct', e.target.value)} placeholder="—" /></td>
-                      <td className="pl-2 text-right text-sm font-semibold tabular-nums text-emerald-600">{m.toFixed(2)}%</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </Group>
+          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} />)}
 
-          <Group title="Per-transaction fees (£) — all card types">
-            <Three a={['current_txn_fee', 'Their / txn', '0.05']} b={['our_txn_fee', 'Our / txn', '0.03']} c={['buy_txn_fee', 'Buy / txn', '0.02']} f={f} set={set} />
-          </Group>
-
-          <div className="grid grid-cols-3 gap-3">
-            <div><label className={label}>Monthly volume £</label><input className={input} value={f.current_monthly_volume} onChange={e => set('current_monthly_volume', e.target.value)} placeholder="40000" /></div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div><label className={label}>Processing partner</label><input className={input} value={f.partner} onChange={e => set('partner', e.target.value)} placeholder="e.g. Adyen" /></div>
             <div><label className={label}>Merchant ref</label><input className={input} value={f.merchant_ref} onChange={e => set('merchant_ref', e.target.value)} placeholder="MID" /></div>
           </div>
 
-          <div className="flex gap-2 pt-1"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save</button>
+          {/* Live savings preview */}
+          <div className="glass-inner rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+            <Mini value={gbp0(totals.vol)} label="Monthly volume" />
+            <Mini value={totals.vol ? pct2(totals.currentEff) + ' → ' + pct2(totals.ourEff) : '—'} label="Eff. rate (their → ours)" />
+            <Mini value={totals.vol ? gbp2(totals.saving) : '—'} label="Customer saves / mo" tone="emerald" />
+            <Mini value={totals.vol ? gbp0(totals.savingYr) : '—'} label="Saves / yr" tone="emerald" />
+          </div>
+
+          <div className="flex gap-2 pt-1"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save quote</button>
             <button onClick={onClose} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>
         </div>
       </div>
@@ -303,11 +347,56 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
   );
 }
 
-function Group({ title, children }) {
-  return <div className="glass-inner rounded-xl p-3"><div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-2">{title}</div>{children}</div>;
+const cell = "w-full px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper text-right focus:outline-none focus:border-ember";
+
+function RateChannel({ ch, rates, setRate }) {
+  return (
+    <div className="glass-inner rounded-xl p-3">
+      <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-paper mb-2">{ch.label} <span className="text-dim font-mono font-normal normal-case">· {ch.sub}</span></div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[680px]">
+          <thead>
+            <tr className="text-[9px] font-mono font-bold uppercase tracking-[0.1em] text-dim">
+              <th className="text-left font-bold pb-1.5">Card type</th>
+              <th className="font-bold pb-1.5 px-1">Vol £/mo</th>
+              <th className="font-bold pb-1.5 px-1">Txns/mo</th>
+              <th className="font-bold pb-1.5 px-1">Their %</th>
+              <th className="font-bold pb-1.5 px-1">Our %</th>
+              <th className="font-bold pb-1.5 px-1">Buy %</th>
+              <th className="font-bold pb-1.5 px-1">Their txn</th>
+              <th className="font-bold pb-1.5 px-1">Our txn</th>
+              <th className="font-bold pb-1.5 pl-2 text-right">Saves/mo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {catsForChannel(ch.key).map(c => {
+              const r = rates[c.key];
+              const calc = rowCalc(r);
+              return (
+                <tr key={c.key}>
+                  <td className="py-1 pr-2">
+                    <div className="text-sm text-paper leading-tight">{c.scheme}{c.tier ? <span className="text-dim"> {c.tier}</span> : ''}</div>
+                    {calc.avg > 0 && <div className="text-[10px] text-dim">avg £{calc.avg.toFixed(2)}/txn</div>}
+                  </td>
+                  <td className="px-1"><input className={cell} value={r.monthly_volume} onChange={e => setRate(c.key, 'monthly_volume', e.target.value)} placeholder="—" /></td>
+                  <td className="px-1"><input className={cell} value={r.monthly_txns} onChange={e => setRate(c.key, 'monthly_txns', e.target.value)} placeholder="—" /></td>
+                  <td className="px-1"><input className={cell} value={r.current_rate_pct} onChange={e => setRate(c.key, 'current_rate_pct', e.target.value)} placeholder="—" /></td>
+                  <td className="px-1"><input className={cell} value={r.our_rate_pct} onChange={e => setRate(c.key, 'our_rate_pct', e.target.value)} placeholder="—" /></td>
+                  <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_rate_pct} onChange={e => setRate(c.key, 'buy_rate_pct', e.target.value)} placeholder={String(c.buy)} /></td>
+                  <td className="px-1"><input className={cell} value={r.current_txn_fee} onChange={e => setRate(c.key, 'current_txn_fee', e.target.value)} placeholder="—" /></td>
+                  <td className="px-1"><input className={cell} value={r.our_txn_fee} onChange={e => setRate(c.key, 'our_txn_fee', e.target.value)} placeholder="—" /></td>
+                  <td className="pl-2 text-right text-sm font-semibold tabular-nums text-emerald-600">{calc.vol ? gbp0(calc.saving) : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
-function Field({ k, lbl, ph, f, set }) {
-  return <div><label className={label}>{lbl}</label><input className={input} value={f[k]} onChange={e => set(k, e.target.value)} placeholder={ph} /></div>;
+
+function Mini({ value, label, tone }) {
+  const color = tone === 'emerald' ? 'text-emerald-600' : 'text-paper';
+  return <div><div className={`text-lg font-bold tabular-nums ${color}`}>{value}</div><div className="text-[10px] text-dim">{label}</div></div>;
 }
-function Two({ a, b, f, set }) { return <div className="grid grid-cols-2 gap-3"><Field k={a[0]} lbl={a[1]} ph={a[2]} f={f} set={set} /><Field k={b[0]} lbl={b[1]} ph={b[2]} f={f} set={set} /></div>; }
-function Three({ a, b, c, f, set }) { return <div className="grid grid-cols-3 gap-3"><Field k={a[0]} lbl={a[1]} ph={a[2]} f={f} set={set} /><Field k={b[0]} lbl={b[1]} ph={b[2]} f={f} set={set} /><Field k={c[0]} lbl={c[1]} ph={c[2]} f={f} set={set} /></div>; }
