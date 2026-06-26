@@ -9,17 +9,17 @@ import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc, isP
 // per card type. No current rates, no savings, no effective-rate headline.
 const cardSnapshot = (acc) => {
   if (!acc) return null;
-  const rows = (acc.rates || [])
-    .filter(r => isPriced(r))
-    .map(r => {
-      const cat = RATE_CATEGORIES.find(c => c.key === r.category);
-      return {
-        channel: cat?.channelLabel || '',
-        label: cat?.label || r.category,
-        rate: Number(r.our_rate_pct),
-        txn: (r.our_txn_fee === '' || r.our_txn_fee == null) ? null : Number(r.our_txn_fee),
-      };
-    });
+  // Iterate the canonical 6 card types (skips legacy 3-category rows + unpriced rows).
+  const rows = RATE_CATEGORIES.map(c => {
+    const r = (acc.rates || []).find(x => x.category === c.key);
+    if (!r || !isPriced(r)) return null;
+    return {
+      channel: c.channelLabel,
+      label: c.label,
+      rate: Number(r.our_rate_pct),
+      txn: (r.our_txn_fee === '' || r.our_txn_fee == null) ? null : Number(r.our_txn_fee),
+    };
+  }).filter(Boolean);
   return rows.length ? { rows } : null;
 };
 
