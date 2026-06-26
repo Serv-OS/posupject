@@ -18,6 +18,8 @@ import PurchasingView from './inventory/PurchasingView.jsx';
 import StocktakeView from './inventory/StocktakeView.jsx';
 import InvReportsView from './inventory/InvReportsView.jsx';
 import InvoiceBuilder from './crm/InvoiceBuilder.jsx';
+import BillsPanel from './finance/BillsPanel.jsx';
+import BillBuilder from './finance/BillBuilder.jsx';
 import ScheduleView from './staffing/ScheduleView.jsx';
 import TimeOffView from './staffing/TimeOffView.jsx';
 import StaffView from './staffing/StaffView.jsx';
@@ -129,6 +131,7 @@ export default function Shell({ session }) {
     else if (type === 'quote') { setView('quote_detail'); setDetailId(id); }
     else if (type === 'processing') { setView('processing'); }
     else if (type === 'invoice') { setView('invoice_detail'); setDetailId(id); }
+    else if (type === 'bill') { setView('bill_detail'); setDetailId(id); }
     else if (type === 'account') { setView('account'); }
     else if (type === 'inbox') { setView('inbox'); }
     else if (type === 'calendar') { setView('calendar'); }
@@ -242,6 +245,10 @@ export default function Shell({ session }) {
         return <InvoicesPanel profile={profile} onNavigate={navigateTo} />;
       case 'invoice_detail':
         return <InvoiceBuilder invoiceId={detailId} profile={profile} onClose={() => setView('invoices')} onNavigate={navigateTo} />;
+      case 'bills':
+        return <BillsPanel profile={profile} onNavigate={navigateTo} />;
+      case 'bill_detail':
+        return <BillBuilder billId={detailId} profile={profile} onClose={() => setView('bills')} onNavigate={navigateTo} />;
       case 'schedule':
         return <ScheduleView profile={profile} />;
       case 'timeoff':
