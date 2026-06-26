@@ -18,7 +18,7 @@ const COLLAPSIBLE = [
     ['invoices', 'Invoices', Receipt],
   ] },
   { id: 'finance', label: 'Finance', items: [
-    ['bills', 'Bills', Wallet], ['what_i_owe', 'What I owe', Banknote],
+    ['bills', 'Bills', Wallet], ['expenses', 'Expenses', Receipt], ['what_i_owe', 'What I owe', Banknote],
     ['finance_categories', 'Categories', Tags], ['finance_rates', 'Tax rates', Percent],
   ] },
   { id: 'inventory', label: 'Inventory', items: [
@@ -55,7 +55,7 @@ const ACTIVE_MAP = {
   onboarding_detail: 'onboarding', project_detail: 'projects', task_detail: 'tasks',
   ticket_detail: 'tickets', form_detail: 'forms', feature_request_detail: 'feature_requests',
   release_detail: 'releases', invoice_detail: 'invoices', quote_detail: 'quotes',
-  bill_detail: 'bills',
+  bill_detail: 'bills', expense_detail: 'expenses',
 };
 
 const DEFAULT_GROUPS = { appbuild: true, sales: true, finance: false, inventory: true, delivery: false, support: false, product: false, workforce: false, insights: false };
