@@ -20,6 +20,7 @@ const COLLAPSIBLE = [
   { id: 'finance', label: 'Finance', items: [
     ['bills', 'Bills', Wallet], ['expenses', 'Expenses', Receipt], ['what_i_owe', 'What I owe', Banknote],
     ['finance_categories', 'Categories', Tags], ['finance_rates', 'Tax rates', Percent],
+    ['finance_vat', 'VAT & reports', FileText],
   ] },
   { id: 'inventory', label: 'Inventory', items: [
     ['inv_dashboard', 'Dashboard', Warehouse], ['products', 'Products', Box], ['inv_stock', 'Stock', Boxes],
