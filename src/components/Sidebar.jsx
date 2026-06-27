@@ -6,7 +6,7 @@ import {
   Ticket, ClipboardList, FileText, LayoutGrid, Sparkles, Flag, BarChart3,
   Bug, Star, List, Layout, Layers, Package, ChevronRight, Plus, Mail, Calendar, MessageSquare, Clock, Plane, CreditCard, Receipt, TrendingUp,
   Warehouse, Boxes, PackagePlus, PackageMinus, ShoppingCart, ClipboardCheck, Truck, Factory,
-  Settings as SettingsIcon, Users as UsersIcon, FileSignature, PhoneCall, Wallet, Tags, Percent
+  Settings as SettingsIcon, Users as UsersIcon, FileSignature, PhoneCall, Wallet, Tags, Percent, Landmark
 } from 'lucide-react';
 
 // Collapsible groups (App Build is dynamic; My Work + My Account are pinned)
@@ -19,6 +19,7 @@ const COLLAPSIBLE = [
   ] },
   { id: 'finance', label: 'Finance', items: [
     ['bills', 'Bills', Wallet], ['expenses', 'Expenses', Receipt], ['what_i_owe', 'What I owe', Banknote],
+    ['bank_feed', 'Bank feed', Landmark],
     ['finance_categories', 'Categories', Tags], ['finance_rates', 'Tax rates', Percent],
     ['finance_vat', 'VAT & reports', FileText],
   ] },

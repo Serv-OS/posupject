@@ -6,6 +6,7 @@ import Shell from './components/Shell.jsx';
 import PublicForm from './components/PublicForm.jsx';
 import PublicQuote from './components/PublicQuote.jsx';
 import PublicInvoice from './components/PublicInvoice.jsx';
+import BankCallback from './components/BankCallback.jsx';
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -17,6 +18,8 @@ export default function App() {
   const quoteMatch = window.location.pathname.match(/^\/q\/([^/?#]+)/);
   // Public invoice route: /i/<token>
   const invoiceMatch = window.location.pathname.match(/^\/i\/([^/?#]+)/);
+  // Bank-feed OAuth return: /bank/callback?ref=<reference> (authenticated user)
+  const bankCb = window.location.pathname.match(/^\/bank\/callback/);
 
   useEffect(() => {
     loadBranding(); // apply this instance's app name + brand colours
@@ -36,6 +39,9 @@ export default function App() {
   }
   if (invoiceMatch) {
     return <PublicInvoice token={decodeURIComponent(invoiceMatch[1])} />;
+  }
+  if (bankCb) {
+    return <BankCallback />;
   }
 
   if (loading) {
