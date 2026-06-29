@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { fmtDuration } from '../../lib/timer';
 import { Clock, Trash2, Plus, Users, Building2 } from 'lucide-react';
 
-const SUBJECT_LABEL = { ticket: 'Ticket', task: 'Task', project: 'Project', company: 'Company', location: 'Location', deal: 'Deal', onboarding: 'Onboarding' };
+const SUBJECT_LABEL = { ticket: 'Ticket', task: 'Task', project: 'Project', company: 'Company', location: 'Location', deal: 'Deal', lead: 'Lead', contact: 'Contact', onboarding: 'Onboarding' };
 
 // date helpers (local) -> yyyy-mm-dd
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

@@ -19,6 +19,14 @@ async function resolvePolymorphic(type, id) {
       const { data } = await supabase.from('deals').select('company_id').eq('id', id).maybeSingle();
       return { company_id: data?.company_id || null };
     }
+    if (type === 'lead') {
+      const { data } = await supabase.from('leads').select('company_id').eq('id', id).maybeSingle();
+      return { company_id: data?.company_id || null };
+    }
+    if (type === 'contact') {
+      const { data } = await supabase.from('contacts').select('company_id').eq('id', id).maybeSingle();
+      return { company_id: data?.company_id || null };
+    }
     if (type === 'onboarding') {
       const { data } = await supabase.from('onboardings').select('company_id, location_id').eq('id', id).maybeSingle();
       return { company_id: data?.company_id || null, location_id: data?.location_id || null };

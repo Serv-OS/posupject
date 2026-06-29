@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import TimerButton from './TimerButton.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
@@ -132,6 +133,7 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
             {lead.priority} priority / Owner: {ownerName(lead.owner_id)}
           </div>
         </div>
+        {!editing && <TimerButton subjectType="lead" subjectId={leadId} label={lead.name} profile={profile} />}
         {!editing && (
           <ScheduleMeeting subjectType="lead" subjectId={leadId} contactId={lead.contact_id}
             attendeeEmail={contact?.email} defaultTitle={`Meeting: ${lead.name}`} />

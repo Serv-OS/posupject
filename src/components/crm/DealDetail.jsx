@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
+import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 
@@ -152,6 +153,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
             )}
           </div>
         </div>
+        {!editing && <TimerButton subjectType="deal" subjectId={dealId} label={deal.name} profile={profile} />}
         {canWrite && !editing && (
           <div className="flex gap-2">
             <button onClick={startEdit} className="btn-ghost px-4 py-2 rounded-xl text-sm">Edit</button>

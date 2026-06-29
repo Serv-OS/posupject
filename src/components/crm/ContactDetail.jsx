@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 import CallButton from '../CallButton.jsx';
@@ -72,6 +73,7 @@ export default function ContactDetail({ contactId, profile, onClose, onNavigate,
             {contact.phone && <span> / {contact.phone}</span>}
           </div>
         </div>
+        {!editing && <TimerButton subjectType="contact" subjectId={contactId} label={fullName} profile={profile} />}
         {!editing && (
           <ScheduleMeeting subjectType="contact" subjectId={contactId} contactId={contactId}
             attendeeEmail={contact.email} defaultTitle={`Meeting with ${fullName}`} />

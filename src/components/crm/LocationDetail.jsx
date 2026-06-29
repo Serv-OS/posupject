@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 import CallButton from '../CallButton.jsx';
@@ -119,6 +120,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
             {location.covers && <span className="text-xs text-muted">{location.covers} covers</span>}
           </div>
         </div>
+        {!editing && <TimerButton subjectType="location" subjectId={locationId} label={location.name} profile={profile} />}
         {!editing && location.phone && (
           <CallButton number={location.phone} className="px-3 py-2 text-sm" />
         )}

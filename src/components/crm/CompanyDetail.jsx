@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 import CallButton from '../CallButton.jsx';
@@ -114,6 +115,7 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
             {' / '}Owner: {ownerName(company.owner_id)}
           </div>
         </div>
+        {!editing && <TimerButton subjectType="company" subjectId={companyId} label={company.name} profile={profile} />}
         {!editing && company.phone && (
           <CallButton number={company.phone} className="px-3 py-2 text-sm" />
         )}
