@@ -6,7 +6,8 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { invoiceEmailHtml, sendInvoiceEmail } from "../_shared/invoiceEmail.ts";
+import { invoiceEmailHtml, sendInvoiceEmail, money } from "../_shared/invoiceEmail.ts";
+import { buildInvoicePdfBytes } from "../_shared/invoicePdf.ts";
 
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { "Content-Type": "application/json" } });
 
@@ -68,7 +69,23 @@ serve(async (req) => {
               .select("business_name, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle();
             const appUrl = Deno.env.get("APP_URL") || "https://posupject.vercel.app";
             const { subject, html } = invoiceEmailHtml(inv, seller || {}, `${appUrl}/i/${inv.public_token}`);
-            await sendInvoiceEmail(supabase, recipient, subject, html);
+
+            // Bill-to parties for the PDF (contact is the customer; company/location shown when linked).
+            const [{ data: contact }, { data: company }, { data: location }] = await Promise.all([
+              sched.contact_id ? supabase.from("contacts").select("first_name, last_name, email").eq("id", sched.contact_id).maybeSingle() : Promise.resolve({ data: null }),
+              sched.company_id ? supabase.from("companies").select("name").eq("id", sched.company_id).maybeSingle() : Promise.resolve({ data: null }),
+              sched.location_id ? supabase.from("locations").select("name").eq("id", sched.location_id).maybeSingle() : Promise.resolve({ data: null }),
+            ]);
+            const contactName = contact ? [contact.first_name, contact.last_name].filter(Boolean).join(" ") : "";
+            const pdfBytes = await buildInvoicePdfBytes({
+              inv, lines,
+              totals: { subtotal, tax: taxAmount, total },
+              seller: { name: (seller as any)?.business_name, email: (seller as any)?.business_email, phone: (seller as any)?.business_phone, accent: (seller as any)?.quote_accent, logo_url: (seller as any)?.logo_url },
+              billTo: { companyName: (company as any)?.name || "", contactName, contactEmail: recipient, locationName: (location as any)?.name || "" },
+              fmt: money,
+            });
+
+            await sendInvoiceEmail(supabase, recipient, subject, html, { filename: `INV-${inv.invoice_number}.pdf`, bytes: pdfBytes });
             await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString(), email_to: recipient }).eq("id", inv.id);
             sent = true;
           } catch (e) {

@@ -23,6 +23,8 @@ export async function getGmailAccessToken(supabase: any): Promise<string> {
 }
 
 const gbp = (n: number) => "£" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Currency formatter reused by the PDF builder so the email + attachment agree.
+export const money = gbp;
 const fmtDate = (d: string | null) => d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
 
 export function invoiceEmailHtml(inv: any, seller: any, link: string, opts: { paid?: boolean } = {}): { subject: string; html: string } {
@@ -49,17 +51,47 @@ export function invoiceEmailHtml(inv: any, seller: any, link: string, opts: { pa
   return { subject, html };
 }
 
-export async function sendInvoiceEmail(supabase: any, to: string, subject: string, html: string) {
+// base64 a byte array (chunked to avoid arg-count limits), wrapped at 76 cols for MIME.
+function pdfToBase64Lines(bytes: Uint8Array): string {
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  return btoa(bin).replace(/(.{76})/g, "$1\r\n");
+}
+
+// Send the invoice email. Pass `attachment` to include the invoice PDF (multipart/mixed).
+export async function sendInvoiceEmail(supabase: any, to: string, subject: string, html: string, attachment?: { filename: string; bytes: Uint8Array }) {
   const accessToken = await getGmailAccessToken(supabase);
-  const headers = [
+  const base = [
     `From: ServOS <support@serv-os.app>`,
     `To: ${to}`,
     `Subject: ${subject}`,
     `MIME-Version: 1.0`,
-    `Content-Type: text/html; charset=UTF-8`,
     `Message-ID: <${crypto.randomUUID()}@serv-os.app>`,
   ];
-  const raw = headers.join("\r\n") + "\r\n\r\n" + html;
+  let raw: string;
+  if (attachment) {
+    const boundary = "b_" + crypto.randomUUID().replace(/-/g, "");
+    raw = [
+      ...base,
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      ``,
+      `--${boundary}`,
+      `Content-Type: text/html; charset=UTF-8`,
+      ``,
+      html,
+      ``,
+      `--${boundary}`,
+      `Content-Type: application/pdf; name="${attachment.filename}"`,
+      `Content-Transfer-Encoding: base64`,
+      `Content-Disposition: attachment; filename="${attachment.filename}"`,
+      ``,
+      pdfToBase64Lines(attachment.bytes),
+      `--${boundary}--`,
+    ].join("\r\n");
+  } else {
+    raw = [...base, `Content-Type: text/html; charset=UTF-8`].join("\r\n") + "\r\n\r\n" + html;
+  }
   const encoded = btoa(unescape(encodeURIComponent(raw)))
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
