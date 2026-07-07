@@ -7,6 +7,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { utf8FromB64Url, decodeMimeWords, encodeMimeWord } from "../_shared/mime.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -102,7 +103,7 @@ async function sendGmailReply(accessToken: string, opts: {
   const lines = [
     `From: ${opts.from}`,
     `To: ${opts.to}`,
-    `Subject: ${opts.subject}`,
+    `Subject: ${encodeMimeWord(opts.subject)}`,
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
   ];
@@ -132,9 +133,8 @@ function extractName(str: string): string {
 
 function decodeBody(part: any): string {
   if (part.body?.data) {
-    // Base64url decode
-    const decoded = atob(part.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-    return decoded;
+    // Base64url of UTF-8 bytes -> decode as UTF-8 (raw atob mangles £, —, é …)
+    return utf8FromB64Url(part.body.data);
   }
   if (part.parts) {
     // Prefer text/plain, fall back to text/html
@@ -225,8 +225,8 @@ serve(async (req) => {
       const full = await getGmailMessage(accessToken, msg.id);
       const headers = full.payload?.headers || [];
 
-      const from = getHeader(headers, "From");
-      const subject = getHeader(headers, "Subject");
+      const from = decodeMimeWords(getHeader(headers, "From"));
+      const subject = decodeMimeWords(getHeader(headers, "Subject"));
       const messageId = getHeader(headers, "Message-ID");
       const inReplyTo = getHeader(headers, "In-Reply-To");
       const references = getHeader(headers, "References");

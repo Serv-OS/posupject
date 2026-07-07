@@ -1,5 +1,6 @@
 // Shared helper: send a branded invoice email from the connected support
 // mailbox (gmail_connections). Used by invoice-send and invoice-recurring.
+import { encodeMimeWord } from "./mime.ts";
 
 export async function getGmailAccessToken(supabase: any): Promise<string> {
   const clientId = Deno.env.get("GMAIL_CLIENT_ID")!;
@@ -65,7 +66,7 @@ export async function sendInvoiceEmail(supabase: any, to: string, subject: strin
   const base = [
     `From: ServOS <support@serv-os.app>`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeMimeWord(subject)}`,
     `MIME-Version: 1.0`,
     `Message-ID: <${crypto.randomUUID()}@serv-os.app>`,
   ];

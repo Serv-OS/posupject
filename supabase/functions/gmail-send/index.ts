@@ -7,6 +7,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { encodeMimeWord } from "../_shared/mime.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -54,7 +55,7 @@ function createMimeMessage(to: string, subject: string, body: string, inReplyTo?
   let headers = [
     `From: ServOS Support <support@serv-os.app>`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeMimeWord(subject)}`,
     `MIME-Version: 1.0`,
     `Content-Type: text/plain; charset=UTF-8`,
     `Message-ID: ${messageId}`,
