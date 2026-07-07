@@ -150,7 +150,8 @@ serve(async (req) => {
 
     // Build and send email via Gmail API
     const accessToken = await getAccessToken(supabase);
-    const emailSubject = subject || (ticket?.subject ? `Re: ${ticket.subject}` : "Support reply");
+    const _base = (ticket?.subject || "").replace(/^\s*(re:\s*)+/i, "").trim();
+    const emailSubject = subject || (_base ? `Re: ${_base}` : "Support reply");
     const rawMessage = createMimeMessage(to, emailSubject, body, inReplyTo, references);
 
     const sendUrl = gmailThreadId

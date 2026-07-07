@@ -199,7 +199,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
             body: JSON.stringify({
               ticket_id: subjectId,
               to: toEmail.trim(),
-              subject: subject.trim() || null,
+              subject: null, // always reply with the customer's email subject ("Re: …", threaded server-side)
               body: body.trim(),
             }),
           }
@@ -473,8 +473,6 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
             <div className="space-y-2 mb-2">
               <input className={input} value={toEmail || ticket?.customer_email || ''} onChange={e => setToEmail(e.target.value)}
                 placeholder="To email address" />
-              <input className={input} value={subject} onChange={e => setSubject(e.target.value)}
-                placeholder="Subject" />
             </div>
           )}
 
