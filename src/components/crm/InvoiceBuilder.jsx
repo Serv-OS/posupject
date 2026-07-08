@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ArrowLeft, Send, Link2, Trash2, Plus, Check, Ban, Repeat, FileDown } from 'lucide-react';
 import { money, invStatus, INV_BADGE } from './InvoicesPanel.jsx';
+import { downloadInvoicePdf } from '../../lib/invoicePdf';
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
@@ -118,7 +119,6 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
     setPdfBusy(true);
     try {
       if (!locked && !(await save())) { setPdfBusy(false); return; }
-      const { downloadInvoicePdf } = await import('../../lib/invoicePdf');
       const company = companies.find(c => c.id === inv.company_id);
       const location = locations.find(l => l.id === inv.location_id);
       const contact = contacts.find(c => c.id === inv.contact_id);
