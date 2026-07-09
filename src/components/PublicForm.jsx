@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 
 const FN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forms-public`;
 
@@ -10,6 +10,9 @@ export default function PublicForm({ slug }) {
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
+  const recaptchaRef = useRef(null);
+  const widgetId = useRef(null);
+  const siteKey = branding?.recaptcha_site_key || null;
 
   const src = new URLSearchParams(window.location.search).get('src');
 
@@ -27,6 +30,24 @@ export default function PublicForm({ slug }) {
     })();
   }, [slug]);
 
+  // reCAPTCHA v2 — load Google's script + render the checkbox once we know the site key.
+  useEffect(() => {
+    if (!siteKey || done) return;
+    const renderWidget = () => {
+      if (window.grecaptcha?.render && recaptchaRef.current && widgetId.current === null) {
+        try { widgetId.current = window.grecaptcha.render(recaptchaRef.current, { sitekey: siteKey }); } catch { /* already rendered */ }
+      }
+    };
+    if (window.grecaptcha?.render) { renderWidget(); return; }
+    if (!document.getElementById('recaptcha-api')) {
+      const sc = document.createElement('script');
+      sc.id = 'recaptcha-api'; sc.src = 'https://www.google.com/recaptcha/api.js?render=explicit';
+      sc.async = true; sc.defer = true; document.head.appendChild(sc);
+    }
+    const iv = setInterval(() => { if (window.grecaptcha?.render) { clearInterval(iv); renderWidget(); } }, 200);
+    return () => clearInterval(iv);
+  }, [siteKey, done]);
+
   const accent = form?.settings?.accent || '#E8743C';
   const bgColor = form?.settings?.bg_color || '#F1F5F9';
   const showLogo = form?.settings?.show_logo !== false && branding?.logo_url;
@@ -37,6 +58,11 @@ export default function PublicForm({ slug }) {
     e.preventDefault();
     setSubmitting(true);
     setError('');
+    let recaptcha_token = '';
+    if (siteKey) {
+      recaptcha_token = window.grecaptcha?.getResponse(widgetId.current) || '';
+      if (!recaptcha_token) { setError('Please tick the reCAPTCHA box.'); setSubmitting(false); return; }
+    }
     try {
       const res = await fetch(FN_URL, {
         method: 'POST',
@@ -44,13 +70,14 @@ export default function PublicForm({ slug }) {
         body: JSON.stringify({
           slug,
           data: values,
+          recaptcha_token,
           src,
           page_url: document.referrer || window.location.href,
           referrer: document.referrer || null,
         }),
       });
       const d = await res.json();
-      if (!res.ok) { setError(d.error || 'Something went wrong.'); setSubmitting(false); return; }
+      if (!res.ok) { setError(d.error || 'Something went wrong.'); window.grecaptcha?.reset(widgetId.current); setSubmitting(false); return; }
       if (d.redirect_url) { window.location.href = d.redirect_url; return; }
       setForm(f => ({ ...f, _successMessage: d.message }));
       setDone(true);
@@ -113,6 +140,7 @@ export default function PublicForm({ slug }) {
 
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
 
+      {siteKey && <div ref={recaptchaRef} className="flex justify-center my-1" />}
       <button type="submit" disabled={submitting} style={{ backgroundColor: accent }}
         className="w-full py-2.5 text-white text-sm font-semibold rounded-lg transition hover:opacity-90 disabled:opacity-50">
         {submitting ? 'Sending…' : (form.settings?.submit_label || 'Submit')}

@@ -37,8 +37,8 @@ serve(async (req) => {
 
       if (!form) return json({ error: "Form not found" }, 404);
       if (!form.enabled) return json({ error: "This form is no longer active." }, 410);
-      const { data: s } = await supabase.from("support_settings").select("logo_url, business_name").eq("id", 1).maybeSingle();
-      return json({ form, branding: { logo_url: s?.logo_url || null, business_name: s?.business_name || null } });
+      const { data: s } = await supabase.from("support_settings").select("logo_url, business_name, recaptcha_site_key").eq("id", 1).maybeSingle();
+      return json({ form, branding: { logo_url: s?.logo_url || null, business_name: s?.business_name || null, recaptcha_site_key: s?.recaptcha_site_key || null } });
     }
 
     // ---- POST: process a submission ----
@@ -54,6 +54,17 @@ serve(async (req) => {
         .maybeSingle();
       if (!form) return json({ error: "Form not found" }, 404);
       if (!form.enabled) return json({ error: "This form is no longer active." }, 410);
+
+      // Spam protection — verify the reCAPTCHA v2 token when a secret is set.
+      const rcSecret = Deno.env.get("RECAPTCHA_SECRET_KEY");
+      if (rcSecret) {
+        const rres = await fetch("https://www.google.com/recaptcha/api/siteverify", {
+          method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ secret: rcSecret, response: String(body.recaptcha_token || "") }),
+        });
+        const rjson = await rres.json().catch(() => ({}));
+        if (!rjson.success) return json({ error: "reCAPTCHA check failed — please try again." }, 400);
+      }
 
       // Validate required fields
       for (const f of form.fields || []) {
