@@ -34,6 +34,8 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
   const [subject, setSubject] = useState('');
   const [newLocation, setNewLocation] = useState('');
   const [companyId, setCompanyId] = useState('');
+  const [contacts, setContacts] = useState([]);
+  const [contactId, setContactId] = useState('');
   const [priority, setPriority] = useState('P2');
   const [ticketType, setTicketType] = useState('support');
   const [description, setDescription] = useState('');
@@ -51,16 +53,18 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
 
   const load = async () => {
     setLoading(true);
-    const [t, c, l, m] = await Promise.all([
+    const [t, c, l, m, ct] = await Promise.all([
       supabase.from('tickets').select('*').order('created_at', { ascending: false }),
       supabase.from('companies').select('id, name').order('name'),
       supabase.from('locations').select('id, name, company_id').order('name'),
       supabase.from('profiles').select('id, email, display_name'),
+      supabase.from('contacts').select('id, first_name, last_name, email, phone').order('first_name'),
     ]);
     setTickets(t.data || []);
     setCompanies(c.data || []);
     setLocations(l.data || []);
     setMembers(m.data || []);
+    setContacts(ct.data || []);
     setLoading(false);
   };
 
@@ -94,10 +98,14 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
   const create = async (e) => {
     e.preventDefault();
     if (!subject.trim() || !companyId) return;
+    const person = contacts.find(c => c.id === contactId) || null;
     const { data } = await supabase.from('tickets').insert({
       subject: subject.trim(),
       description: description.trim() || null,
       company_id: companyId,
+      contact_id: contactId || null,
+      customer_email: person?.email || null,
+      customer_phone: person?.phone || null,
       priority, ticket_type: ticketType, owner_id: profile.id,
     }).select().single();
     if (data) {
@@ -109,8 +117,13 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
           from_type: 'ticket', from_id: data.id, to_type: 'location', to_id: newLocation, label: 'affected_location',
         });
       }
+      if (contactId) {
+        await supabase.from('associations').insert({
+          from_type: 'ticket', from_id: data.id, to_type: 'contact', to_id: contactId, label: 'primary_contact',
+        });
+      }
     }
-    setSubject(''); setDescription(''); setNewLocation(''); setCompanyId(''); setPriority('P2'); setTicketType('support'); setShowCreate(false);
+    setSubject(''); setDescription(''); setNewLocation(''); setCompanyId(''); setContactId(''); setPriority('P2'); setTicketType('support'); setShowCreate(false);
     if (data) onSelect(data.id);
     else load();
   };
@@ -169,6 +182,13 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
                   {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               )}
+              <select className={input + ' w-56'} value={contactId} onChange={e => setContactId(e.target.value)}>
+                <option value="">Raise for a person (optional)…</option>
+                {contacts.map(c => {
+                  const nm = [c.first_name, c.last_name].filter(Boolean).join(' ') || c.email || 'Unnamed';
+                  return <option key={c.id} value={c.id}>{nm}{c.email ? ` — ${c.email}` : ''}</option>;
+                })}
+              </select>
               <select className={input + ' w-24'} value={priority} onChange={e => setPriority(e.target.value)}>
                 <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option>
               </select>
@@ -177,7 +197,7 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
                 <option value="feature_request">Feature Req</option><option value="billing">Billing</option><option value="other">Other</option>
               </select>
               <button type="submit" className="px-4 py-2 bg-ember text-white text-sm font-semibold rounded shrink-0">Create</button>
-              <button type="button" onClick={() => { setShowCreate(false); setNewLocation(''); setCompanyId(''); setDescription(''); }}
+              <button type="button" onClick={() => { setShowCreate(false); setNewLocation(''); setCompanyId(''); setContactId(''); setDescription(''); }}
                 className="px-3 py-2 text-sm text-muted border border-bdr rounded shrink-0">Cancel</button>
             </div>
           </form>
