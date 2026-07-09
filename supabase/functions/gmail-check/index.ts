@@ -8,6 +8,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { utf8FromB64Url, decodeMimeWords, encodeMimeWord } from "../_shared/mime.ts";
+import { isOpenNow } from "../_shared/hours.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -365,13 +366,15 @@ serve(async (req) => {
           // Auto-reply on first contact only
           try {
             const { data: vs } = await supabase.from("support_settings")
-              .select("auto_reply_email_enabled, auto_reply_email_subject, auto_reply_email_message")
+              .select("auto_reply_email_enabled, auto_reply_email_subject, auto_reply_email_message, after_hours_email_subject, after_hours_email_message, business_hours_enabled, business_timezone, business_hours")
               .eq("id", 1).single();
             if (vs?.auto_reply_email_enabled) {
-              const replyBody = (vs.auto_reply_email_message || "")
+              const afterHours = !isOpenNow(vs) && !!(vs.after_hours_email_message || "").trim();
+              const tmpl = afterHours ? vs.after_hours_email_message : vs.auto_reply_email_message;
+              const replyBody = (tmpl || "")
                 .replace(/\{\{\s*contact_name\s*\}\}/g, senderName || "there")
                 .replace(/\{\{\s*ticket_number\s*\}\}/g, newTicket.ticket_number ? `#${newTicket.ticket_number}` : "");
-              const replySubject = vs.auto_reply_email_subject || "We received your message";
+              const replySubject = (afterHours ? (vs.after_hours_email_subject || vs.auto_reply_email_subject) : vs.auto_reply_email_subject) || "We received your message";
               const fromAddr = connectedMailbox && connectedMailbox !== "unknown" ? connectedMailbox : senderEmail;
               const ok = await sendGmailReply(accessToken, {
                 from: fromAddr, to: senderEmail, subject: replySubject, body: replyBody,

@@ -6,6 +6,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isOpenNow } from "../_shared/hours.ts";
 
 // Escape text for safe inclusion inside a TwiML <Say>
 const xmlEscape = (s: string) =>
@@ -204,15 +205,16 @@ serve(async (req) => {
 
     // Editable greeting + voicemail prompt (from support_settings)
     const { data: vs } = await supabase.from("support_settings")
-      .select("voice_greeting, voicemail_prompt").eq("id", 1).single();
+      .select("voice_greeting, voicemail_prompt, after_hours_voicemail_prompt, business_hours_enabled, business_timezone, business_hours").eq("id", 1).single();
+    const open = isOpenNow(vs);
     const greeting = xmlEscape(vs?.voice_greeting || "Please hold while we connect you to an agent.");
-    const vmPrompt = xmlEscape(vs?.voicemail_prompt || "Please leave a message after the beep and we'll get back to you.");
+    const vmPrompt = xmlEscape((!open && vs?.after_hours_voicemail_prompt) || vs?.voicemail_prompt || "Please leave a message after the beep and we'll get back to you.");
 
     // Build TwiML response
     const FN = `${Deno.env.get("SUPABASE_URL")}/functions/v1`;
     let twiml = '<?xml version="1.0" encoding="UTF-8"?><Response>';
 
-    if (onlineAgents && onlineAgents.length > 0) {
+    if (open && onlineAgents && onlineAgents.length > 0) {
       // Ring online agents; record the call; on no-answer fall through to voicemail
       twiml += `<Say voice="alice">${greeting}</Say>`;
       twiml += `<Dial timeout="25" record="record-from-answer"`;

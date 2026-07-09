@@ -84,6 +84,12 @@ export default function SettingsPanel({ profile }) {
       auto_reply_email_message: next.auto_reply_email_message ?? null,
       auto_reply_sms_enabled: next.auto_reply_sms_enabled ?? false,
       auto_reply_sms_message: next.auto_reply_sms_message ?? null,
+      business_hours_enabled: next.business_hours_enabled ?? false,
+      business_timezone: next.business_timezone ?? null,
+      business_hours: next.business_hours ?? null,
+      after_hours_email_subject: next.after_hours_email_subject ?? null,
+      after_hours_email_message: next.after_hours_email_message ?? null,
+      after_hours_voicemail_prompt: next.after_hours_voicemail_prompt ?? null,
       quote_terms: next.quote_terms ?? null,
       invoice_terms: next.invoice_terms ?? null,
       business_name: next.business_name ?? null,
@@ -372,6 +378,21 @@ export default function SettingsPanel({ profile }) {
                       onChange={e => setSettings(s => ({ ...s, auto_reply_email_message: e.target.value }))}
                       onBlur={e => saveSettings({ auto_reply_email_message: e.target.value })}
                       placeholder="Auto-reply message" />
+                    <div className="pt-2 mt-1 border-t border-bdr">
+                      <div className="text-[11px] font-semibold text-muted mb-1">Out-of-hours reply — sent instead when you're closed (needs Business hours on)</div>
+                      <input disabled={!isOwner}
+                        className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember disabled:opacity-60 mb-2"
+                        value={settings.after_hours_email_subject || ''}
+                        onChange={e => setSettings(s => ({ ...s, after_hours_email_subject: e.target.value }))}
+                        onBlur={e => saveSettings({ after_hours_email_subject: e.target.value })}
+                        placeholder="Out-of-hours subject (optional)" />
+                      <textarea disabled={!isOwner} rows={3}
+                        className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none disabled:opacity-60"
+                        value={settings.after_hours_email_message || ''}
+                        onChange={e => setSettings(s => ({ ...s, after_hours_email_message: e.target.value }))}
+                        onBlur={e => saveSettings({ after_hours_email_message: e.target.value })}
+                        placeholder="e.g. Thanks for your message — our office is currently closed. We'll get back to you when we reopen." />
+                    </div>
                   </div>
                 </div>
 
@@ -405,7 +426,78 @@ export default function SettingsPanel({ profile }) {
             </div>
           )}
 
-          {/* Quote branding / company details */}
+{/* Business hours */}
+          {settings && (
+            <div className="glass-card rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-bdr flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-lg">{'\u{1F551}'}</div>
+                <div className="flex-1">
+                  <div className="text-base font-bold text-paper">Business hours</div>
+                  <div className="text-xs text-muted">Out-of-hours calls → voicemail → ticket · out-of-hours emails get the out-of-hours reply</div>
+                </div>
+              </div>
+              <div className="p-5 space-y-4">
+                <button type="button" disabled={!isOwner}
+                  onClick={() => saveSettings({ business_hours_enabled: !settings.business_hours_enabled })}
+                  className="w-full flex items-center gap-3 p-3 glass-inner rounded-xl text-left disabled:opacity-60">
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-paper">Enforce business hours</div>
+                    <div className="text-xs text-muted">When off, calls ring agents as normal and emails always get the standard reply</div>
+                  </div>
+                  <div className={`relative w-10 h-6 rounded-full transition shrink-0 ${settings.business_hours_enabled ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                    <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${settings.business_hours_enabled ? 'left-[18px]' : 'left-0.5'}`} />
+                  </div>
+                </button>
+                <div className={settings.business_hours_enabled ? '' : 'opacity-50 pointer-events-none'}>
+                  <label className="text-[11px] font-semibold text-muted block mb-1">Timezone</label>
+                  <select disabled={!isOwner} value={settings.business_timezone || 'UTC'}
+                    onChange={e => { setSettings(s => ({ ...s, business_timezone: e.target.value })); saveSettings({ business_timezone: e.target.value }); }}
+                    className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember disabled:opacity-60 mb-3">
+                    {[...new Set([settings.business_timezone, 'America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York', 'Europe/London', 'Europe/Dublin', 'Australia/Sydney', 'UTC'])].filter(Boolean).map(tz => <option key={tz} value={tz}>{tz}</option>)}
+                  </select>
+                  <div className="space-y-1.5">
+                    {['mon','tue','wed','thu','fri','sat','sun'].map(d => {
+                      const bh = settings.business_hours || {};
+                      const day = bh[d] || {};
+                      const upd = (patch) => {
+                        const next = { ...bh, [d]: { ...day, ...patch } };
+                        setSettings(s => ({ ...s, business_hours: next }));
+                        saveSettings({ business_hours: next });
+                      };
+                      return (
+                        <div key={d} className="flex items-center gap-2 text-sm">
+                          <span className="w-9 uppercase text-[11px] font-mono text-muted">{d}</span>
+                          <label className="flex items-center gap-1.5 text-xs text-muted w-16">
+                            <input type="checkbox" checked={!day.closed} disabled={!isOwner}
+                              onChange={e => upd({ closed: !e.target.checked })} />
+                            {day.closed ? 'Closed' : 'Open'}
+                          </label>
+                          <input type="time" disabled={!isOwner || day.closed} value={day.open || '09:00'}
+                            onChange={e => upd({ open: e.target.value })}
+                            className="px-2 py-1 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember disabled:opacity-40" />
+                          <span className="text-muted">–</span>
+                          <input type="time" disabled={!isOwner || day.closed} value={day.close || '17:00'}
+                            onChange={e => upd({ close: e.target.value })}
+                            className="px-2 py-1 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember disabled:opacity-40" />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="pt-3 mt-2 border-t border-bdr">
+                    <label className="text-[11px] font-semibold text-muted block mb-1">Out-of-hours voicemail greeting (optional)</label>
+                    <textarea disabled={!isOwner} rows={2}
+                      className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none disabled:opacity-60"
+                      value={settings.after_hours_voicemail_prompt || ''}
+                      onChange={e => setSettings(s => ({ ...s, after_hours_voicemail_prompt: e.target.value }))}
+                      onBlur={e => saveSettings({ after_hours_voicemail_prompt: e.target.value })}
+                      placeholder="Played to callers when you're closed, before the beep. Falls back to the normal voicemail prompt if blank." />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+                    {/* Quote branding / company details */}
           {settings && (
             <div className="glass-card rounded-2xl overflow-hidden">
               <div className="px-5 py-4 border-b border-bdr flex items-center gap-3">
