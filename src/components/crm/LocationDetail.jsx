@@ -71,6 +71,14 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   };
   const set = (k, v) => setDraft({ ...draft, [k]: v });
 
+  // Unlink this location from its company (e.g. ownership changed). Keeps the
+  // location + its history; only clears the company link.
+  const unlinkCompany = async () => {
+    if (!confirm(`Unlink "${location?.name}" from ${company?.name || 'this company'}?\n\nThe location and its history stay — only the company link is removed.`)) return;
+    await supabase.from('locations').update({ company_id: null }).eq('id', locationId);
+    load();
+  };
+
   const deleteRecord = async () => {
     if (!confirm(`Delete location "${location?.name}"?\n\nThis cannot be undone.`)) return;
     await supabase.from('locations').delete().eq('id', locationId);
@@ -113,8 +121,14 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
             {primaryLead(leads) && <LeadBadge stage={primaryLead(leads).stage} full />}
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            <span className="badge-company" onClick={() => onNavigate?.('company', location.company_id)}>
-              {'\u{1F3E2}'} {company?.name || 'Unknown company'}
+            <span className="badge-company inline-flex items-center gap-1.5">
+              <span className="cursor-pointer" onClick={() => onNavigate?.('company', location.company_id)}>
+                {'\u{1F3E2}'} {company?.name || 'Unknown company'}
+              </span>
+              {canWrite && location.company_id && (
+                <button onClick={unlinkCompany} title="Unlink from company (e.g. ownership changed)"
+                  className="text-red-500 hover:text-red-700 font-bold leading-none">×</button>
+              )}
             </span>
             {location.venue_type && <span className="text-xs text-muted">{location.venue_type}</span>}
             {location.covers && <span className="text-xs text-muted">{location.covers} covers</span>}

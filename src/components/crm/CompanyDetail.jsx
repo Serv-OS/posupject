@@ -83,6 +83,14 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
     load();
   };
 
+  // Unlink a location from this company (e.g. ownership changed). The location
+  // and its history stay; only the company link is cleared.
+  const unlinkLocation = async (l) => {
+    if (!confirm(`Unlink "${l.name}" from ${company?.name || 'this company'}?\n\nThe location and its history stay — only the company link is removed.`)) return;
+    await supabase.from('locations').update({ company_id: null }).eq('id', l.id);
+    load();
+  };
+
   const deleteRecord = async () => {
     if (!confirm(`Delete "${company?.name}" and all its locations, deals, onboardings, and tickets?\n\nThis cannot be undone.`)) return;
     await supabase.from('companies').delete().eq('id', companyId);
@@ -189,6 +197,10 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
                           <div className="text-xs text-muted">{[l.venue_type, l.city].filter(Boolean).join(' / ')}</div>
                         </div>
                         <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded ${STATUS_COLORS[l.status] || 'bg-card text-dim'}`}>{l.status}</span>
+                        {canWrite && (
+                          <button onClick={(e) => { e.stopPropagation(); unlinkLocation(l); }} title="Unlink from this company (ownership changed)"
+                            className="text-red-400 hover:text-red-600 font-bold leading-none px-1 shrink-0">×</button>
+                        )}
                       </div>
                     ))}
                   </div>
