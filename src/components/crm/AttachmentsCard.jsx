@@ -62,9 +62,13 @@ export default function AttachmentsCard({ subjectType, subjectId, profile }) {
   };
 
   const download = async (a) => {
+    // Open the tab synchronously (inside the click) BEFORE the await, or the
+    // browser blocks it as a popup and nothing happens. Point it at the signed
+    // URL once it resolves.
+    const w = window.open('', '_blank');
     const { data, error: e } = await supabase.storage.from('attachments').createSignedUrl(a.file_path, 120);
-    if (e) { setError(e.message); return; }
-    window.open(data.signedUrl, '_blank');
+    if (e || !data?.signedUrl) { if (w) w.close(); setError(e?.message || 'Could not open attachment.'); return; }
+    if (w) w.location.href = data.signedUrl; else window.open(data.signedUrl, '_blank');
   };
 
   const remove = async (a) => {
