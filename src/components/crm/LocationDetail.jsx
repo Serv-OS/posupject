@@ -75,7 +75,8 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   // location + its history; only clears the company link.
   const unlinkCompany = async () => {
     if (!confirm(`Unlink "${location?.name}" from ${company?.name || 'this company'}?\n\nThe location and its history stay — only the company link is removed.`)) return;
-    await supabase.from('locations').update({ company_id: null }).eq('id', locationId);
+    const { error } = await supabase.from('locations').update({ company_id: null }).eq('id', locationId);
+    if (error) { alert('Could not unlink: ' + error.message); return; }
     load();
   };
 
