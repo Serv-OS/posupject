@@ -9,6 +9,11 @@ const SCOPES = 'openid email https://www.googleapis.com/auth/gmail.modify https:
 // Launch the Google OAuth popup. Resolves the user's session token into the
 // `state` so the callback knows which profile to attach the tokens to.
 export async function connectGoogle() {
+  // Open the popup synchronously (inside the click gesture) BEFORE any await, or
+  // the browser blocks it. We point it at the auth URL once the session/client-id
+  // work resolves.
+  const w = 500, h = 640;
+  const popup = window.open('', 'google-oauth', `width=${w},height=${h},left=${(screen.width - w) / 2},top=${(screen.height - h) / 2}`);
   const { data: { session } } = await supabase.auth.getSession();
   const clientId = await getGoogleClientId();
   const url = 'https://accounts.google.com/o/oauth2/v2/auth?' +
@@ -17,8 +22,7 @@ export async function connectGoogle() {
     `&response_type=code&access_type=offline&prompt=consent` +
     `&scope=${encodeURIComponent(SCOPES)}` +
     `&state=${encodeURIComponent('personal:' + (session?.access_token || ''))}`;
-  const w = 500, h = 640;
-  window.open(url, 'google-oauth', `width=${w},height=${h},left=${(screen.width - w) / 2},top=${(screen.height - h) / 2}`);
+  if (popup) popup.location.href = url; else window.location.href = url;
 }
 
 // Hook: tracks whether the current user has connected Google, auto-refreshing
