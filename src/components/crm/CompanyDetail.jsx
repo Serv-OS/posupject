@@ -200,7 +200,7 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
             <div className="col-span-4 space-y-4">
 
               <Card title="Activity">
-                <ActivityTimeline subjectType="company" subjectId={companyId} profile={profile} />
+                <ActivityTimeline subjectType="company" subjectId={companyId} profile={profile} contactEmail={company?.email} />
               </Card>
 
               <Card title="Contacts">

@@ -217,7 +217,7 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
             {/* MIDDLE: activity */}
             <div className="col-span-4 space-y-4">
               <Card title="Activity & notes">
-                <ActivityTimeline subjectType="lead" subjectId={leadId} profile={profile} />
+                <ActivityTimeline subjectType="lead" subjectId={leadId} profile={profile} contactEmail={contact?.email} />
               </Card>
             </div>
 

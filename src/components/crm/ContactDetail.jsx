@@ -143,7 +143,7 @@ export default function ContactDetail({ contactId, profile, onClose, onNavigate,
             {/* MIDDLE: Activity */}
             <div className="col-span-4 space-y-4">
               <Card title="Activity">
-                <ActivityTimeline subjectType="contact" subjectId={contactId} profile={profile} />
+                <ActivityTimeline subjectType="contact" subjectId={contactId} profile={profile} contactEmail={contact?.email} />
               </Card>
             </div>
 

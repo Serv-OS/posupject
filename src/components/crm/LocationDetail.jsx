@@ -232,7 +232,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
             {/* MIDDLE: Activity + Contacts */}
             <div className="col-span-4 space-y-4">
               <Card title="Activity">
-                <ActivityTimeline subjectType="location" subjectId={locationId} profile={profile} />
+                <ActivityTimeline subjectType="location" subjectId={locationId} profile={profile} contactEmail={location?.email} />
               </Card>
 
               <Card title="Contacts">
