@@ -51,6 +51,9 @@ export default function PublicForm({ slug }) {
   const accent = form?.settings?.accent || '#E8743C';
   const bgColor = form?.settings?.bg_color || '#F1F5F9';
   const showLogo = form?.settings?.show_logo !== false && branding?.logo_url;
+  const cols = Math.min(3, Math.max(1, Number(form?.settings?.columns) || 1));
+  const maxW = cols >= 3 ? 'max-w-3xl' : cols === 2 ? 'max-w-2xl' : 'max-w-md';
+  const gridCols = cols === 3 ? 'sm:grid-cols-3' : cols === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-1';
 
   const setVal = (k, v) => setValues(prev => ({ ...prev, [k]: v }));
 
@@ -89,7 +92,7 @@ export default function PublicForm({ slug }) {
 
   const wrap = (children) => (
     <div className="min-h-screen w-full flex items-center justify-center p-4" style={{ backgroundColor: bgColor }}>
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-sm border border-slate-200 p-6 sm:p-8">
+      <div className={`w-full ${maxW} bg-white rounded-2xl shadow-sm border border-slate-200 p-6 sm:p-8`}>
         {showLogo && <img src={branding.logo_url} alt={branding.business_name || ''} className="h-12 object-contain mb-5 mx-auto" />}
         {children}
       </div>
@@ -117,8 +120,9 @@ export default function PublicForm({ slug }) {
         {form.description && <div className="text-sm text-slate-500 mt-1">{form.description}</div>}
       </div>
 
+      <div className={`grid gap-4 ${gridCols}`}>
       {(form.fields || []).map(f => (
-        <div key={f.key}>
+        <div key={f.key} className={(f.type === 'textarea' || f.type === 'file') ? 'sm:col-span-full' : ''}>
           <label className={label}>{f.label}{f.required && <span style={{ color: accent }}> *</span>}</label>
           {f.type === 'textarea' ? (
             <textarea className={input + ' resize-none'} rows={4} required={f.required}
@@ -137,6 +141,7 @@ export default function PublicForm({ slug }) {
           )}
         </div>
       ))}
+      </div>
 
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
 

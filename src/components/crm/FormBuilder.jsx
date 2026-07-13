@@ -153,6 +153,10 @@ export default function FormBuilder({ formId, profile, onClose, onNavigate }) {
                   <div><label className={label}>Source tag</label><input className={input} value={form.source_tag || ''} onChange={e => set('source_tag', e.target.value)} placeholder="homepage" /></div>
                 </div>
                 <div><label className={label}>Submit button label</label><input className={input} value={form.settings?.submit_label || ''} onChange={e => setSetting('submit_label', e.target.value)} placeholder="Submit" /></div>
+                <div><label className={label}>Layout columns</label>
+                  <select className={input} value={form.settings?.columns || 1} onChange={e => setSetting('columns', Number(e.target.value))}>
+                    <option value={1}>1 column</option><option value={2}>2 columns</option><option value={3}>3 columns</option>
+                  </select></div>
                 <div><label className={label}>Success message</label><textarea className={input + ' resize-none'} rows={2} value={form.settings?.success_message || ''} onChange={e => setSetting('success_message', e.target.value)} placeholder="Thanks — we'll be in touch." /></div>
                 <div><label className={label}>Redirect URL (optional)</label><input className={input} value={form.settings?.redirect_url || ''} onChange={e => setSetting('redirect_url', e.target.value)} placeholder="https://… after submit" /></div>
                 <div><label className={label}>Default priority</label>
