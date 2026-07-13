@@ -95,16 +95,17 @@ serve(async (req) => {
     if (status === "no-answer" || status === "busy" || status === "failed") {
       const FN = `${Deno.env.get("SUPABASE_URL")}/functions/v1`;
       const ticketId = new URL(req.url).searchParams.get("ticket") || "";
-      const { data: vs } = await supabase.from("support_settings").select("voicemail_prompt").eq("id", 1).single();
+      const { data: vs } = await supabase.from("support_settings").select("voicemail_prompt, voice_id").eq("id", 1).single();
+      const voice = vs?.voice_id || "Polly.Joanna-Neural";
       const vmPrompt = (vs?.voicemail_prompt || "Sorry, we couldn't reach an agent. Please leave a message after the beep.")
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
       return new Response(
         `<?xml version="1.0" encoding="UTF-8"?><Response>` +
-        `<Say voice="alice">${vmPrompt}</Say>` +
+        `<Say voice="${voice}">${vmPrompt}</Say>` +
         `<Record maxLength="120" playBeep="true" transcribe="true"` +
         ` transcribeCallback="${FN}/twilio-voicemail?mode=transcription"` +
         ` action="${FN}/twilio-voicemail?ticket=${ticketId}" />` +
-        `<Say voice="alice">We didn't receive a message. Goodbye.</Say>` +
+        `<Say voice="${voice}">We didn't receive a message. Goodbye.</Say>` +
         `</Response>`,
         { headers: { "Content-Type": "text/xml" } }
       );

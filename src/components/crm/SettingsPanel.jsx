@@ -79,6 +79,7 @@ export default function SettingsPanel({ profile }) {
       prefer_online: next.prefer_online,
       voice_greeting: next.voice_greeting ?? null,
       voicemail_prompt: next.voicemail_prompt ?? null,
+      voice_id: next.voice_id ?? null,
       auto_reply_email_enabled: next.auto_reply_email_enabled ?? false,
       auto_reply_email_subject: next.auto_reply_email_subject ?? null,
       auto_reply_email_message: next.auto_reply_email_message ?? null,
@@ -315,6 +316,21 @@ export default function SettingsPanel({ profile }) {
                 </div>
               </div>
               <div className="p-5 space-y-4">
+                <div>
+                  <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Voice (how greetings &amp; voicemail sound)</label>
+                  <select disabled={!isOwner}
+                    className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember disabled:opacity-60"
+                    value={settings.voice_id || 'Polly.Amy-Neural'}
+                    onChange={e => { setSettings(s => ({ ...s, voice_id: e.target.value })); saveSettings({ voice_id: e.target.value }); }}>
+                    <option value="Polly.Amy-Neural">Amy — British, female (natural)</option>
+                    <option value="Polly.Emma-Neural">Emma — British, female (warm)</option>
+                    <option value="Polly.Brian-Neural">Brian — British, male</option>
+                    <option value="Polly.Joanna-Neural">Joanna — US, female</option>
+                    <option value="Polly.Danielle-Neural">Danielle — US, female (natural)</option>
+                    <option value="Polly.Matthew-Neural">Matthew — US, male</option>
+                  </select>
+                  <div className="text-[11px] text-dim mt-1">Natural neural voices — replaces the old robotic default. Applies to the next call.</div>
+                </div>
                 <div>
                   <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Greeting (while connecting to an agent)</label>
                   <textarea disabled={!isOwner} rows={2}

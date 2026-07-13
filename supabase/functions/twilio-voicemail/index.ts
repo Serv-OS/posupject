@@ -120,9 +120,11 @@ serve(async (req) => {
       });
     }
 
-    return xml(`<Say voice="alice">Thank you. We've received your message and will get back to you shortly. Goodbye.</Say><Hangup/>`);
+    const { data: vsV } = await supabase.from("support_settings").select("voice_id").eq("id", 1).single();
+    const voice = vsV?.voice_id || "Polly.Joanna-Neural";
+    return xml(`<Say voice="${voice}">Thank you. We've received your message and will get back to you shortly. Goodbye.</Say><Hangup/>`);
   } catch (e) {
     console.error("voicemail error:", e);
-    return xml(`<Say voice="alice">Thank you for your message. Goodbye.</Say><Hangup/>`);
+    return xml(`<Say voice="Polly.Joanna-Neural">Thank you for your message. Goodbye.</Say><Hangup/>`);
   }
 });

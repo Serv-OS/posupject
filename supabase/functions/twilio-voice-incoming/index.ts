@@ -205,8 +205,9 @@ serve(async (req) => {
 
     // Editable greeting + voicemail prompt (from support_settings)
     const { data: vs } = await supabase.from("support_settings")
-      .select("voice_greeting, voicemail_prompt, after_hours_voicemail_prompt, business_hours_enabled, business_timezone, business_hours").eq("id", 1).single();
+      .select("voice_greeting, voicemail_prompt, after_hours_voicemail_prompt, business_hours_enabled, business_timezone, business_hours, voice_id").eq("id", 1).single();
     const open = isOpenNow(vs);
+    const voice = vs?.voice_id || "Polly.Joanna-Neural";
     const greeting = xmlEscape(vs?.voice_greeting || "Please hold while we connect you to an agent.");
     const vmPrompt = xmlEscape((!open && vs?.after_hours_voicemail_prompt) || vs?.voicemail_prompt || "Please leave a message after the beep and we'll get back to you.");
 
@@ -216,7 +217,7 @@ serve(async (req) => {
 
     if (open && onlineAgents && onlineAgents.length > 0) {
       // Ring online agents; record the call; on no-answer fall through to voicemail
-      twiml += `<Say voice="alice">${greeting}</Say>`;
+      twiml += `<Say voice="${voice}">${greeting}</Say>`;
       twiml += `<Dial timeout="25" record="record-from-answer"`;
       twiml += ` recordingStatusCallback="${FN}/twilio-recording" recordingStatusCallbackEvent="completed"`;
       twiml += ` action="${FN}/twilio-voice-status?ticket=${ticketId || ""}"`;
@@ -234,11 +235,11 @@ serve(async (req) => {
       twiml += `</Dial>`;
     } else {
       // No agents online - go straight to voicemail (recorded + transcribed)
-      twiml += `<Say voice="alice">${vmPrompt}</Say>`;
+      twiml += `<Say voice="${voice}">${vmPrompt}</Say>`;
       twiml += `<Record maxLength="120" playBeep="true" transcribe="true"`;
       twiml += ` transcribeCallback="${FN}/twilio-voicemail?mode=transcription"`;
       twiml += ` action="${FN}/twilio-voicemail?ticket=${ticketId || ""}" />`;
-      twiml += `<Say voice="alice">We didn't receive a message. Goodbye.</Say>`;
+      twiml += `<Say voice="${voice}">We didn't receive a message. Goodbye.</Say>`;
     }
 
     twiml += '</Response>';
