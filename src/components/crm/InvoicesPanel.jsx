@@ -25,6 +25,8 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const [contacts, setContacts] = useState([]);
   const [products, setProducts] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [searchField, setSearchField] = useState('all');
   const [editSched, setEditSched] = useState(null);
   const [loading, setLoading] = useState(true);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
@@ -64,7 +66,25 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const paidThisMonth = invoices.filter(i => i.status === 'paid' && i.paid_at && new Date(i.paid_at) >= mStart)
     .reduce((s, i) => s + Number(i.amount_paid ?? i.total ?? 0), 0);
 
-  const filtered = statusFilter === 'all' ? invoices : invoices.filter(i => invStatus(i) === statusFilter);
+  const matchesTab = (inv) => {
+    const st = invStatus(inv);
+    if (statusFilter === 'all') return true;
+    if (statusFilter === 'sent') return st === 'sent' || st === 'viewed';
+    return st === statusFilter; // draft, overdue, paid
+  };
+  const q = search.trim().toLowerCase();
+  const matchesSearch = (inv) => {
+    if (!q) return true;
+    const comp = (inv.company?.name || '').toLowerCase();
+    const loc = (inv.location?.name || '').toLowerCase();
+    const num = `inv-${inv.invoice_number}`.toLowerCase();
+    const label = (inv.label || '').toLowerCase();
+    if (searchField === 'company') return comp.includes(q);
+    if (searchField === 'location') return loc.includes(q);
+    if (searchField === 'number') return num.includes(q) || String(inv.invoice_number || '').includes(q);
+    return comp.includes(q) || loc.includes(q) || num.includes(q) || label.includes(q);
+  };
+  const filtered = invoices.filter(i => matchesTab(i) && matchesSearch(i));
 
   const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
 
@@ -101,13 +121,28 @@ export default function InvoicesPanel({ profile, onNavigate }) {
 
           {tab === 'invoices' ? (
             <div className="glass-card rounded-2xl overflow-hidden">
-              <div className="px-5 py-3.5 border-b border-bdr flex items-center gap-2">
-                <h3 className="text-[13px] font-bold text-paper">All invoices</h3>
-                <span className="text-xs text-dim font-mono">({filtered.length})</span>
-                <select className={input + ' ml-auto !py-1.5 text-xs'} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-                  <option value="all">All statuses</option>
-                  {['draft', 'sent', 'viewed', 'overdue', 'paid', 'void'].map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
+              <div className="px-5 py-3.5 border-b border-bdr space-y-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-[13px] font-bold text-paper">Invoices</h3>
+                  <span className="text-xs text-dim font-mono">({filtered.length})</span>
+                  <div className="ml-auto flex items-center gap-1 flex-wrap">
+                    {[['all', 'All'], ['draft', 'Draft'], ['sent', 'Sent'], ['overdue', 'Overdue'], ['paid', 'Paid']].map(([k, lbl]) => (
+                      <button key={k} onClick={() => setStatusFilter(k)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${statusFilter === k ? 'bg-ember text-white' : 'text-muted hover:text-paper'}`}>{lbl}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select className={input + ' !py-1.5 text-xs shrink-0'} value={searchField} onChange={e => setSearchField(e.target.value)}>
+                    <option value="all">All fields</option>
+                    <option value="company">Customer</option>
+                    <option value="location">Location</option>
+                    <option value="number">Invoice #</option>
+                  </select>
+                  <input className={input + ' !py-1.5 text-xs flex-1'} value={search} onChange={e => setSearch(e.target.value)}
+                    placeholder="Search invoices…" />
+                  {search && <button onClick={() => setSearch('')} className="text-xs text-dim hover:text-paper px-2 shrink-0">Clear</button>}
+                </div>
               </div>
               <div className="divide-y divide-bdr">
                 {loading ? <div className="p-6 text-center text-dim text-sm">Loading…</div>
