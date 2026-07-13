@@ -33,10 +33,17 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [mentionPos, setMentionPos] = useState(0);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [isMsCrm, setIsMsCrm] = useState(false);
   const bodyRef = useRef(null);
   const scrollRef = useRef(null);
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
+
+  // Support-mailbox provider: the microsoft_connections table exists only on the
+  // Microsoft CRMs → reply via ms-send there, gmail-send otherwise.
+  useEffect(() => {
+    supabase.from('microsoft_connections').select('id').limit(1).then(r => setIsMsCrm(!r.error));
+  }, []);
 
   useEffect(() => {
     load();
@@ -184,12 +191,12 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
     if (channel === 'sms' && (!body.trim() || !toPhone.trim())) return;
     setSending(true);
 
-    // Email: send via Gmail edge function
+    // Email: send via the support mailbox — ms-send (Microsoft) or gmail-send (Gmail)
     if (channel === 'email' && subjectType === 'ticket') {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         const res = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/gmail-send`,
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${isMsCrm ? 'ms-send' : 'gmail-send'}`,
           {
             method: 'POST',
             headers: {
