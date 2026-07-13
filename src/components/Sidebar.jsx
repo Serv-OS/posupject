@@ -77,6 +77,7 @@ const INDEX = [
   ...FOOTER_NAV.map(([key, label, Icon]) => ({ key, label, Icon, section: 'Account' })),
 ];
 const BY_KEY = Object.fromEntries(INDEX.map(r => [r.key, r]));
+const CORE_KEYS = new Set(CORE.map(c => c[0]));
 
 function usePersist(key, initial) {
   const [v, setV] = useState(() => { try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : initial; } catch { return initial; } });
@@ -154,7 +155,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
 
   const togglePin = (key) => setPinned(p => p.includes(key) ? p.filter(k => k !== key) : [...p, key]);
   const pinnedRows = pinned.map(k => BY_KEY[k]).filter(Boolean);
-  const recentRows = recents.filter(k => !pinned.includes(k) && k !== activeKey).slice(0, 4).map(k => BY_KEY[k]).filter(Boolean);
+  const recentRows = recents.filter(k => !pinned.includes(k) && k !== activeKey && !CORE_KEYS.has(k)).slice(0, 4).map(k => BY_KEY[k]).filter(Boolean);
 
   const createProject = async (e) => {
     e.preventDefault();
@@ -242,6 +243,15 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
         ) : (
           /* ── Full browse ── */
           <>
+            {/* Core — primary items, pinned to the top with a divider so it never blends into Recent */}
+            <div className="space-y-0.5">
+              {CORE.map(([key, label, Icon]) => (
+                <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => go(key)}
+                  pinned={pinned.includes(key)} onPin={() => togglePin(key)} hover={hover} setHover={setHover} rowKey={key} />
+              ))}
+            </div>
+            <div className="h-px bg-bdr/70 mx-2 my-2.5" />
+
             {/* App Build (dynamic projects) */}
             <GroupHeader label="App Build" count={projects.length} open={open.appbuild}
               onToggle={() => toggle('appbuild')}
@@ -299,14 +309,6 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
                 </div>
               </div>
             )}
-
-            {/* Core */}
-            <div className="mt-2 space-y-0.5">
-              {CORE.map(([key, label, Icon]) => (
-                <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => go(key)}
-                  pinned={pinned.includes(key)} onPin={() => togglePin(key)} hover={hover} setHover={setHover} rowKey={key} />
-              ))}
-            </div>
 
             {/* Collapsible groups */}
             {COLLAPSIBLE.map(g => (
