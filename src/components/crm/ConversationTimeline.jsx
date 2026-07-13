@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
+import { cleanEmailBody, hasQuotedTail } from '../../lib/emailText';
 
 const TYPE_ICON = { call: '\u{1F4DE}', email: '\u{1F4E7}', sms: '\u{1F4AC}', note: '\u{1F4DD}', meeting: '\u{1F91D}', whatsapp: '\u{1F4F2}' };
 const TYPE_LABEL = { call: 'Call', email: 'Email', sms: 'SMS', note: 'Note', meeting: 'Meeting', whatsapp: 'WhatsApp' };
@@ -36,6 +37,13 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [isMsCrm, setIsMsCrm] = useState(false);
   const bodyRef = useRef(null);
   const scrollRef = useRef(null);
+  // Which inbound emails have their quoted history expanded.
+  const [expanded, setExpanded] = useState(() => new Set());
+  const toggleExpand = (id) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -47,13 +55,17 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
 
   useEffect(() => {
     load();
-    // Live conversation: reload when any message lands on this record
+    // Live conversation: reload when any message lands on this record. Realtime
+    // is primary; a slow poll is a fallback so replies still surface if the
+    // realtime channel drops (e.g. laptop wake-from-sleep) or crm_activities
+    // isn't in the DB's realtime publication.
     const ch = supabase.channel(`conv-${subjectType}-${subjectId}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'crm_activities', filter: `subject_id=eq.${subjectId}` },
         load)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    const poll = setInterval(load, 25000);
+    return () => { supabase.removeChannel(ch); clearInterval(poll); };
   }, [subjectType, subjectId]);
 
   useEffect(() => {
@@ -402,7 +414,25 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                     </div>
                     {a.subject && <div className="text-xs font-medium text-paper mb-1">{a.subject}</div>}
                     {a.channel_metadata?.to && <div className="text-[10px] text-muted mb-1">To: {a.channel_metadata.to}</div>}
-                    <div className="text-sm text-paper leading-relaxed whitespace-pre-wrap">{renderBody(a.body)}</div>
+                    {(() => {
+                      // Inbound emails carry the quoted reply chain + signature.
+                      // Show only the new message, with a toggle to reveal the rest.
+                      const isInboundEmail = a.type === 'email' && !isOutbound;
+                      const showFull = expanded.has(a.id);
+                      const text = isInboundEmail && !showFull ? cleanEmailBody(a.body) : a.body;
+                      const trimmable = isInboundEmail && hasQuotedTail(a.body);
+                      return (
+                        <>
+                          <div className="text-sm text-paper leading-relaxed whitespace-pre-wrap">{renderBody(text)}</div>
+                          {trimmable && (
+                            <button onClick={() => toggleExpand(a.id)}
+                              className="mt-1 text-[10px] text-muted hover:text-paper underline underline-offset-2">
+                              {showFull ? 'Hide quoted text' : 'Show quoted text'}
+                            </button>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
               </div>

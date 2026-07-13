@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { cleanEmailBody, hasQuotedTail } from '../../lib/emailText';
 
 const TYPE_ICON = { call: '\u{1F4DE}', email: '\u{1F4E7}', sms: '\u{1F4AC}', note: '\u{1F4DD}', meeting: '\u{1F91D}', whatsapp: '\u{1F4F2}' };
 const TYPE_LABEL = { call: 'Call', email: 'Email', sms: 'SMS', note: 'Note', meeting: 'Meeting', whatsapp: 'WhatsApp' };
@@ -29,6 +30,13 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
   const [mailProvider, setMailProvider] = useState(null); // 'microsoft' | 'google' | null
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
+
+  const [expanded, setExpanded] = useState(() => new Set());
+  const toggleExpand = (id) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -268,7 +276,23 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
               </div>
               {a.type === 'email' && a.channel_metadata?.to && <div className="text-[10px] text-dim mt-0.5">To: {a.channel_metadata.to}</div>}
               {a.subject && <div className="text-sm text-paper mt-0.5">{a.subject}</div>}
-              {a.body && <div className="text-xs text-muted mt-1 whitespace-pre-wrap">{a.body}</div>}
+              {a.body && (() => {
+                const isInboundEmail = a.type === 'email' && a.direction === 'inbound';
+                const showFull = expanded.has(a.id);
+                const text = isInboundEmail && !showFull ? cleanEmailBody(a.body) : a.body;
+                const trimmable = isInboundEmail && hasQuotedTail(a.body);
+                return (
+                  <>
+                    <div className="text-xs text-muted mt-1 whitespace-pre-wrap">{text}</div>
+                    {trimmable && (
+                      <button onClick={() => toggleExpand(a.id)}
+                        className="mt-1 text-[10px] text-dim hover:text-paper underline underline-offset-2">
+                        {showFull ? 'Hide quoted text' : 'Show quoted text'}
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
           );
