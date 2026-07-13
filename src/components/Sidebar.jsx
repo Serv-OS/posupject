@@ -21,7 +21,7 @@ const COLLAPSIBLE = [
     ['bills', 'Bills', Wallet], ['expenses', 'Expenses', Receipt], ['what_i_owe', 'What I owe', Banknote],
     ['bank_feed', 'Bank feed', Landmark],
     ['finance_categories', 'Categories', Tags], ['finance_rates', 'Tax rates', Percent],
-    ['finance_vat', 'VAT & reports', FileText],
+    ['finance_vat', 'VAT & reports', FileText], ['finance_reports', 'Reports', BarChart3],
   ] },
   { id: 'inventory', label: 'Inventory', items: [
     ['inv_dashboard', 'Dashboard', Warehouse], ['products', 'Products', Box], ['inv_stock', 'Stock', Boxes],
