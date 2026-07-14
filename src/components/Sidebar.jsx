@@ -230,13 +230,13 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
         ) : railOn ? (
           /* ── Icon rail ── */
           <div className="flex flex-col items-center gap-0.5">
-            {pinnedRows.map(r => <RailBtn key={'p' + r.key} row={r} active={activeKey === r.key} onClick={() => go(r.key)} />)}
+            {pinnedRows.map(r => <RailBtn key={'p' + r.key} row={r} active={activeKey === r.key} onClick={() => go(r.key)} navKey={r.key} />)}
             {pinnedRows.length > 0 && <div className="h-px w-8 bg-bdr my-1.5" />}
-            {CORE.map(([key, label, Icon]) => <RailBtn key={key} row={{ key, label, Icon }} active={activeKey === key} onClick={() => go(key)} />)}
+            {CORE.map(([key, label, Icon]) => <RailBtn key={key} row={{ key, label, Icon }} active={activeKey === key} onClick={() => go(key)} navKey={key} />)}
             {COLLAPSIBLE.map(g => (
               <div key={g.id} className="flex flex-col items-center gap-0.5 w-full">
                 <div className="h-px w-8 bg-bdr my-1.5" />
-                {g.items.map(([key, label, Icon]) => <RailBtn key={key} row={{ key, label, Icon, section: g.label }} active={activeKey === key} onClick={() => go(key)} />)}
+                {g.items.map(([key, label, Icon]) => <RailBtn key={key} row={{ key, label, Icon, section: g.label }} active={activeKey === key} onClick={() => go(key)} navKey={key} />)}
               </div>
             ))}
           </div>
@@ -246,7 +246,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
             {/* Core — primary items, pinned to the top with a divider so it never blends into Recent */}
             <div className="space-y-0.5">
               {CORE.map(([key, label, Icon]) => (
-                <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => go(key)}
+                <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => go(key)} navKey={key}
                   pinned={pinned.includes(key)} onPin={() => togglePin(key)} hover={hover} setHover={setHover} rowKey={key} />
               ))}
             </div>
@@ -291,7 +291,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
                 <SectionLabel icon={<Pin size={11} />}>Pinned</SectionLabel>
                 <div className="space-y-0.5">
                   {pinnedRows.map(r => (
-                    <NavItem key={r.key} icon={r.Icon} label={r.label} active={activeKey === r.key} onClick={() => go(r.key)}
+                    <NavItem key={r.key} icon={r.Icon} label={r.label} active={activeKey === r.key} onClick={() => go(r.key)} navKey={r.key}
                       pinned onPin={() => togglePin(r.key)} hover={hover} setHover={setHover} rowKey={'pin:' + r.key} />
                   ))}
                 </div>
@@ -304,7 +304,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
                 <SectionLabel icon={<History size={11} />}>Recent</SectionLabel>
                 <div className="space-y-0.5">
                   {recentRows.map(r => (
-                    <NavItem key={r.key} icon={r.Icon} label={r.label} active={activeKey === r.key} onClick={() => go(r.key)} />
+                    <NavItem key={r.key} icon={r.Icon} label={r.label} active={activeKey === r.key} onClick={() => go(r.key)} navKey={r.key} />
                   ))}
                 </div>
               </div>
@@ -317,7 +317,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
                 {open[g.id] && (
                   <div className="space-y-0.5">
                     {g.items.map(([key, label, Icon]) => (
-                      <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => go(key)}
+                      <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => go(key)} navKey={key}
                         pinned={pinned.includes(key)} onPin={() => togglePin(key)} hover={hover} setHover={setHover} rowKey={key} />
                     ))}
                   </div>
@@ -342,9 +342,9 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
               </div>
             </div>
             {FOOTER_NAV.map(([key, label, Icon]) => (
-              <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => setView(key)} />
+              <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => setView(key)} navKey={key} />
             ))}
-            {profile.role === 'owner' && <NavItem icon={UsersIcon} label="Users" active={activeKey === 'users'} onClick={() => setView('users')} />}
+            {profile.role === 'owner' && <NavItem icon={UsersIcon} label="Users" active={activeKey === 'users'} onClick={() => setView('users')} navKey="users" />}
             <button onClick={onSignOut} className="w-full mt-1 px-3 py-1.5 text-xs btn-ghost rounded-xl">Sign out</button>
           </>
         ) : (
@@ -383,33 +383,57 @@ function GroupHeader({ label, count, open, onToggle, onAdd }) {
   );
 }
 
-function NavItem({ icon: Icon, label, active, onClick, pinned, onPin, hover, setHover, rowKey }) {
+// Left-click navigates in-app; modified clicks (⌘/ctrl/shift/alt or middle) fall
+// through to the browser so "open in new tab/window" works on the anchor's href.
+function handleNav(e, onClick) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button === 1) return;
+  e.preventDefault();
+  onClick?.();
+}
+
+function NavItem({ icon: Icon, label, active, onClick, navKey, pinned, onPin, hover, setHover, rowKey }) {
   const showPin = onPin && (pinned || hover === rowKey);
-  return (
-    <button onClick={onClick}
-      onMouseEnter={setHover ? () => setHover(rowKey) : undefined}
-      onMouseLeave={setHover ? () => setHover(h => h === rowKey ? null : h) : undefined}
-      className={`group w-full flex items-center gap-2.5 pl-2.5 pr-2 py-2 rounded-r-xl rounded-l-md text-sm border-l-[3px] transition ${
-        active ? 'bg-ember/10 text-ember-deep font-semibold border-ember' : 'border-transparent text-muted hover:bg-card hover:text-paper'
-      }`}>
+  const onEnter = setHover ? () => setHover(rowKey) : undefined;
+  const onLeave = setHover ? () => setHover(h => h === rowKey ? null : h) : undefined;
+  const cls = `group w-full flex items-center gap-2.5 pl-2.5 pr-2 py-2 rounded-r-xl rounded-l-md text-sm border-l-[3px] transition ${
+    active ? 'bg-ember/10 text-ember-deep font-semibold border-ember' : 'border-transparent text-muted hover:bg-card hover:text-paper'
+  }`;
+  const inner = (
+    <>
       <Icon size={18} strokeWidth={1.75} className="shrink-0" />
       <span className="truncate whitespace-nowrap flex-1 text-left">{label}</span>
       {showPin && (
         <span role="button" title={pinned ? 'Unpin' : 'Pin to top'}
-          onClick={(e) => { e.stopPropagation(); onPin(); }}
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPin(); }}
           className={`shrink-0 ${pinned ? 'text-ember' : 'text-dim hover:text-paper'}`}>
           <Pin size={13} fill={pinned ? 'currentColor' : 'none'} />
         </span>
       )}
+    </>
+  );
+  // Real link (right-click / ⌘-click / middle-click → new tab) when we know the
+  // destination view; plain button otherwise (e.g. project board items).
+  return navKey ? (
+    <a href={`#${navKey}`} onClick={(e) => handleNav(e, onClick)} onMouseEnter={onEnter} onMouseLeave={onLeave} className={cls + ' no-underline'}>
+      {inner}
+    </a>
+  ) : (
+    <button onClick={onClick} onMouseEnter={onEnter} onMouseLeave={onLeave} className={cls}>
+      {inner}
     </button>
   );
 }
 
 function RailBtn({ row, active, onClick }) {
   const Icon = row.Icon;
-  return (
-    <button onClick={onClick} title={row.label + (row.section ? ' — ' + row.section : '')}
-      className={`w-11 h-9 rounded-xl flex items-center justify-center transition ${active ? 'bg-ember/10 text-ember-deep' : 'text-muted hover:bg-card hover:text-paper'}`}>
+  const cls = `w-11 h-9 rounded-xl flex items-center justify-center transition ${active ? 'bg-ember/10 text-ember-deep' : 'text-muted hover:bg-card hover:text-paper'}`;
+  const title = row.label + (row.section ? ' — ' + row.section : '');
+  return row.key ? (
+    <a href={`#${row.key}`} onClick={(e) => handleNav(e, onClick)} title={title} className={cls + ' no-underline'}>
+      <Icon size={18} strokeWidth={1.75} />
+    </a>
+  ) : (
+    <button onClick={onClick} title={title} className={cls}>
       <Icon size={18} strokeWidth={1.75} />
     </button>
   );

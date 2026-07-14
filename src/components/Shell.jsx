@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import Sidebar from './Sidebar.jsx';
 import PhoneBar from './PhoneBar.jsx';
@@ -75,13 +75,25 @@ import ProductsPanel from './crm/ProductsPanel.jsx';
 import QuoteBuilder from './crm/QuoteBuilder.jsx';
 import { Sun, Moon } from 'lucide-react';
 
+// The URL reflects the current view so refresh, the browser back button and
+// "open in new tab" all land on the right page. Scheme: #<view> for a
+// list/section, #<view>/<id> for a record detail. Empty hash → the default view.
+function parseHash() {
+  const raw = (window.location.hash || '').replace(/^#\/?/, '');
+  if (!raw) return { view: 'contacts', detailId: null };
+  const slash = raw.indexOf('/');
+  if (slash === -1) return { view: raw, detailId: null };
+  return { view: raw.slice(0, slash), detailId: raw.slice(slash + 1) || null };
+}
+
 export default function Shell({ session }) {
   const [profile, setProfile]   = useState(null);
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
-  const [view, setView]         = useState('contacts');
+  const [view, setView]         = useState(() => parseHash().view);
   const [openItem, setOpenItem] = useState(null);
-  const [detailId, setDetailId] = useState(null);
+  const [detailId, setDetailId] = useState(() => parseHash().detailId);
+  const firstUrlSync = useRef(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [leadPrefill, setLeadPrefill] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('servos-crm-theme') || 'light');
@@ -90,6 +102,25 @@ export default function Shell({ session }) {
     document.body.classList.toggle('dark', theme === 'dark');
     localStorage.setItem('servos-crm-theme', theme);
   }, [theme]);
+
+  // Keep the URL in step with the active view/record. The first sync replaces
+  // (no phantom history entry on load); later navigations push so Back works.
+  useEffect(() => {
+    const target = detailId ? `#${view}/${detailId}` : `#${view}`;
+    if (window.location.hash === target) { firstUrlSync.current = false; return; }
+    if (firstUrlSync.current) window.history.replaceState(null, '', target);
+    else window.history.pushState(null, '', target);
+    firstUrlSync.current = false;
+  }, [view, detailId]);
+
+  // Follow browser back/forward (and manual hash edits) back into app state.
+  // pushState/replaceState don't fire hashchange, so this only runs on real
+  // navigation → no feedback loop with the effect above.
+  useEffect(() => {
+    const onHash = () => { const p = parseHash(); setView(p.view); setDetailId(p.detailId); };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   // Start a lead from a record (company/location/contact detail "Create lead")
   const startLead = (prefill) => { setLeadPrefill(prefill); setView('leads'); };
