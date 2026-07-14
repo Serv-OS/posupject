@@ -250,9 +250,9 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
         </div>
       )}
 
-      {/* Card grid */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {editing ? (
+      {/* Content */}
+      {editing ? (
+        <div className="flex-1 min-h-0 overflow-y-auto p-6">
           <div className="max-w-3xl">
             <Card title="Edit Support Ticket">
               <div className="space-y-3">
@@ -282,11 +282,12 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
               </div>
             </Card>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 max-w-[1600px] mx-auto">
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-5 p-6 max-w-[1600px] w-full mx-auto overflow-y-auto lg:overflow-hidden">
 
-            {/* LEFT: Customer + SLA + Key Info */}
-            <div className="lg:col-span-3 space-y-5 order-2 lg:order-1">
+            {/* LEFT rail — own scroll */}
+            <div className="lg:w-[300px] lg:shrink-0 lg:overflow-y-auto space-y-5">
               {/* Customer card: show who contacted us, match or create a contact */}
               {(ticket.customer_phone || ticket.customer_email || matchedContact) && (
                 <Card title="Customer">
@@ -408,21 +409,15 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
               )}
             </div>
 
-            {/* CENTER: Conversation (hero) */}
-            <div className="lg:col-span-6 space-y-5 order-1 lg:order-2">
-              <Card title="Conversation" noPadding>
-                <div className="h-[660px]">
-                  <ConversationTimeline subjectType="ticket" subjectId={ticketId} profile={profile} contacts={[]} ticket={ticket} />
-                </div>
-              </Card>
-
-              <Card title="Contacts">
-                <AssociationManager subjectType="ticket" subjectId={ticketId} targetType="contact" profile={profile} onNavigate={onNavigate} />
-              </Card>
+            {/* CENTER: Conversation — fills the viewport height, only the list scrolls */}
+            <div className="flex-1 min-w-0 flex flex-col min-h-[560px] lg:min-h-0">
+              <div className="flex-1 min-h-0 glass-card rounded-2xl overflow-hidden flex flex-col">
+                <ConversationTimeline subjectType="ticket" subjectId={ticketId} profile={profile} contacts={[]} ticket={ticket} />
+              </div>
             </div>
 
-            {/* RIGHT: Company, Locations, Attachments, Projects, History */}
-            <div className="lg:col-span-3 space-y-5 order-3">
+            {/* RIGHT rail — own scroll */}
+            <div className="lg:w-[312px] lg:shrink-0 lg:overflow-y-auto space-y-5">
               <Card title="Company">
                 {company ? (
                   <div onClick={() => onNavigate?.('company', company.id)}
@@ -467,6 +462,10 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                 ) : <Empty>No projects linked</Empty>}
               </Card>
 
+              <Card title="Contacts">
+                <AssociationManager subjectType="ticket" subjectId={ticketId} targetType="contact" profile={profile} onNavigate={onNavigate} />
+              </Card>
+
               <Card title="Stage History" count={history.length}>
                 {history.length > 0 ? (
                   <div className="space-y-2">
@@ -485,7 +484,6 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
             </div>
           </div>
         )}
-      </div>
     </div>
   );
 }

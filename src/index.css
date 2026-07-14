@@ -38,7 +38,7 @@
   --glass-border: rgba(255,255,255,.85);
   --glass-hi: inset 0 1px 0 rgba(255,255,255,.95);
   --glass-lo: inset 0 -1px 0 rgba(20,40,28,.05);
-  --glass-shadow: 0 16px 40px rgba(20,40,28,.12);
+  --glass-shadow: 0 6px 18px rgba(20,40,28,.07);
   --sheen: linear-gradient(150deg, rgba(255,255,255,.5), transparent 46%);
   --inset: rgba(15,18,17,0.035);
   --inset-hover: rgba(15,18,17,0.06);
@@ -69,7 +69,7 @@ body.dark {
   --glass-border: rgba(255,255,255,.12);
   --glass-hi: inset 0 1px 0 rgba(255,255,255,.28);
   --glass-lo: inset 0 -1px 0 rgba(0,0,0,.22);
-  --glass-shadow: 0 18px 50px rgba(0,0,0,.42);
+  --glass-shadow: 0 8px 22px rgba(0,0,0,.30);
   --sheen: linear-gradient(150deg, rgba(255,255,255,.14), transparent 42%);
   --inset: rgba(255,255,255,0.05);
   --inset-hover: rgba(255,255,255,0.09);

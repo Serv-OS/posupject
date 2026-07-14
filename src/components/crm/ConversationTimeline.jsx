@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, Fragment } from 'react';
 import { supabase } from '../../lib/supabase';
 import { cleanEmailBody, hasQuotedTail } from '../../lib/emailText';
 import { emailHtmlFor, sanitizeEmailHtml } from '../../lib/emailHtml';
@@ -351,21 +351,55 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
 
+  // Scroll-back aids: jump to oldest/latest + a floating "Latest" pill, and
+  // sticky day dividers between messages from different days.
+  const [showJump, setShowJump] = useState(false);
+  const scrollToBottom = () => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  const scrollToTop = () => scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  const onListScroll = (e) => { const el = e.target; setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight > 260); };
+  const dayKeyOf = (ts) => new Date(ts).toDateString();
+  const dayLabelOf = (ts) => {
+    const d = new Date(ts), t = new Date(), y = new Date(); y.setDate(t.getDate() - 1);
+    if (d.toDateString() === t.toDateString()) return 'Today';
+    if (d.toDateString() === y.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: '2-digit' });
+  };
+
   return (
     <div className="flex flex-col h-full">
+      {/* Conversation header — count + jump-to-oldest/latest */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-bdr shrink-0">
+        <h3 className="text-sm font-bold text-paper">Conversation</h3>
+        <span className="text-[10px] font-mono text-dim bg-card px-2 py-0.5 rounded-full">{activities.length} {activities.length === 1 ? 'message' : 'messages'}</span>
+        <div className="flex-1" />
+        {activities.length > 1 && (
+          <>
+            <button onClick={scrollToTop} title="Jump to oldest" className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-muted hover:text-paper hover:bg-card transition">↑ Oldest</button>
+            <button onClick={scrollToBottom} title="Jump to latest" className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-muted hover:text-paper hover:bg-card transition">↓ Latest</button>
+          </>
+        )}
+      </div>
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div className="relative flex-1 min-h-0 flex flex-col">
+      <div ref={scrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {activities.length === 0 && (
           <div className="text-center text-dim text-xs py-8 italic">No conversation yet. Start by adding a note or sending a message.</div>
         )}
-        {activities.map(a => {
+        {activities.map((a, idx) => {
           const isOutbound = a.direction === 'outbound' || !a.direction;
           const isNote = a.type === 'note';
           const isCall = a.type === 'call';
           const isAgent = !!a.actor_id;
+          const showDivider = idx === 0 || dayKeyOf(a.occurred_at) !== dayKeyOf(activities[idx - 1].occurred_at);
 
           return (
-            <div key={a.id} className={`flex ${isNote ? 'justify-center' : isOutbound ? 'justify-end' : 'justify-start'}`}>
+            <Fragment key={a.id}>
+              {showDivider && (
+                <div className="sticky top-0 z-[3] flex justify-center py-1">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-dim bg-card/90 backdrop-blur border border-bdr rounded-full px-3 py-1">{dayLabelOf(a.occurred_at)}</span>
+                </div>
+              )}
+            <div className={`flex ${isNote ? 'justify-center' : isOutbound ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[80%] ${
                 isNote
                   ? 'w-full'
@@ -470,8 +504,13 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                 )}
               </div>
             </div>
+            </Fragment>
           );
         })}
+      </div>
+      {showJump && (
+        <button onClick={scrollToBottom} className="absolute bottom-3 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-card text-ember-deep border border-bdr text-xs font-semibold shadow-md hover:bg-ember/10 transition">↓ Latest</button>
+      )}
       </div>
 
       {/* Composer */}
