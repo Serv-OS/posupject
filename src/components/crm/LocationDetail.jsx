@@ -10,6 +10,7 @@ import ProcessingRatesCard from './ProcessingRatesCard.jsx';
 import HardwareCard from './HardwareCard.jsx';
 import InvoicesCard from './InvoicesCard.jsx';
 import LocationModulesCard from './LocationModulesCard.jsx';
+import EntityPicker from './EntityPicker.jsx';
 import { primaryLead } from '../../lib/leadStages';
 
 const STATUS_OPTIONS = ['prospect', 'onboarding', 'live', 'churned'];
@@ -125,23 +126,17 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
             {primaryLead(leads) && <LeadBadge stage={primaryLead(leads).stage} full />}
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            {location.company_id ? (
+            {location.company_id && (
               <span className="badge-company inline-flex items-center gap-1.5">
                 <span className="cursor-pointer" onClick={() => onNavigate?.('company', location.company_id)}>
                   {'\u{1F3E2}'} {company?.name || 'Unknown company'}
                 </span>
                 {canWrite && (
-                  <button onClick={unlinkCompany} title="Unlink from company (e.g. ownership changed)"
+                  <button onClick={unlinkCompany} title="Remove company link"
                     className="text-red-500 hover:text-red-700 font-bold leading-none">×</button>
                 )}
               </span>
-            ) : canWrite ? (
-              <select value="" onChange={e => e.target.value && linkCompany(e.target.value)}
-                className="text-xs px-2 py-1 bg-card border border-bdr rounded-lg text-paper focus:outline-none focus:border-ember">
-                <option value="">+ Link a company...</option>
-                {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            ) : null}
+            )}
             {location.venue_type && <span className="text-xs text-muted">{location.venue_type}</span>}
             {location.covers && <span className="text-xs text-muted">{location.covers} covers</span>}
           </div>
@@ -221,15 +216,32 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
               </Card>
 
               <Card title="Company">
-                <div onClick={() => onNavigate?.('company', location.company_id)}
-                  className="p-3 glass-inner rounded-xl cursor-pointer flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-ember/20 border border-ember/30 flex items-center justify-center text-lg shrink-0">{'\u{1F3E2}'}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-base font-semibold text-paper">{company?.name || 'Unknown'}</div>
-                    <div className="text-xs text-muted">Parent company</div>
+                {location.company_id ? (
+                  <div className="flex items-center gap-3">
+                    <div onClick={() => onNavigate?.('company', location.company_id)}
+                      className="p-3 glass-inner rounded-xl cursor-pointer flex items-center gap-3 flex-1 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-ember/20 border border-ember/30 flex items-center justify-center text-lg shrink-0">{'\u{1F3E2}'}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-base font-semibold text-paper truncate">{company?.name || 'Unknown'}</div>
+                        <div className="text-xs text-muted">Parent company</div>
+                      </div>
+                      <span className="text-xs text-ember">&rarr;</span>
+                    </div>
+                    {canWrite && (
+                      <button onClick={unlinkCompany} title="Remove company link"
+                        className="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded-lg px-2 py-1.5 shrink-0">Remove</button>
+                    )}
                   </div>
-                  <span className="text-xs text-ember">&rarr;</span>
-                </div>
+                ) : canWrite ? (
+                  <div className="space-y-2">
+                    <div className="text-xs text-dim">No company linked. Search to associate one:</div>
+                    <EntityPicker table="companies" searchCols={['name']} placeholder="Search companies…"
+                      labelOf={c => c.name} subOf={c => c.domain || c.city || ''}
+                      onPick={c => linkCompany(c.id)} />
+                  </div>
+                ) : (
+                  <div className="text-xs text-dim italic py-2 text-center">No company linked</div>
+                )}
               </Card>
 
               <LocationModulesCard locationId={locationId} canWrite={canWrite} />

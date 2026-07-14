@@ -9,6 +9,7 @@ import LeadsCard from './LeadsCard.jsx';
 import ProcessingRatesCard from './ProcessingRatesCard.jsx';
 import HardwareCard from './HardwareCard.jsx';
 import InvoicesCard from './InvoicesCard.jsx';
+import EntityPicker from './EntityPicker.jsx';
 import { primaryLead } from '../../lib/leadStages';
 
 const STATUS_COLORS = {
@@ -26,6 +27,7 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
   const [tickets, setTickets] = useState([]);
   const [projects, setProjects] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [addingLoc, setAddingLoc] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
   const [members, setMembers] = useState([]);
@@ -80,6 +82,14 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
     const name = prompt('Location name:');
     if (!name?.trim()) return;
     await supabase.from('locations').insert({ company_id: companyId, name: name.trim(), owner_id: profile.id });
+    load();
+  };
+
+  // Link an EXISTING location to this company (add multiple by picking one after
+  // another — the picker stays open and the list refreshes each time).
+  const linkExistingLocation = async (loc) => {
+    const { error } = await supabase.from('locations').update({ company_id: companyId }).eq('id', loc.id);
+    if (error) { alert('Could not link: ' + error.message); return; }
     load();
   };
 
@@ -187,7 +197,19 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
               </Card>
 
               <Card title="Locations" count={locations.length}
-                action={canWrite ? { label: '+ Add', onClick: addLocation } : null}>
+                action={canWrite ? { label: addingLoc ? 'Done' : '+ Add', onClick: () => setAddingLoc(v => !v) } : null}>
+                {addingLoc && canWrite && (
+                  <div className="mb-3 border border-bdr rounded-xl p-2 bg-card/40 space-y-2">
+                    <EntityPicker table="locations" searchCols={['name', 'city']}
+                      placeholder="Search locations to link…"
+                      exclude={new Set(locations.map(l => l.id))}
+                      labelOf={l => l.name}
+                      subOf={l => [l.city, l.company_id ? '· already linked elsewhere' : ''].filter(Boolean).join(' ')}
+                      onPick={linkExistingLocation} />
+                    <button onClick={addLocation}
+                      className="w-full text-xs text-ember hover:text-ember-deep font-medium py-1">+ Create a new location instead</button>
+                  </div>
+                )}
                 {locations.length > 0 ? (
                   <div className="space-y-2">
                     {locations.map(l => (
