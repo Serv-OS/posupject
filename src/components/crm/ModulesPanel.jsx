@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
+import LocationModulesCard from './LocationModulesCard.jsx';
 
 const STATUS_STYLES = {
   quoted: 'bg-slate-100 text-slate-600 border border-slate-200',
@@ -17,6 +18,7 @@ export default function ModulesPanel({ profile }) {
   const [loading, setLoading] = useState(true);
   const [selectedLocation, setSelectedLocation] = useState('all');
   const [editModule, setEditModule] = useState(null);
+  const [catalogueOpen, setCatalogueOpen] = useState(true);
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -79,6 +81,8 @@ export default function ModulesPanel({ profile }) {
     return locationModules.find(lm => lm.location_id === locationId && lm.module_id === moduleId);
   };
 
+  // Advance a cell's status. Optimistic — patches local state instead of
+  // reloading the whole page (the old load() reset scroll on every click).
   const toggleModule = async (locationId, moduleId, currentLM) => {
     if (!canWrite) return;
     if (currentLM) {
@@ -86,20 +90,22 @@ export default function ModulesPanel({ profile }) {
       const cycle = ['quoted', 'included', 'enabling', 'live', 'disabled'];
       const idx = cycle.indexOf(currentLM.status);
       if (idx === cycle.length - 1) {
+        setLocationModules(lms => lms.filter(x => x.id !== currentLM.id));
         await supabase.from('location_modules').delete().eq('id', currentLM.id);
       } else {
         const newStatus = cycle[idx + 1];
         const patch = { status: newStatus };
         if (newStatus === 'live') patch.enabled_at = new Date().toISOString();
         if (newStatus === 'disabled') patch.disabled_at = new Date().toISOString();
+        setLocationModules(lms => lms.map(x => x.id === currentLM.id ? { ...x, ...patch } : x));
         await supabase.from('location_modules').update(patch).eq('id', currentLM.id);
       }
     } else {
-      await supabase.from('location_modules').insert({
-        location_id: locationId, module_id: moduleId, status: 'quoted',
-      });
+      const { data } = await supabase.from('location_modules')
+        .insert({ location_id: locationId, module_id: moduleId, status: 'quoted' })
+        .select().single();
+      if (data) setLocationModules(lms => [...lms, data]);
     }
-    load();
   };
 
   const liveLocations = locations.filter(l => l.status === 'live' || l.status === 'onboarding');
@@ -115,15 +121,20 @@ export default function ModulesPanel({ profile }) {
         </div>
       </div>
 
-      {/* Module catalogue overview */}
+      {/* Module catalogue overview — collapsible (not needed once modules are set up) */}
       <div className="px-6 py-4 border-b border-bdr">
-        <div className="flex items-center mb-3">
-          <div className={label}>Module Catalogue</div>
-          {canWrite && (
+        <div className="flex items-center mb-3 gap-2">
+          <button onClick={() => setCatalogueOpen(o => !o)} className={label + ' flex items-center gap-1.5 hover:text-muted transition'}>
+            <span className={`inline-block transition-transform ${catalogueOpen ? 'rotate-90' : ''}`}>{'▸'}</span>
+            Module Catalogue
+          </button>
+          {canWrite && catalogueOpen && (
             <button onClick={() => setEditModule({ name: '', description: '', icon: '', sort_order: (modules.at(-1)?.sort_order || 0) + 1 })}
               className="ml-auto text-xs text-ember hover:text-ember-deep font-medium">+ Add module</button>
           )}
+          {!catalogueOpen && <span className="ml-auto text-xs text-dim">{modules.length} modules · hidden</span>}
         </div>
+        {catalogueOpen && (
         <div className="grid grid-cols-2 gap-2">
           {modules.map(m => {
             const s = moduleStats[m.id] || { total: 0, live: 0, enabling: 0 };
@@ -147,6 +158,7 @@ export default function ModulesPanel({ profile }) {
             );
           })}
         </div>
+        )}
       </div>
 
       {/* Location x Module matrix */}
@@ -164,6 +176,11 @@ export default function ModulesPanel({ profile }) {
       <div className="flex-1 overflow-auto">
         {loading ? (
           <div className="px-6 py-8 text-center text-dim text-sm">Loading...</div>
+        ) : selectedLocation !== 'all' ? (
+          /* Single location → full manager: search to add, one-click status, bulk update */
+          <div className="p-6 max-w-xl">
+            <LocationModulesCard locationId={selectedLocation} canWrite={canWrite} />
+          </div>
         ) : (
           <table className="w-full">
             <thead>
