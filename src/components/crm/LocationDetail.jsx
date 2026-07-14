@@ -9,6 +9,7 @@ import LeadsCard from './LeadsCard.jsx';
 import ProcessingRatesCard from './ProcessingRatesCard.jsx';
 import HardwareCard from './HardwareCard.jsx';
 import InvoicesCard from './InvoicesCard.jsx';
+import LocationModulesCard from './LocationModulesCard.jsx';
 import { primaryLead } from '../../lib/leadStages';
 
 const STATUS_OPTIONS = ['prospect', 'onboarding', 'live', 'churned'];
@@ -26,8 +27,6 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   const [deals, setDeals] = useState([]);
   const [onboardings, setOnboardings] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [locationModules, setLocationModules] = useState([]);
-  const [modules, setModules] = useState([]);
   const [leads, setLeads] = useState([]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
@@ -38,19 +37,15 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   useEffect(() => { load(); }, [locationId]);
 
   const load = async () => {
-    const [l, m, mods, lm, prj, ld] = await Promise.all([
+    const [l, m, prj, ld] = await Promise.all([
       supabase.from('locations').select('*').eq('id', locationId).single(),
       supabase.from('profiles').select('id, email, display_name'),
-      supabase.from('modules').select('*').order('sort_order'),
-      supabase.from('location_modules').select('*').eq('location_id', locationId),
       supabase.from('crm_projects').select('*').eq('subject_type', 'location').eq('subject_id', locationId).order('created_at', { ascending: false }),
       supabase.from('leads').select('*').eq('location_id', locationId).order('created_at', { ascending: false }),
     ]);
     setLocation(l.data);
     supabase.from('companies').select('id, name').order('name').then(r => setCompanies(r.data || []));
     setMembers(m.data || []);
-    setModules(mods.data || []);
-    setLocationModules(lm.data || []);
     setProjects(prj.data || []);
     setLeads(ld.data || []);
     if (l.data?.company_id) {
@@ -115,8 +110,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
-  const MODULE_STATUS = { quoted:'bg-slate-100 text-slate-600 border border-slate-200', included:'bg-blue-100 text-blue-700 border border-blue-200', enabling:'bg-orange-100 text-orange-700 border border-orange-200', live:'bg-emerald-100 text-emerald-700 border border-emerald-200', disabled:'bg-red-100 text-red-700 border border-red-200' };
-  const DEAL_STAGES = { new_lead:'New Lead', contacted:'Contacted', qualified:'Qualified', demo_booked:'Demo Booked', demo_done:'Demo Done', proposal_sent:'Proposal', negotiation:'Negotiation', closed_won:'Won', closed_lost:'Lost' };
+  const DEAL_STAGES ={ new_lead:'New Lead', contacted:'Contacted', qualified:'Qualified', demo_booked:'Demo Booked', demo_done:'Demo Done', proposal_sent:'Proposal', negotiation:'Negotiation', closed_won:'Won', closed_lost:'Lost' };
   const OB_STAGES = { kickoff:'Kickoff', hardware_ordered:'HW Ordered', hardware_shipped:'HW Shipped', account_menu_config:'Config', staff_training:'Training', go_live_scheduled:'Go-Live', live:'Live', handover_to_support:'Handover' };
 
   return (
@@ -238,21 +232,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                 </div>
               </Card>
 
-              <Card title="Modules" count={locationModules.length}>
-                {locationModules.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {locationModules.map(lm => {
-                      const mod = modules.find(m => m.id === lm.module_id);
-                      return (
-                        <div key={lm.id} className="flex items-center justify-between py-1.5 px-3 bg-ink-soft border border-bdr rounded-lg">
-                          <span className="text-sm text-paper">{mod?.name || 'Unknown'}</span>
-                          <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded ${MODULE_STATUS[lm.status] || ''}`}>{lm.status}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : <Empty>No modules enabled</Empty>}
-              </Card>
+              <LocationModulesCard locationId={locationId} canWrite={canWrite} />
 
               <ProcessingRatesCard locationId={locationId} companyId={location.company_id} onNavigate={onNavigate} />
 
