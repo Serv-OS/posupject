@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
+const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+
 // Secondary roles / teams -- independent of the owner/editor/viewer permission role.
 // Used to route work, e.g. auto-assign tickets to the Support team.
 export const TEAM_OPTIONS = [
@@ -20,6 +22,7 @@ export default function UsersPanel({ profile }) {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole]   = useState('editor');
   const [error, setError] = useState('');
+  const [pwTarget, setPwTarget] = useState(null); // { id?, email, name, invite? } to set a password for
 
   useEffect(() => { load(); }, []);
 
@@ -171,7 +174,10 @@ export default function UsersPanel({ profile }) {
                       <option value="viewer">Viewer</option>
                     </select>
                   </div>
-                  <div className="col-span-3 flex justify-end">
+                  <div className="col-span-3 flex justify-end gap-1.5">
+                    <button onClick={() => setPwTarget({ email: inv.email, name: inv.email, invite: true })}
+                      title="Create their login with a password now — for when they didn't get the invite link"
+                      className="px-2 py-1 text-xs text-ember hover:text-ember-deep border border-bdr rounded whitespace-nowrap">Set up login</button>
                     <button onClick={() => revokeInvite(inv.email)}
                       className="px-2 py-1 text-xs text-red-600 hover:text-red-600 border border-red-200 hover:bg-red-50 rounded">
                       Revoke
@@ -240,12 +246,17 @@ export default function UsersPanel({ profile }) {
                     })}
                   </div>
                 </div>
-                <div className="col-span-1 flex justify-end">
+                <div className="col-span-1 flex justify-end gap-1">
                   {u.id !== profile.id && (
-                    <button onClick={() => removeUser(u)}
-                      className="px-2 py-1 text-xs text-red-600 hover:text-red-600 border border-red-200 hover:bg-red-50 rounded">
-                      &times;
-                    </button>
+                    <>
+                      <button onClick={() => setPwTarget({ id: u.id, email: u.email, name: u.display_name || u.email })}
+                        title="Set / reset this user's password" aria-label="Set password"
+                        className="px-2 py-1 text-xs text-muted hover:text-paper border border-bdr rounded">🔑</button>
+                      <button onClick={() => removeUser(u)}
+                        className="px-2 py-1 text-xs text-red-600 hover:text-red-600 border border-red-200 hover:bg-red-50 rounded">
+                        &times;
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -271,6 +282,92 @@ export default function UsersPanel({ profile }) {
             </ul>
           </div>
 
+        </div>
+      </div>
+      {pwTarget && <SetPasswordModal target={pwTarget} onClose={() => setPwTarget(null)} onDone={load} />}
+    </div>
+  );
+}
+
+// Owner-only: set/reset a user's password (or create a login for an invited
+// person who never signed up). Calls the admin-set-password edge function.
+function SetPasswordModal({ target, onClose, onDone }) {
+  const [pw, setPw] = useState('');
+  const [show, setShow] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+
+  const genPw = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    const a = crypto.getRandomValues(new Uint32Array(14));
+    setPw(Array.from(a, n => chars[n % chars.length]).join(''));
+    setShow(true);
+  };
+
+  const submit = async () => {
+    if (pw.length < 8) { setError('Use at least 8 characters.'); return; }
+    setSaving(true); setError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/admin-set-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ user_id: target.id || undefined, email: target.email, password: pw }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.error) throw new Error(j.error || `Failed (${res.status})`);
+      setDone(true);
+      onDone?.();
+    } catch (e) { setError(e.message); }
+    setSaving(false);
+  };
+
+  const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-panel border border-bdr rounded-2xl w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-bdr flex items-center justify-between">
+          <div className="text-base font-bold text-paper">{target.invite ? 'Set up login' : 'Set password'}</div>
+          <button onClick={onClose} className="text-muted hover:text-paper text-lg leading-none">×</button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="text-sm text-muted">For <span className="text-paper font-semibold">{target.name}</span> <span className="text-dim">({target.email})</span></div>
+
+          {done ? (
+            <div className="space-y-3">
+              <div className="text-sm text-emerald-600 font-medium">✓ Password set. They can log in now.</div>
+              <div className="bg-card border border-bdr rounded-xl p-3 text-sm space-y-1.5">
+                <div className="flex justify-between gap-2"><span className="text-dim">Site</span><span className="text-paper font-mono">{window.location.origin}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-dim">Email</span><span className="text-paper font-mono break-all">{target.email}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-dim">Password</span><span className="text-paper font-mono">{pw}</span></div>
+              </div>
+              <button onClick={() => { navigator.clipboard.writeText(`Site: ${window.location.origin}\nEmail: ${target.email}\nPassword: ${pw}`); }}
+                className="w-full px-3 py-2 btn-ghost rounded-xl text-sm">Copy login details</button>
+              <div className="text-[11px] text-dim">Share these securely and ask them to change the password after first sign-in.</div>
+              <button onClick={onClose} className="w-full px-3 py-2 bg-ember text-ink rounded-xl text-sm font-semibold">Done</button>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">New password</label>
+                <div className="flex gap-2">
+                  <input type={show ? 'text' : 'password'} value={pw} onChange={e => setPw(e.target.value)} autoFocus
+                    placeholder="At least 8 characters" className={input} />
+                  <button type="button" onClick={() => setShow(s => !s)} className="px-2 btn-ghost rounded-xl text-xs shrink-0">{show ? 'Hide' : 'Show'}</button>
+                </div>
+                <button type="button" onClick={genPw} className="mt-1.5 text-xs text-ember hover:text-ember-deep font-medium">Generate a strong password</button>
+              </div>
+              {error && <div className="text-xs text-red-600">{error}</div>}
+              <div className="flex gap-2 pt-1">
+                <button onClick={submit} disabled={saving || pw.length < 8}
+                  className="px-5 py-2 bg-ember text-ink rounded-xl text-sm font-semibold disabled:opacity-50">
+                  {saving ? 'Setting…' : target.invite ? 'Create login' : 'Set password'}
+                </button>
+                <button onClick={onClose} className="px-4 py-2 btn-ghost rounded-xl text-sm">Cancel</button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
