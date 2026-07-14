@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { cleanEmailBody, hasQuotedTail } from '../../lib/emailText';
+import { emailHtmlFor, sanitizeEmailHtml } from '../../lib/emailHtml';
 
 const TYPE_ICON = { call: '\u{1F4DE}', email: '\u{1F4E7}', sms: '\u{1F4AC}', note: '\u{1F4DD}', meeting: '\u{1F91D}', whatsapp: '\u{1F4F2}' };
 const TYPE_LABEL = { call: 'Call', email: 'Email', sms: 'SMS', note: 'Note', meeting: 'Meeting', whatsapp: 'WhatsApp' };
@@ -278,6 +279,15 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
               {a.subject && <div className="text-sm text-paper mt-0.5">{a.subject}</div>}
               {a.body && (() => {
                 const isInboundEmail = a.type === 'email' && a.direction === 'inbound';
+                const html = isInboundEmail ? emailHtmlFor(a) : null;
+                if (html) {
+                  return (
+                    <div className="mt-1 rounded-lg border border-bdr overflow-auto" style={{ maxHeight: 420, background: '#fff', contain: 'layout paint', position: 'relative', isolation: 'isolate' }}>
+                      <div className="email-html p-3 text-xs" style={{ color: '#222' }}
+                        dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(html) }} />
+                    </div>
+                  );
+                }
                 const showFull = expanded.has(a.id);
                 const text = isInboundEmail && !showFull ? cleanEmailBody(a.body) : a.body;
                 const trimmable = isInboundEmail && hasQuotedTail(a.body);

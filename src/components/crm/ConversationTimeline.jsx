@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { cleanEmailBody, hasQuotedTail } from '../../lib/emailText';
+import { emailHtmlFor, sanitizeEmailHtml } from '../../lib/emailHtml';
 
 const TYPE_ICON = { call: '\u{1F4DE}', email: '\u{1F4E7}', sms: '\u{1F4AC}', note: '\u{1F4DD}', meeting: '\u{1F91D}', whatsapp: '\u{1F4F2}' };
 const TYPE_LABEL = { call: 'Call', email: 'Email', sms: 'SMS', note: 'Note', meeting: 'Meeting', whatsapp: 'WhatsApp' };
@@ -415,9 +416,20 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                     {a.subject && <div className="text-xs font-medium text-paper mb-1">{a.subject}</div>}
                     {a.channel_metadata?.to && <div className="text-[10px] text-muted mb-1">To: {a.channel_metadata.to}</div>}
                     {(() => {
-                      // Inbound emails carry the quoted reply chain + signature.
-                      // Show only the new message, with a toggle to reveal the rest.
                       const isInboundEmail = a.type === 'email' && !isOutbound;
+                      // HTML emails (invoices, receipts, newsletters) render as
+                      // sanitized HTML in a scrollable white frame so their own
+                      // styling shows, instead of dumping raw tags as text.
+                      const html = isInboundEmail ? emailHtmlFor(a) : null;
+                      if (html) {
+                        return (
+                          <div className="mt-0.5 rounded-lg border border-bdr overflow-auto" style={{ maxHeight: 460, background: '#fff', contain: 'layout paint', position: 'relative', isolation: 'isolate' }}>
+                            <div className="email-html p-3 text-sm" style={{ color: '#222' }}
+                              dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(html) }} />
+                          </div>
+                        );
+                      }
+                      // Plain-text email: show only the new message + quoted toggle.
                       const showFull = expanded.has(a.id);
                       const text = isInboundEmail && !showFull ? cleanEmailBody(a.body) : a.body;
                       const trimmable = isInboundEmail && hasQuotedTail(a.body);

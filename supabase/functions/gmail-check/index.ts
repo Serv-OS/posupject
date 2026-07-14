@@ -153,6 +153,19 @@ function decodeBody(part: any): string {
   return "";
 }
 
+// Find the raw text/html part (decoded, NOT tag-stripped) so the CRM can render
+// the email as HTML. Returns null for plain-text-only messages.
+function getHtmlPart(part: any): string | null {
+  if (part.mimeType === "text/html" && part.body?.data) return utf8FromB64Url(part.body.data);
+  if (part.parts) {
+    for (const p of part.parts) {
+      const h = getHtmlPart(p);
+      if (h) return h;
+    }
+  }
+  return null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -398,6 +411,7 @@ serve(async (req) => {
       // Create activity
       if (ticketId) {
         const body = decodeBody(full.payload);
+        const html = getHtmlPart(full.payload);
 
         await supabase.from("crm_activities").insert({
           type: "email",
@@ -415,6 +429,7 @@ serve(async (req) => {
             from: from,
             gmail_message_id: msg.id,
             gmail_thread_id: gmailThreadId,
+            ...(html ? { html: html.slice(0, 200000) } : {}),
           },
           occurred_at: date ? new Date(date).toISOString() : new Date().toISOString(),
         });

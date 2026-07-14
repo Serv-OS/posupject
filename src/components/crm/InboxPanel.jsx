@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useGoogleConnection } from '../../lib/useGoogle';
+import { sanitizeEmailHtml } from '../../lib/emailHtml';
 import { Mail, RefreshCw, Archive, Reply, Search, Link2, Plus, ExternalLink, Ticket, CheckSquare } from 'lucide-react';
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/gmail-personal`;
@@ -448,7 +449,9 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
                   {m.text ? (
                     <div className="text-sm text-paper whitespace-pre-wrap break-words leading-relaxed">{m.text}</div>
                   ) : m.html ? (
-                    <div className="prose-email text-sm text-paper break-words" dangerouslySetInnerHTML={{ __html: sanitize(m.html) }} />
+                    <div className="rounded-lg border border-bdr overflow-auto" style={{ maxHeight: 600, background: '#fff', contain: 'layout paint', position: 'relative', isolation: 'isolate' }}>
+                      <div className="prose-email text-sm break-words p-3" style={{ color: '#222' }} dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(m.html) }} />
+                    </div>
                   ) : (
                     <div className="text-sm text-dim italic">No readable content.</div>
                   )}
@@ -462,12 +465,3 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
   );
 }
 
-// Light sanitiser: strip scripts/styles/event handlers before rendering HTML email.
-function sanitize(html) {
-  return (html || '')
-    .replace(/<\s*script[\s\S]*?<\s*\/\s*script\s*>/gi, '')
-    .replace(/<\s*style[\s\S]*?<\s*\/\s*style\s*>/gi, '')
-    .replace(/ on\w+="[^"]*"/gi, '')
-    .replace(/ on\w+='[^']*'/gi, '')
-    .replace(/javascript:/gi, '');
-}
