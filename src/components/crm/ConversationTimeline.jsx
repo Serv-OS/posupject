@@ -48,6 +48,27 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
+  // Who to email for a follow-up: the ticket's captured email, else the linked
+  // contact's email (fetched if not passed in) — so you can reach out
+  // proactively even before the customer has replied (previously the reply box
+  // had no address and blocked sending).
+  const [customerEmail, setCustomerEmail] = useState(ticket?.customer_email || '');
+  useEffect(() => {
+    if (ticket?.customer_email) { setCustomerEmail(ticket.customer_email); return; }
+    const fromProp = contacts?.find(c => c.id === ticket?.contact_id)?.email;
+    if (fromProp) { setCustomerEmail(fromProp); return; }
+    if (!ticket?.contact_id) return;
+    let cancelled = false;
+    supabase.from('contacts').select('email').eq('id', ticket.contact_id).maybeSingle()
+      .then(({ data }) => { if (!cancelled && data?.email) setCustomerEmail(data.email); });
+    return () => { cancelled = true; };
+  }, [ticket?.customer_email, ticket?.contact_id, contacts]);
+
+  // Prefill the reply-To as soon as an address is known. Never clobbers a typed value.
+  useEffect(() => {
+    if (!toEmail && customerEmail) setToEmail(customerEmail);
+  }, [customerEmail]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Support-mailbox provider: the microsoft_connections table exists only on the
   // Microsoft CRMs → reply via ms-send there, gmail-send otherwise.
   useEffect(() => {
@@ -125,7 +146,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
       const t = d.suggested_type;
       if (t && ['note', 'email', 'sms', 'call'].includes(t)) {
         setChannel(t);
-        if (t === 'email' && ticket?.customer_email) setToEmail(ticket.customer_email);
+        if (t === 'email' && customerEmail) setToEmail(customerEmail);
         if (t === 'sms' && ticket?.customer_phone) setToPhone(ticket.customer_phone);
         if (t === 'email' && d.suggested_subject && !subject.trim()) setSubject(d.suggested_subject);
       }
@@ -472,7 +493,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               <button key={t.key} onClick={() => {
                 setChannel(t.key);
                 // Auto-fill customer contact from ticket
-                if (t.key === 'email' && ticket?.customer_email) setToEmail(ticket.customer_email);
+                if (t.key === 'email' && customerEmail) setToEmail(customerEmail);
                 if (t.key === 'sms' && ticket?.customer_phone) setToPhone(ticket.customer_phone);
               }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition ${
@@ -520,7 +541,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
           {/* Email fields */}
           {channel === 'email' && (
             <div className="space-y-2 mb-2">
-              <input className={input} value={toEmail || ticket?.customer_email || ''} onChange={e => setToEmail(e.target.value)}
+              <input className={input} value={toEmail || customerEmail} onChange={e => setToEmail(e.target.value)}
                 placeholder="To email address" />
             </div>
           )}
