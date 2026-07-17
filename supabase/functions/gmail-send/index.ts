@@ -8,6 +8,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { encodeMimeWord } from "../_shared/mime.ts";
+import { bytesToB64, loadAttachmentsForSend, storeAttachment } from "../_shared/attachments.ts";
+
+type OutAttachment = { name: string; mime: string; bytes: Uint8Array; path: string };
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -48,31 +51,55 @@ async function getAccessToken(supabase: any): Promise<string> {
   return data.access_token;
 }
 
-function createMimeMessage(to: string, subject: string, body: string, inReplyTo?: string, references?: string, threadId?: string): string {
-  const boundary = "boundary_" + crypto.randomUUID().replace(/-/g, "");
+// Wrap base64 at 76 chars per RFC 2045 for the MIME body.
+function wrap76(s: string): string {
+  return s.replace(/.{1,76}/g, "$&\r\n").trimEnd();
+}
+
+function createMimeMessage(to: string, subject: string, body: string, inReplyTo?: string, references?: string, attachments: OutAttachment[] = []): string {
   const messageId = `<${crypto.randomUUID()}@serv-os.app>`;
 
-  let headers = [
+  const headers = [
     `From: ServOS Support <support@serv-os.app>`,
     `To: ${to}`,
     `Subject: ${encodeMimeWord(subject)}`,
     `MIME-Version: 1.0`,
-    `Content-Type: text/plain; charset=UTF-8`,
     `Message-ID: ${messageId}`,
   ];
-
   if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`);
   if (references) headers.push(`References: ${references}`);
 
-  const raw = headers.join("\r\n") + "\r\n\r\n" + body;
+  let raw: string;
+  if (attachments.length) {
+    // multipart/mixed: the text body then each file as a base64 part.
+    const boundary = "b_" + crypto.randomUUID().replace(/-/g, "");
+    headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+    const parts: string[] = [];
+    parts.push(
+      `--${boundary}\r\n` +
+      `Content-Type: text/plain; charset=UTF-8\r\n` +
+      `Content-Transfer-Encoding: base64\r\n\r\n` +
+      wrap76(bytesToB64(new TextEncoder().encode(body))),
+    );
+    for (const a of attachments) {
+      const fname = (a.name || "file").replace(/["\r\n]/g, "_");
+      parts.push(
+        `--${boundary}\r\n` +
+        `Content-Type: ${a.mime || "application/octet-stream"}; name="${fname}"\r\n` +
+        `Content-Transfer-Encoding: base64\r\n` +
+        `Content-Disposition: attachment; filename="${fname}"\r\n\r\n` +
+        wrap76(bytesToB64(a.bytes)),
+      );
+    }
+    raw = headers.join("\r\n") + "\r\n\r\n" + parts.join("\r\n") + `\r\n--${boundary}--`;
+  } else {
+    headers.push(`Content-Type: text/plain; charset=UTF-8`);
+    raw = headers.join("\r\n") + "\r\n\r\n" + body;
+  }
 
-  // Base64url encode
-  const encoded = btoa(unescape(encodeURIComponent(raw)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-
-  return encoded;
+  // Base64url encode the whole message for the Gmail send endpoint.
+  return btoa(unescape(encodeURIComponent(raw)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 serve(async (req) => {
@@ -110,7 +137,7 @@ serve(async (req) => {
       });
     }
 
-    const { ticket_id, to, subject, body, cc } = await req.json();
+    const { ticket_id, to, subject, body, cc, attachments } = await req.json();
 
     if (!ticket_id || !to || !body) {
       return new Response(JSON.stringify({ error: "Missing required fields: ticket_id, to, body" }), {
@@ -151,9 +178,11 @@ serve(async (req) => {
 
     // Build and send email via Gmail API
     const accessToken = await getAccessToken(supabase);
+    // Pull any composer-uploaded files out of storage to attach to the reply.
+    const outAtts = await loadAttachmentsForSend(supabase, Array.isArray(attachments) ? attachments : []);
     const _base = (ticket?.subject || "").replace(/^\s*(re:\s*)+/i, "").trim();
     const emailSubject = subject || (_base ? `Re: ${_base}` : "Support reply");
-    const rawMessage = createMimeMessage(to, emailSubject, body, inReplyTo, references);
+    const rawMessage = createMimeMessage(to, emailSubject, body, inReplyTo, references, outAtts);
 
     const sendUrl = gmailThreadId
       ? `https://gmail.googleapis.com/gmail/v1/users/me/messages/send`
@@ -203,6 +232,14 @@ serve(async (req) => {
         gmail_thread_id: sendResult.threadId,
       },
     }).select().single();
+
+    // Record sent attachments against the new activity so they show on the ticket.
+    for (const a of outAtts) {
+      await storeAttachment(supabase, {
+        ticketId: ticket_id, activityId: activity?.id || null,
+        name: a.name, mime: a.mime, bytes: a.bytes, source: "outbound_email", uploadedBy: user.id,
+      });
+    }
 
     // Store thread mapping if new
     if (!gmailThreadId && sendResult.threadId) {

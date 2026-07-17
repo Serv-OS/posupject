@@ -36,6 +36,9 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [isMsCrm, setIsMsCrm] = useState(false);
+  // Images/files staged in the composer to send with an email reply.
+  const [pendingFiles, setPendingFiles] = useState([]); // [{ file, name, size }]
+  const attachRef = useRef(null);
   const bodyRef = useRef(null);
   const scrollRef = useRef(null);
   // Which inbound emails have their quoted history expanded.
@@ -218,6 +221,35 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
     });
   };
 
+  // Stage image/PDF attachments for an email reply. 3 MB cap per file keeps us
+  // within Microsoft Graph's direct-attachment limit (so it works on all CRMs).
+  const onPickAttach = (e) => {
+    const picked = Array.from(e.target.files || []);
+    if (attachRef.current) attachRef.current.value = '';
+    const ok = [];
+    for (const file of picked) {
+      if (file.size > 3 * 1024 * 1024) { alert(`${file.name} is over 3 MB — please attach a smaller image.`); continue; }
+      ok.push({ file, name: file.name, size: file.size });
+    }
+    if (ok.length) setPendingFiles(prev => [...prev, ...ok]);
+  };
+  const removePending = (i) => setPendingFiles(prev => prev.filter((_, idx) => idx !== i));
+
+  // Upload staged files to the private bucket and return path refs for the send fn.
+  const uploadPending = async () => {
+    const refs = [];
+    for (const p of pendingFiles) {
+      const safe = p.name.replace(/[^\w.\-]+/g, '_');
+      const path = `ticket/${subjectId}/${crypto.randomUUID()}-${safe}`;
+      const { error } = await supabase.storage.from('attachments').upload(path, p.file, {
+        contentType: p.file.type || 'application/octet-stream', upsert: false,
+      });
+      if (error) { alert('Attachment upload failed: ' + error.message); return null; }
+      refs.push({ path, name: p.name, type: p.file.type || 'application/octet-stream', size: p.size });
+    }
+    return refs;
+  };
+
   const save = async () => {
     if (channel === 'note' && !body.trim()) return;
     if (channel === 'call' && !body.trim()) return;
@@ -228,6 +260,8 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
     // Email: send via the support mailbox — ms-send (Microsoft) or gmail-send (Gmail)
     if (channel === 'email' && subjectType === 'ticket') {
       try {
+        const attachRefs = pendingFiles.length ? await uploadPending() : [];
+        if (attachRefs === null) { setSending(false); return; } // upload failed
         const { data: { session } } = await supabase.auth.getSession();
         const res = await fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${isMsCrm ? 'ms-send' : 'gmail-send'}`,
@@ -242,6 +276,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               to: toEmail.trim(),
               subject: null, // always reply with the customer's email subject ("Re: …", threaded server-side)
               body: body.trim(),
+              attachments: attachRefs,
             }),
           }
         );
@@ -252,7 +287,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
           return;
         }
         // Success - activity was created by the edge function
-        setBody(''); setSubject(''); setToEmail('');
+        setBody(''); setSubject(''); setToEmail(''); setPendingFiles([]);
         setSending(false);
         load();
         return;
@@ -545,8 +580,17 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               </button>
             ))}
 
-            {/* Right-aligned tools: AI draft + Templates */}
+            {/* Right-aligned tools: attach (email) + AI draft + Templates */}
             <div className="ml-auto flex items-center gap-1">
+            {subjectType === 'ticket' && channel === 'email' && (
+              <>
+                <button onClick={() => attachRef.current?.click()} title="Attach image"
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-xl bg-card text-muted hover:text-paper transition">
+                  {'\u{1F4CE}'} Attach
+                </button>
+                <input ref={attachRef} type="file" accept="image/*,.pdf" multiple className="hidden" onChange={onPickAttach} />
+              </>
+            )}
             {subjectType === 'ticket' && channel !== 'call' && (
               <button onClick={generateDraft} disabled={aiLoading}
                 className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-xl bg-ember/15 text-ember-deep border border-ember/25 hover:bg-ember/25 disabled:opacity-50">
@@ -582,6 +626,16 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
             <div className="space-y-2 mb-2">
               <input className={input} value={toEmail || customerEmail} onChange={e => setToEmail(e.target.value)}
                 placeholder="To email address" />
+              {pendingFiles.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {pendingFiles.map((p, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 pl-2 pr-1 py-1 rounded-lg bg-ember/10 text-ember-deep text-[11px] font-medium border border-ember/20">
+                      {'\u{1F4CE}'} <span className="max-w-[140px] truncate">{p.name}</span>
+                      <button onClick={() => removePending(i)} className="w-4 h-4 rounded hover:bg-ember/20 text-ember-deep" title="Remove">{'\u{00D7}'}</button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

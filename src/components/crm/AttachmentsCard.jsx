@@ -18,9 +18,12 @@ function iconFor(mime = '', name = '') {
   if (m.startsWith('text/')) return '\u{1F4C3}';
   return '\u{1F4CE}';
 }
+const isImg = (a) => (a.mime_type || '').toLowerCase().startsWith('image/');
+const sourceLabel = (s) => s === 'inbound_email' ? ' · from email' : s === 'outbound_email' ? ' · sent' : '';
 
 export default function AttachmentsCard({ subjectType, subjectId, profile }) {
   const [items, setItems] = useState([]);
+  const [previews, setPreviews] = useState({}); // id -> signed thumbnail url (images only)
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef(null);
@@ -33,7 +36,19 @@ export default function AttachmentsCard({ subjectType, subjectId, profile }) {
     const { data } = await supabase.from('attachments')
       .select('*').eq('subject_type', subjectType).eq('subject_id', subjectId)
       .order('created_at', { ascending: false });
-    setItems(data || []);
+    const rows = data || [];
+    setItems(rows);
+    // Sign image paths so we can show real thumbnails (private bucket).
+    const imgs = rows.filter(isImg);
+    if (imgs.length) {
+      const { data: signed } = await supabase.storage.from('attachments')
+        .createSignedUrls(imgs.map(a => a.file_path), 3600);
+      const map = {};
+      (signed || []).forEach((s, i) => { if (s?.signedUrl) map[imgs[i].id] = s.signedUrl; });
+      setPreviews(map);
+    } else {
+      setPreviews({});
+    }
   };
 
   const onPick = async (e) => {
@@ -98,11 +113,16 @@ export default function AttachmentsCard({ subjectType, subjectId, profile }) {
         {items.length === 0 && !error && <div className="text-xs text-dim italic py-2 text-center">No attachments</div>}
         {items.map(a => (
           <div key={a.id} className="flex items-center gap-2 p-2 glass-inner rounded-xl">
-            <span className="text-lg shrink-0">{iconFor(a.mime_type, a.file_name)}</span>
+            {isImg(a) && previews[a.id] ? (
+              <img src={previews[a.id]} alt={a.file_name} onClick={() => download(a)}
+                className="w-12 h-12 rounded-lg object-cover shrink-0 cursor-pointer border border-bdr" />
+            ) : (
+              <span className="text-lg shrink-0">{iconFor(a.mime_type, a.file_name)}</span>
+            )}
             <div className="flex-1 min-w-0 cursor-pointer" onClick={() => download(a)}>
               <div className="text-sm text-paper truncate hover:text-ember transition">{a.file_name}</div>
               <div className="text-[10px] text-dim">
-                {fmtSize(a.size_bytes)}{a.source === 'inbound_email' ? ' · from email' : ''}
+                {fmtSize(a.size_bytes)}{sourceLabel(a.source)}
               </div>
             </div>
             <button onClick={() => download(a)} className="text-xs text-ember hover:text-ember-deep shrink-0" title="Download">{'\u{2B07}'}</button>

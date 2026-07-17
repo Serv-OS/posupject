@@ -9,6 +9,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { utf8FromB64Url, decodeMimeWords, encodeMimeWord } from "../_shared/mime.ts";
 import { isOpenNow } from "../_shared/hours.ts";
+import { b64urlToBytes, storeAttachment } from "../_shared/attachments.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -164,6 +165,37 @@ function getHtmlPart(part: any): string | null {
     }
   }
   return null;
+}
+
+// Walk the MIME tree for real file attachments (parts with a filename +
+// attachmentId). Skips tiny inline images (signature logos / tracking pixels) so
+// only genuine attachments — screenshots, photos, PDFs — land on the ticket.
+function collectGmailAttachments(part: any, out: any[]) {
+  if (!part) return;
+  const attId = part.body?.attachmentId;
+  const filename = part.filename;
+  if (attId && filename) {
+    const headers = part.headers || [];
+    const disp = (headers.find((h: any) => h.name?.toLowerCase() === "content-disposition")?.value || "").toLowerCase();
+    const hasCid = headers.some((h: any) => h.name?.toLowerCase() === "content-id");
+    const size = part.body?.size || 0;
+    const isInline = disp.startsWith("inline") || hasCid;
+    const isImage = (part.mimeType || "").startsWith("image/");
+    if (!(isInline && isImage && size < 12000)) {
+      out.push({ attachmentId: attId, filename, mimeType: part.mimeType || "application/octet-stream", size });
+    }
+  }
+  if (part.parts) for (const p of part.parts) collectGmailAttachments(p, out);
+}
+
+async function getGmailAttachment(accessToken: string, messageId: string, attId: string): Promise<string | null> {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/attachments/${attId}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) return null;
+  const d = await res.json();
+  return d?.data || null; // base64url
 }
 
 serve(async (req) => {
@@ -413,7 +445,7 @@ serve(async (req) => {
         const body = decodeBody(full.payload);
         const html = getHtmlPart(full.payload);
 
-        await supabase.from("crm_activities").insert({
+        const { data: inboundAct } = await supabase.from("crm_activities").insert({
           type: "email",
           subject: subject,
           body: body.slice(0, 10000), // Limit body length
@@ -432,7 +464,25 @@ serve(async (req) => {
             ...(html ? { html: html.slice(0, 200000) } : {}),
           },
           occurred_at: date ? new Date(date).toISOString() : new Date().toISOString(),
-        });
+        }).select("id").single();
+
+        // Store any email attachments (screenshots, photos, PDFs) against the
+        // ticket so they show on the Attachments card and inline in the thread.
+        try {
+          const atts: any[] = [];
+          collectGmailAttachments(full.payload, atts);
+          for (const a of atts) {
+            const data = await getGmailAttachment(accessToken, msg.id, a.attachmentId);
+            if (!data) continue;
+            await storeAttachment(supabase, {
+              ticketId, activityId: inboundAct?.id || null,
+              name: a.filename, mime: a.mimeType, bytes: b64urlToBytes(data),
+              source: "inbound_email",
+            });
+          }
+        } catch (e) {
+          console.error("Gmail attachment store failed:", (e as Error).message);
+        }
 
         processed++;
       }
