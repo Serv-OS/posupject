@@ -24,22 +24,30 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
   const [deal, setDeal] = useState(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
+  const [templates, setTemplates] = useState([]);
+  const [jobTypes, setJobTypes] = useState([]);
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [applying, setApplying] = useState(false);
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   useEffect(() => { load(); }, [onboardingId]);
 
   const load = async () => {
-    const [o, m, h, prj] = await Promise.all([
+    const [o, m, h, prj, tpl, autos] = await Promise.all([
       supabase.from('onboardings').select('*').eq('id', onboardingId).single(),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('stage_history').select('*').eq('object_type', 'onboarding').eq('object_id', onboardingId).order('changed_at', { ascending: false }),
       supabase.from('crm_projects').select('*').eq('subject_type', 'onboarding').eq('subject_id', onboardingId).order('created_at', { ascending: false }),
+      supabase.from('project_templates').select('id, name, description').order('name'),
+      supabase.from('automations').select('condition'),
     ]);
     setOb(o.data);
     setMembers(m.data || []);
     setHistory(h.data || []);
     setProjects(prj.data || []);
+    setTemplates(tpl.data || []);
+    setJobTypes([...new Set((autos.data || []).map(a => a.condition?.job_type).filter(Boolean))].sort());
     if (o.data?.company_id) {
       const [c, l] = await Promise.all([
         supabase.from('companies').select('*').eq('id', o.data.company_id).single(),
@@ -85,14 +93,29 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
     onClose();
   };
 
-  const createLinkedProject = async () => {
+  const createBlankProject = async () => {
     const name = prompt(`Project name for ${company?.name || 'this'} onboarding:`);
     if (!name?.trim()) return;
+    setShowNewProject(false);
     const { data } = await supabase.from('crm_projects').insert({
       name: name.trim(), subject_type: 'onboarding', subject_id: onboardingId, owner_id: profile.id,
     }).select().single();
     if (data) onNavigate?.('project', data.id);
     else load();
+  };
+
+  // Stamp a template onto this job via the 076 engine (dedupes server-side).
+  const applyTemplate = async (templateId) => {
+    setApplying(true);
+    const { data, error } = await supabase.rpc('apply_project_template_rpc', {
+      p_template_id: templateId, p_subject_type: 'onboarding', p_subject_id: onboardingId,
+      p_owner: ob.owner_id || profile.id,
+    });
+    setApplying(false);
+    if (error) { alert('Could not apply template: ' + error.message); return; }
+    setShowNewProject(false);
+    load();
+    if (data) onNavigate?.('project', data);
   };
 
   if (!ob) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading...</div>;
@@ -166,6 +189,12 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
                     <option value="">Unassigned</option>
                     {members.map(m => <option key={m.id} value={m.id}>{m.display_name || m.email}</option>)}
                   </select></div>
+                <div><label className={label}>Job type</label>
+                  <input list="ob-job-types" className={input} value={draft.job_type || ''}
+                    onChange={e => set('job_type', e.target.value || null)}
+                    placeholder="e.g. New venue" />
+                  <datalist id="ob-job-types">{jobTypes.map(jt => <option key={jt} value={jt} />)}</datalist>
+                  <div className="text-[10px] text-dim mt-1">Setting a type auto-creates any project templates configured for it.</div></div>
               </div>
               <div className="grid grid-cols-2 gap-3 mt-3">
                 <div><label className={label}>Install location</label>
@@ -200,6 +229,7 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
                 <div className="space-y-3">
                   <Field label="Stage" value={STAGE_LABELS[ob.stage]} />
                   <Field label="Owner" value={ownerName(ob.owner_id)} />
+                  <Field label="Job type" value={ob.job_type} />
                   <Field label="Install location" value={locations.find(l => l.id === ob.location_id)?.name} />
                   <Field label="Created" value={new Date(ob.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })} />
                   {ob.notes && <Field label="Notes" value={ob.notes} />}
@@ -271,7 +301,7 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
             {/* RIGHT: Projects + Stage History */}
             <div className="col-span-4 space-y-4">
               <Card title="Projects" count={projects.length}
-                action={canWrite ? { label: '+ Create', onClick: createLinkedProject } : null}>
+                action={canWrite ? { label: '+ Create', onClick: () => setShowNewProject(true) } : null}>
                 {projects.length > 0 ? (
                   <div className="space-y-2">
                     {projects.map(p => (
@@ -304,6 +334,36 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
           </div>
         )}
       </div>
+
+      {/* New project chooser: blank, or stamp from a template */}
+      {showNewProject && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-6" onClick={() => setShowNewProject(false)}>
+          <div className="glass-card rounded-2xl w-full max-w-md max-h-[70vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-bdr flex items-center justify-between">
+              <h3 className="text-sm font-bold text-paper">New project for this job</h3>
+              <button onClick={() => setShowNewProject(false)} className="text-muted hover:text-paper">&times;</button>
+            </div>
+            <div className="p-4 space-y-2">
+              <button onClick={createBlankProject} disabled={applying}
+                className="w-full text-left p-3 glass-inner rounded-xl hover:border-ember/30 border border-transparent transition">
+                <div className="text-sm font-semibold text-paper">Blank project</div>
+                <div className="text-[11px] text-dim">Start from scratch and add tasks yourself.</div>
+              </button>
+              {templates.length > 0 && (
+                <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim pt-2">From template</div>
+              )}
+              {templates.map(t => (
+                <button key={t.id} onClick={() => applyTemplate(t.id)} disabled={applying}
+                  className="w-full text-left p-3 glass-inner rounded-xl hover:border-ember/30 border border-transparent transition disabled:opacity-50">
+                  <div className="text-sm font-semibold text-paper">{'\u{1F4CB}'} {t.name}</div>
+                  {t.description && <div className="text-[11px] text-dim line-clamp-2">{t.description}</div>}
+                </button>
+              ))}
+              {applying && <div className="text-xs text-dim text-center py-1">Creating project…</div>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
