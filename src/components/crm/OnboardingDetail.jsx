@@ -190,11 +190,13 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
                     {members.map(m => <option key={m.id} value={m.id}>{m.display_name || m.email}</option>)}
                   </select></div>
                 <div><label className={label}>Job type</label>
-                  <input list="ob-job-types" className={input} value={draft.job_type || ''}
-                    onChange={e => set('job_type', e.target.value || null)}
-                    placeholder="e.g. New venue" />
-                  <datalist id="ob-job-types">{jobTypes.map(jt => <option key={jt} value={jt} />)}</datalist>
-                  <div className="text-[10px] text-dim mt-1">Setting a type auto-creates any project templates configured for it.</div></div>
+                  <select className={input} value={draft.job_type || ''} onChange={e => set('job_type', e.target.value || null)}>
+                    <option value="">— None —</option>
+                    {[...new Set([...jobTypes, ...(draft.job_type ? [draft.job_type] : [])])].sort().map(jt => (
+                      <option key={jt} value={jt}>{jt}</option>
+                    ))}
+                  </select>
+                  <div className="text-[10px] text-dim mt-1">Types come from your template auto-rules (Project templates screen). Picking one auto-creates its projects.</div></div>
               </div>
               <div className="grid grid-cols-2 gap-3 mt-3">
                 <div><label className={label}>Install location</label>
