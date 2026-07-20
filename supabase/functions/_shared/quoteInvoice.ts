@@ -4,7 +4,12 @@
 // quote has no one-off value to invoice.
 
 export async function ensureInvoiceForQuote(supabase: any, q: any): Promise<any | null> {
-  if (!q || Number(q.one_off_total || 0) <= 0) return null;
+  if (!q || Number(q.one_off_total || 0) <= 0) {
+    // Legit for recurring-only quotes, but log it so a quote whose totals
+    // weren't saved yet at sign-time doesn't vanish without a trace.
+    if (q) console.log(`ensureInvoiceForQuote: Q-${q.quote_number} has no one-off total (${q.one_off_total}) — no invoice raised`);
+    return null;
+  }
 
   const { data: existing } = await supabase.from("invoices")
     .select("*").eq("quote_id", q.id).limit(1);
@@ -19,7 +24,11 @@ export async function ensureInvoiceForQuote(supabase: any, q: any): Promise<any 
     notes: `Generated automatically from signed quote Q-${q.quote_number}.`,
     created_by: q.created_by,
   }).select().single();
-  if (error || !inv) return null;
+  // Never fail silently: a missed invoice on a signed quote is money lost.
+  if (error || !inv) {
+    console.error(`ensureInvoiceForQuote: invoice insert failed for Q-${q.quote_number}:`, error?.message || "no row returned");
+    return null;
+  }
 
   const { data: lines } = await supabase.from("quote_line_items")
     .select("*").eq("quote_id", q.id).eq("billing_type", "one_off").order("sort");
