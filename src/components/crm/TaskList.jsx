@@ -21,6 +21,7 @@ export default function TaskList({ profile, onSelect }) {
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [onboardings, setOnboardings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ status: 'open', assignee: 'all', search: '' });
   const [expanded, setExpanded] = useState({});
@@ -38,13 +39,14 @@ export default function TaskList({ profile, onSelect }) {
 
   const load = async () => {
     setLoading(true);
-    const [t, m, p, c, l, d] = await Promise.all([
+    const [t, m, p, c, l, d, ob] = await Promise.all([
       supabase.from('tasks').select('*').order('sort_order'),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('crm_projects').select('*').order('name'),
       supabase.from('companies').select('id, name'),
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
+      supabase.from('onboardings').select('id, company_id, deal_id, location_id'),
     ]);
     setAllTasks(t.data || []);
     setMembers(m.data || []);
@@ -52,6 +54,7 @@ export default function TaskList({ profile, onSelect }) {
     setCompanies(c.data || []);
     setLocations(l.data || []);
     setDeals(d.data || []);
+    setOnboardings(ob.data || []);
     setLoading(false);
   };
 
@@ -100,7 +103,15 @@ export default function TaskList({ profile, onSelect }) {
       if (type === 'company') { const c = companies.find(x => x.id === id); return c ? { label: 'Company', name: c.name } : null; }
       if (type === 'location') { const l = locations.find(x => x.id === id); return l ? { label: 'Location', name: l.name, companyId: l.company_id } : null; }
       if (type === 'deal') { const d = deals.find(x => x.id === id); return d ? { label: 'Deal', name: d.name, companyId: d.company_id } : null; }
-      if (type === 'onboarding') return { label: 'Onboarding', name: '' };
+      if (type === 'onboarding') {
+        // Show the venue the job is for: install location, else deal, else company.
+        const o = onboardings.find(x => x.id === id);
+        if (!o) return { label: 'Onboarding', name: '' };
+        const loc = locations.find(x => x.id === o.location_id);
+        const dl = deals.find(x => x.id === o.deal_id);
+        const name = loc?.name || dl?.name || companies.find(x => x.id === o.company_id)?.name || '';
+        return { label: 'Onboarding', name, companyId: o.company_id || dl?.company_id || loc?.company_id };
+      }
       if (type === 'ticket') return { label: 'Ticket', name: '' };
       return null;
     };

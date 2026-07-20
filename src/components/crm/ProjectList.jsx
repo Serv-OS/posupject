@@ -19,6 +19,7 @@ export default function ProjectList({ profile, onSelect }) {
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [onboardings, setOnboardings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('active');
   const [showCreate, setShowCreate] = useState(false);
@@ -31,13 +32,14 @@ export default function ProjectList({ profile, onSelect }) {
 
   const load = async () => {
     setLoading(true);
-    const [p, t, m, c, l, d] = await Promise.all([
+    const [p, t, m, c, l, d, ob] = await Promise.all([
       supabase.from('crm_projects').select('*').order('created_at', { ascending: false }),
       supabase.from('tasks').select('id, project_id, status'),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('companies').select('id, name'),
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
+      supabase.from('onboardings').select('id, company_id, deal_id, location_id'),
     ]);
     setProjects(p.data || []);
     setTasks(t.data || []);
@@ -45,6 +47,7 @@ export default function ProjectList({ profile, onSelect }) {
     setCompanies(c.data || []);
     setLocations(l.data || []);
     setDeals(d.data || []);
+    setOnboardings(ob.data || []);
     setLoading(false);
   };
 
@@ -85,6 +88,14 @@ export default function ProjectList({ profile, onSelect }) {
       const d = deals.find(x => x.id === project.subject_id);
       recordName = d?.name || '';
       const c = companies.find(x => x.id === d?.company_id);
+      companyName = c?.name || '';
+    } else if (project.subject_type === 'onboarding') {
+      // Show the venue the job is for: install location, else deal, else company.
+      const o = onboardings.find(x => x.id === project.subject_id);
+      const loc = locations.find(x => x.id === o?.location_id);
+      const dl = deals.find(x => x.id === o?.deal_id);
+      recordName = loc?.name || dl?.name || companies.find(x => x.id === o?.company_id)?.name || '';
+      const c = companies.find(x => x.id === (o?.company_id || dl?.company_id || loc?.company_id));
       companyName = c?.name || '';
     } else {
       recordName = project.subject_id?.slice(0, 8) || '';

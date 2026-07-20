@@ -44,7 +44,7 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
       supabase.from('companies').select('id, name'),
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
-      supabase.from('onboardings').select('id, company_id, stage'),
+      supabase.from('onboardings').select('id, company_id, deal_id, location_id, stage'),
     ]);
     setProject(p.data);
     setTasks(t.data || []);
@@ -73,6 +73,14 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
     if (t === 'company') {
       const co = companies.find(x => x.id === id);
       return { type: 'Company', name: co?.name, companyId: id };
+    }
+    if (t === 'onboarding') {
+      // Show the venue the job is for: install location, else deal, else company.
+      const o = onboardings.find(x => x.id === id);
+      const loc = locations.find(x => x.id === o?.location_id);
+      const deal = deals.find(x => x.id === o?.deal_id);
+      const co = companies.find(x => x.id === (o?.company_id || deal?.company_id || loc?.company_id));
+      return { type: 'Onboarding', name: loc?.name || deal?.name || co?.name, companyName: co?.name, companyId: co?.id };
     }
     return { type: t, name: id?.slice(0, 8) };
   };
