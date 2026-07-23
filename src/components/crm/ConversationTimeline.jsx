@@ -12,8 +12,10 @@ const CHANNEL_TABS = [
   { key: 'call', label: 'Call', icon: '\u{1F4DE}' },
 ];
 const CALL_OUTCOMES = ['connected', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'callback_scheduled'];
+const TICKET_STAGES = ['new','in_progress','waiting_on_customer','escalated','resolved','closed'];
+const TICKET_STAGE_LABELS = { new:'New', in_progress:'In Progress', waiting_on_customer:'Waiting on Customer', escalated:'Escalated', resolved:'Resolved', closed:'Closed' };
 
-export default function ConversationTimeline({ subjectType, subjectId, profile, contacts, ticket }) {
+export default function ConversationTimeline({ subjectType, subjectId, profile, contacts, ticket, onTicketUpdated }) {
   const [activities, setActivities] = useState([]);
   const [members, setMembers] = useState([]);
   // Default channel: match the ticket's inbound channel, or 'note'
@@ -28,6 +30,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [callOutcome, setCallOutcome] = useState('connected');
   const [isInternal, setIsInternal] = useState(true);
   const [sending, setSending] = useState(false);
+  const [askStatus, setAskStatus] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showMentions, setShowMentions] = useState(false);
@@ -250,7 +253,18 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
     return refs;
   };
 
-  const save = async () => {
+  // The status chosen in the send popover, applied once the reply is out.
+  const applyStage = async (nextStage) => {
+    if (!nextStage || subjectType !== 'ticket' || !ticket || nextStage === ticket.stage) return;
+    const patch = { stage: nextStage };
+    if (nextStage === 'resolved') patch.resolved_at = new Date().toISOString();
+    if (nextStage === 'closed') patch.closed_at = new Date().toISOString();
+    await supabase.from('tickets').update(patch).eq('id', subjectId);
+    await supabase.from('stage_history').insert({ object_type: 'ticket', object_id: subjectId, from_stage: ticket.stage, to_stage: nextStage, changed_by: profile.id });
+    onTicketUpdated?.();
+  };
+
+  const save = async (nextStage) => {
     if (channel === 'note' && !body.trim()) return;
     if (channel === 'call' && !body.trim()) return;
     if (channel === 'email' && (!body.trim() || !toEmail.trim())) return;
@@ -287,6 +301,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
           return;
         }
         // Success - activity was created by the edge function
+        await applyStage(nextStage);
         setBody(''); setSubject(''); setToEmail(''); setPendingFiles([]);
         setSending(false);
         load();
@@ -323,6 +338,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
           setSending(false);
           return;
         }
+        await applyStage(nextStage);
         setBody(''); setToPhone('');
         setSending(false);
         load();
@@ -711,10 +727,28 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               </div>
             )}
 
-            <button onClick={save} disabled={sending || (!body.trim() && channel !== 'call')}
+            {/* Replies on a ticket force a status choice; notes/calls save directly. */}
+            <button
+              onClick={() => {
+                if (subjectType === 'ticket' && (channel === 'email' || channel === 'sms')) setAskStatus(v => !v);
+                else save();
+              }}
+              disabled={sending || (!body.trim() && channel !== 'call')}
               className="absolute bottom-2 right-2 btn-glass px-4 py-1.5 rounded-xl text-xs disabled:opacity-50">
               {sending ? '...' : channel === 'note' ? 'Add' : channel === 'call' ? 'Log' : 'Send'}
             </button>
+            {askStatus && (
+              <div className="absolute bottom-11 right-2 z-30 w-60 glass-raised rounded-xl shadow-xl overflow-hidden">
+                <div className="px-3 py-2 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim border-b border-bdr">Send &amp; set ticket status</div>
+                {TICKET_STAGES.map(s => (
+                  <button key={s} onClick={() => { setAskStatus(false); save(s); }}
+                    className="w-full px-3 py-2 text-left text-sm text-paper hover:bg-ember/10 flex items-center justify-between transition">
+                    <span>{TICKET_STAGE_LABELS[s]}</span>
+                    {ticket?.stage === s && <span className="text-[10px] font-mono text-dim">current</span>}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

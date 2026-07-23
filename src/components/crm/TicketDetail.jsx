@@ -168,6 +168,13 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
     load();
   };
 
+  // Inline Key Info edits — save on change, no Edit round-trip.
+  const patchTicket = async (patch) => {
+    const { error } = await supabase.from('tickets').update(patch).eq('id', ticketId);
+    if (error) { alert('Save failed: ' + error.message); return; }
+    load();
+  };
+
   const deleteRecord = async () => {
     if (!confirm(`Delete ticket "${ticket?.subject}"?\n\nThis cannot be undone.`)) return;
     await supabase.from('tickets').delete().eq('id', ticketId);
@@ -346,10 +353,25 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
 
               <Card title="Key Info">
                 <div className="space-y-3">
-                  <Field label="Priority" value={ticket.priority} />
-                  <Field label="Type" value={ticket.ticket_type} />
-                  <Field label="Stage" value={STAGE_LABELS[ticket.stage]} />
-                  <Field label="Owner" value={ownerName(ticket.owner_id)} />
+                  {canWrite ? (
+                    <>
+                      <InlineSelect label="Priority" value={ticket.priority || 'P2'} onChange={v => patchTicket({ priority: v })}
+                        options={[['P0','P0'],['P1','P1'],['P2','P2'],['P3','P3']]} />
+                      <InlineSelect label="Type" value={ticket.ticket_type || 'support'} onChange={v => patchTicket({ ticket_type: v })}
+                        options={[['support','Support'],['bug','Bug'],['feature_request','Feature Request'],['billing','Billing'],['other','Other']]} />
+                      <InlineSelect label="Stage" value={ticket.stage} onChange={v => changeStage(v)}
+                        options={STAGES.map(s => [s, STAGE_LABELS[s]])} />
+                      <InlineSelect label="Owner" value={ticket.owner_id || ''} onChange={v => patchTicket({ owner_id: v || null })}
+                        options={[['', 'Unassigned'], ...members.map(m => [m.id, m.display_name || m.email])]} />
+                    </>
+                  ) : (
+                    <>
+                      <Field label="Priority" value={ticket.priority} />
+                      <Field label="Type" value={ticket.ticket_type} />
+                      <Field label="Stage" value={STAGE_LABELS[ticket.stage]} />
+                      <Field label="Owner" value={ownerName(ticket.owner_id)} />
+                    </>
+                  )}
                   <Field label="Source" value={ticket.source} />
                   <Field label="Created" value={new Date(ticket.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })} />
                   {ticket.resolved_at && <Field label="Resolved" value={new Date(ticket.resolved_at).toLocaleDateString('en-GB')} />}
@@ -412,7 +434,7 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
             {/* CENTER: Conversation — fills the viewport height, only the list scrolls */}
             <div className="flex-1 min-w-0 flex flex-col min-h-[560px] lg:min-h-0">
               <div className="flex-1 min-h-0 glass-card rounded-2xl overflow-hidden flex flex-col">
-                <ConversationTimeline subjectType="ticket" subjectId={ticketId} profile={profile} contacts={[]} ticket={ticket} />
+                <ConversationTimeline subjectType="ticket" subjectId={ticketId} profile={profile} contacts={[]} ticket={ticket} onTicketUpdated={load} />
               </div>
             </div>
 
@@ -497,6 +519,18 @@ function Card({ title, count, action, noPadding, children }) {
         {action && <button onClick={action.onClick} className="ml-auto text-xs text-ember hover:text-ember-deep font-medium">{action.label}</button>}
       </div>
       <div className={noPadding ? '' : 'p-5'}>{children}</div>
+    </div>
+  );
+}
+
+function InlineSelect({ label, value, options, onChange }) {
+  return (
+    <div>
+      <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-0.5">{label}</div>
+      <select value={value} onChange={e => onChange(e.target.value)}
+        className="w-full px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper focus:outline-none focus:border-ember cursor-pointer">
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
     </div>
   );
 }
