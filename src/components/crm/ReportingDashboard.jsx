@@ -14,6 +14,12 @@ function startOfMonth() { const d = new Date(); return new Date(d.getFullYear(),
 function startOfToday() { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
 function startOfWeek() { const d = startOfToday(); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); return d; } // Monday
 
+// Lead funnel stages for this CRM's pipeline (see LeadBoard).
+const LEAD_OPEN_STAGES = ['new_lead','attempting','mql','sql'];
+const LEAD_ENGAGED_STAGES = ['attempting','mql'];
+const LEAD_QUALIFIED_STAGES = ['sql','deal'];
+const LEAD_STALE_DAYS = 5;
+
 export default function ReportingDashboard({ profile }) {
   const [deals, setDeals] = useState([]);
   const [onboardings, setOnboardings] = useState([]);
@@ -29,7 +35,9 @@ export default function ReportingDashboard({ profile }) {
   const [members, setMembers] = useState([]);
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('sales');
+  const [tab, setTab] = useState('leads');
+  const [leads, setLeads] = useState([]);
+  const [leadDays, setLeadDays] = useState(30);
 
   useEffect(() => { load(); }, []);
 
@@ -46,9 +54,10 @@ export default function ReportingDashboard({ profile }) {
       supabase.from('location_modules').select('*'),
       supabase.from('modules').select('*').order('sort_order'),
       supabase.from('feature_requests').select('*'),
-      supabase.from('stage_history').select('*').order('changed_at', { ascending: false }).limit(500),
+      supabase.from('stage_history').select('*').order('changed_at', { ascending: false }).limit(2000),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('crm_activities').select('actor_id, type, occurred_at').gte('occurred_at', startOfMonth().toISOString()),
+      supabase.from('leads').select('*'),
     ]);
     setDeals(results[0].data || []);
     setOnboardings(results[1].data || []);
@@ -63,6 +72,7 @@ export default function ReportingDashboard({ profile }) {
     setStageHistory(results[10].data || []);
     setMembers(results[11].data || []);
     setActivities(results[12].data || []);
+    setLeads(results[13].data || []);
     setLoading(false);
   };
 
@@ -76,6 +86,76 @@ export default function ReportingDashboard({ profile }) {
     a.download = filename;
     a.click();
   };
+
+  // Lead metrics — period-scoped funnel, sources, owners, stale detection
+  const leadMetrics = useMemo(() => {
+    const now = Date.now();
+    const cut = now - leadDays * 86400000;
+    const inP = (ts) => ts && new Date(ts).getTime() >= cut;
+    const isQualified = (l, qIds) => LEAD_QUALIFIED_STAGES.includes(l.stage) || qIds.has(l.id);
+
+    const newLeads = leads.filter(l => inP(l.created_at));
+    const leadHist = stageHistory.filter(h => h.object_type === 'lead' && inP(h.changed_at));
+    const movedTo = (stages) => { const ids = new Set(); leadHist.forEach(h => { if (stages.includes(h.to_stage)) ids.add(h.object_id); }); return ids; };
+    const engagedIds = movedTo(LEAD_ENGAGED_STAGES);
+    const qualifiedIds = movedTo(LEAD_QUALIFIED_STAGES);
+    const disqualifiedIds = movedTo(['disqualified']);
+
+    // How long from lead creation to qualification (for quals that happened in period)
+    const qDays = [];
+    leadHist.forEach(h => {
+      if (!LEAD_QUALIFIED_STAGES.includes(h.to_stage)) return;
+      const l = leads.find(x => x.id === h.object_id);
+      if (l?.created_at) qDays.push((new Date(h.changed_at) - new Date(l.created_at)) / 86400000);
+    });
+    const avgToQualify = qDays.length ? qDays.reduce((a, b) => a + b, 0) / qDays.length : null;
+
+    // Stale = still open but untouched for LEAD_STALE_DAYS+
+    const staleLeads = leads
+      .filter(l => LEAD_OPEN_STAGES.includes(l.stage) && (now - new Date(l.updated_at || l.created_at).getTime()) > LEAD_STALE_DAYS * 86400000)
+      .map(l => ({ ...l, staleDays: Math.floor((now - new Date(l.updated_at || l.created_at).getTime()) / 86400000) }))
+      .sort((a, b) => b.staleDays - a.staleDays);
+
+    const bySource = {};
+    newLeads.forEach(l => {
+      const s = (l.source || 'unknown').toLowerCase();
+      bySource[s] = bySource[s] || { count: 0, qualified: 0 };
+      bySource[s].count++;
+      if (isQualified(l, qualifiedIds)) bySource[s].qualified++;
+    });
+
+    const byOwner = {};
+    const own = (id) => ownerName(id) || 'Unassigned';
+    newLeads.forEach(l => {
+      byOwner[own(l.owner_id)] = byOwner[own(l.owner_id)] || { count: 0, qualified: 0, stale: 0 };
+      byOwner[own(l.owner_id)].count++;
+      if (isQualified(l, qualifiedIds)) byOwner[own(l.owner_id)].qualified++;
+    });
+    staleLeads.forEach(l => {
+      byOwner[own(l.owner_id)] = byOwner[own(l.owner_id)] || { count: 0, qualified: 0, stale: 0 };
+      byOwner[own(l.owner_id)].stale++;
+    });
+
+    // New leads per week, last 8 weeks
+    const weeks = [];
+    for (let i = 7; i >= 0; i--) {
+      const start = startOfWeek().getTime() - i * 7 * 86400000;
+      const end = start + 7 * 86400000;
+      weeks.push({
+        label: new Date(start).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+        n: leads.filter(l => { const t = new Date(l.created_at).getTime(); return t >= start && t < end; }).length,
+      });
+    }
+
+    const qualifiedNew = newLeads.filter(l => isQualified(l, qualifiedIds)).length;
+    return {
+      newCount: newLeads.length, engaged: engagedIds.size, qualified: qualifiedIds.size,
+      disqualified: disqualifiedIds.size,
+      conv: newLeads.length ? Math.round((qualifiedNew / newLeads.length) * 100) : 0,
+      avgToQualify, staleLeads, openCount: leads.filter(l => LEAD_OPEN_STAGES.includes(l.stage)).length,
+      bySource, byOwner, weeks,
+    };
+  }, [leads, stageHistory, leadDays, members]);
 
   // Sales metrics
   const salesMetrics = useMemo(() => {
@@ -184,6 +264,7 @@ export default function ReportingDashboard({ profile }) {
       </div>
 
       <div className="px-6 py-2 border-b border-bdr flex gap-1 overflow-x-auto">
+        {tabBtn('leads', 'Leads')}
         {tabBtn('sales', 'Sales')}
         {tabBtn('quota', 'Quota & Commission')}
         {tabBtn('onboarding', 'Onboarding')}
@@ -195,6 +276,101 @@ export default function ReportingDashboard({ profile }) {
 
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-5xl space-y-6">
+
+          {tab === 'leads' && (
+            <>
+              <div className="flex items-center gap-1">
+                {[7, 30, 90].map(d => (
+                  <button key={d} onClick={() => setLeadDays(d)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-xl transition ${leadDays === d ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>
+                    {d} days
+                  </button>
+                ))}
+                <span className="ml-auto text-[10px] text-dim">Stale = open lead untouched {LEAD_STALE_DAYS}+ days</span>
+              </div>
+
+              <div className="grid grid-cols-4 gap-3">
+                <MetricCard label="New leads" value={leadMetrics.newCount} />
+                <MetricCard label="Working (Att/MQL)" value={leadMetrics.engaged} color="text-orange-600" />
+                <MetricCard label="Qualified (SQL+)" value={leadMetrics.qualified} color="text-emerald-600" />
+                <MetricCard label="Disqualified" value={leadMetrics.disqualified} color="text-red-600" />
+              </div>
+              <div className="grid grid-cols-4 gap-3">
+                <MetricCard label="Conversion" value={`${leadMetrics.conv}%`} sub="new → qualified" />
+                <MetricCard label="Avg days to qualify" value={leadMetrics.avgToQualify != null ? leadMetrics.avgToQualify.toFixed(1) : '--'} />
+                <MetricCard label="Open leads" value={leadMetrics.openCount} />
+                <MetricCard label="Stale now" value={leadMetrics.staleLeads.length} color={leadMetrics.staleLeads.length ? 'text-red-600' : 'text-emerald-600'} />
+              </div>
+
+              <div className="glass-card rounded-2xl p-4">
+                <div className={label + ' mb-3'}>New leads per week</div>
+                <div className="flex items-end gap-2 h-28">
+                  {leadMetrics.weeks.map((w, i) => (
+                    <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                      <span className="text-[10px] font-mono text-muted">{w.n || ''}</span>
+                      <div className="w-full bg-ember/80 rounded-t" style={{ height: `${Math.round((w.n / Math.max(1, ...leadMetrics.weeks.map(w => w.n))) * 88)}px` }} />
+                      <span className="text-[9px] text-dim whitespace-nowrap">{w.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="glass-card rounded-2xl p-4">
+                  <div className={label + ' mb-3'}>Leads by source ({leadDays}d)</div>
+                  {Object.entries(leadMetrics.bySource).sort((a, b) => b[1].count - a[1].count).map(([s, d]) => (
+                    <div key={s} className="flex items-center gap-3 py-1.5">
+                      <span className="text-xs text-paper w-28 truncate">{s}</span>
+                      <div className="flex-1 h-2 bg-ink rounded-full overflow-hidden">
+                        <div className="h-full bg-ember rounded-full" style={{ width: `${Math.round((d.count / Math.max(1, leadMetrics.newCount)) * 100)}%` }} />
+                      </div>
+                      <span className="text-xs font-mono text-ember w-8 text-right">{d.count}</span>
+                      <span className="text-[10px] font-mono text-emerald-600 w-14 text-right">{d.count ? Math.round((d.qualified / d.count) * 100) : 0}% qual</span>
+                    </div>
+                  ))}
+                  {Object.keys(leadMetrics.bySource).length === 0 && <div className="text-xs text-dim italic py-2">No new leads in this period.</div>}
+                </div>
+                <div className="glass-card rounded-2xl p-4">
+                  <div className={label + ' mb-3'}>Leads by owner ({leadDays}d)</div>
+                  <div className="flex text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim pb-1">
+                    <span className="flex-1">Owner</span><span className="w-10 text-right">New</span><span className="w-10 text-right">Qual</span><span className="w-10 text-right">Stale</span>
+                  </div>
+                  {Object.entries(leadMetrics.byOwner).sort((a, b) => b[1].count - a[1].count).map(([n, d]) => (
+                    <div key={n} className="flex py-1 text-xs border-t border-bdr">
+                      <span className="flex-1 text-paper truncate">{n}</span>
+                      <span className="w-10 text-right font-mono text-paper">{d.count}</span>
+                      <span className="w-10 text-right font-mono text-emerald-600">{d.qualified}</span>
+                      <span className={`w-10 text-right font-mono ${d.stale ? 'text-red-600' : 'text-dim'}`}>{d.stale}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="glass-card rounded-2xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-bdr flex items-center gap-2">
+                  <div className={label}>Stale leads — need a touch</div>
+                  <span className="ml-auto text-[10px] text-dim">{leadMetrics.staleLeads.length} open leads untouched {LEAD_STALE_DAYS}+ days</span>
+                </div>
+                <div className="p-2">
+                  {leadMetrics.staleLeads.slice(0, 12).map(l => (
+                    <div key={l.id} className="flex items-center gap-3 px-2 py-1.5 border-b border-bdr last:border-b-0 text-xs">
+                      <span className="flex-1 text-paper truncate">{l.name}</span>
+                      <span className="text-muted w-24 truncate">{ownerName(l.owner_id) || 'Unassigned'}</span>
+                      <span className="text-muted w-20 capitalize">{(l.stage || '').replace(/_/g, ' ')}</span>
+                      <span className="text-red-600 font-mono w-12 text-right">{l.staleDays}d</span>
+                    </div>
+                  ))}
+                  {leadMetrics.staleLeads.length === 0 && <div className="text-xs text-dim italic py-3 text-center">Nothing stale — pipeline is being worked. 🎉</div>}
+                </div>
+              </div>
+
+              <button onClick={() => exportCSV(
+                ['Name', 'Stage', 'Source', 'Owner', 'Created', 'Last touched', 'Days since touch'],
+                leads.map(l => [l.name, l.stage, l.source, ownerName(l.owner_id), l.created_at, l.updated_at, Math.floor((Date.now() - new Date(l.updated_at || l.created_at).getTime()) / 86400000)]),
+                'leads-export.csv'
+              )} className="px-3 py-1.5 text-xs text-muted border border-bdr rounded hover:text-paper">Export leads CSV</button>
+            </>
+          )}
 
           {tab === 'sales' && (
             <>
