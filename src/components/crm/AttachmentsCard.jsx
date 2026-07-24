@@ -19,6 +19,8 @@ function iconFor(mime = '', name = '') {
   return '\u{1F4CE}';
 }
 const isImg = (a) => (a.mime_type || '').toLowerCase().startsWith('image/');
+// Cloud-link attachments (OneDrive/Drive shared as a link) store the URL as the path.
+const isLink = (a) => /^https?:\/\//.test(a.file_path || '');
 const sourceLabel = (s) => s === 'inbound_email' ? ' · from email' : s === 'outbound_email' ? ' · sent' : '';
 
 export default function AttachmentsCard({ subjectType, subjectId, profile }) {
@@ -39,7 +41,7 @@ export default function AttachmentsCard({ subjectType, subjectId, profile }) {
     const rows = data || [];
     setItems(rows);
     // Sign image paths so we can show real thumbnails (private bucket).
-    const imgs = rows.filter(isImg);
+    const imgs = rows.filter(a => isImg(a) && !isLink(a));
     if (imgs.length) {
       const { data: signed } = await supabase.storage.from('attachments')
         .createSignedUrls(imgs.map(a => a.file_path), 3600);
@@ -77,6 +79,8 @@ export default function AttachmentsCard({ subjectType, subjectId, profile }) {
   };
 
   const download = async (a) => {
+    // Cloud links open directly; stored files go via a signed URL.
+    if (isLink(a)) { window.open(a.file_path, '_blank'); return; }
     // Open the tab synchronously (inside the click) BEFORE the await, or the
     // browser blocks it as a popup and nothing happens. Point it at the signed
     // URL once it resolves.
@@ -88,7 +92,7 @@ export default function AttachmentsCard({ subjectType, subjectId, profile }) {
 
   const remove = async (a) => {
     if (!confirm(`Delete "${a.file_name}"?`)) return;
-    await supabase.storage.from('attachments').remove([a.file_path]);
+    if (!isLink(a)) await supabase.storage.from('attachments').remove([a.file_path]);
     await supabase.from('attachments').delete().eq('id', a.id);
     load();
   };
@@ -117,12 +121,12 @@ export default function AttachmentsCard({ subjectType, subjectId, profile }) {
               <img src={previews[a.id]} alt={a.file_name} onClick={() => download(a)}
                 className="w-12 h-12 rounded-lg object-cover shrink-0 cursor-pointer border border-bdr" />
             ) : (
-              <span className="text-lg shrink-0">{iconFor(a.mime_type, a.file_name)}</span>
+              <span className="text-lg shrink-0">{isLink(a) ? '\u{1F517}' : iconFor(a.mime_type, a.file_name)}</span>
             )}
             <div className="flex-1 min-w-0 cursor-pointer" onClick={() => download(a)}>
               <div className="text-sm text-paper truncate hover:text-ember transition">{a.file_name}</div>
               <div className="text-[10px] text-dim">
-                {fmtSize(a.size_bytes)}{sourceLabel(a.source)}
+                {isLink(a) ? 'shared link' : fmtSize(a.size_bytes)}{sourceLabel(a.source)}
               </div>
             </div>
             <button onClick={() => download(a)} className="text-xs text-ember hover:text-ember-deep shrink-0" title="Download">{'\u{2B07}'}</button>

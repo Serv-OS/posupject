@@ -54,6 +54,21 @@ export async function storeAttachment(supabase: any, o: {
   return true;
 }
 
+// A cloud-link "attachment" (OneDrive/Drive/SharePoint reference) has no bytes
+// to store — keep the URL so the ticket still shows and opens it.
+export async function storeLinkAttachment(supabase: any, o: {
+  ticketId: string; activityId?: string | null; name: string; url: string; source: string;
+}): Promise<boolean> {
+  if (!o.ticketId || !o.url) return false;
+  const { error } = await supabase.from("attachments").insert({
+    subject_type: "ticket", subject_id: o.ticketId, activity_id: o.activityId || null,
+    file_name: o.name || "Shared file", file_path: o.url, mime_type: "text/uri-list",
+    source: o.source,
+  });
+  if (error) { console.error("link attachment insert failed:", error.message); return false; }
+  return true;
+}
+
 // Download stored files (by bucket path) so an outbound reply can attach them.
 export async function loadAttachmentsForSend(
   supabase: any,
