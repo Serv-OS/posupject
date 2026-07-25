@@ -41,6 +41,9 @@ export default function ReportsPanel({ profile, onNavigate }) {
   const [companies, setCompanies] = useState([]);
   const [out, setOut] = useState([]);          // money-out rows (paid bills + expenses)
   const [hasOut, setHasOut] = useState(false);
+  const [bills, setBills] = useState([]);      // full bills for the Money-out report
+  const [billCats, setBillCats] = useState([]);
+  const [view, setView] = useState('in');      // 'in' = invoicing, 'out' = bills
   const [loading, setLoading] = useState(true);
   const [companyId, setCompanyId] = useState('');
   const [sort, setSort] = useState({ key: 'invoiced', dir: 'desc' });
@@ -67,6 +70,10 @@ export default function ReportsPanel({ profile, onNavigate }) {
         if (!r.error) { exists = true; if (r.data) rows.push(...r.data); }
       }
       setOut(rows); setHasOut(exists);
+      const b = await supabase.from('bills').select('*, supplier:inv_suppliers(name), company:companies(name)');
+      if (!b.error) setBills(b.data || []);
+      const ec = await supabase.from('expense_categories').select('id, label');
+      if (!ec.error) setBillCats(ec.data || []);
     }
     setLoading(false);
   })(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -152,8 +159,16 @@ export default function ReportsPanel({ profile, onNavigate }) {
         <BarChart3 size={20} className="text-ember" />
         <div>
           <div className="text-xl font-bold text-paper">Reports</div>
-          <div className="text-xs text-muted">Invoicing &amp; cash flow — what you're taking, have taken, and who owes</div>
+          <div className="text-xs text-muted">{view === 'out' ? 'Bills — what you owe, have paid, and to whom' : "Invoicing & cash flow — what you're taking, have taken, and who owes"}</div>
         </div>
+        {hasOut && (
+          <div className="ml-auto flex items-center gap-1">
+            <button onClick={() => setView('in')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition ${view === 'in' ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Money in</button>
+            <button onClick={() => setView('out')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition ${view === 'out' ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Money out — bills</button>
+          </div>
+        )}
       </div>
 
       {/* Filters */}
@@ -177,7 +192,9 @@ export default function ReportsPanel({ profile, onNavigate }) {
         </div>
       </div>
 
-      {loading ? <div className="p-10 text-center text-dim text-sm">Loading…</div> : (
+      {loading ? <div className="p-10 text-center text-dim text-sm">Loading…</div> : view === 'out' ? (
+        <BillsOutReport bills={bills} cats={billCats} from={from} to={to} companyId={companyId} />
+      ) : (
       <div className="px-6 py-4 space-y-4">
         {/* KPI row */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -267,6 +284,196 @@ export default function ReportsPanel({ profile, onNavigate }) {
         </div>
       </div>
       )}
+    </div>
+  );
+}
+
+
+// ── Money out: the bills report — billed vs paid, aging, suppliers, categories ──
+function BillsOutReport({ bills, cats, from, to, companyId }) {
+  const acct = (b) => (b.issue_date || b.created_at || '').slice(0, 10);
+  const owedB = (b) => Math.max(0, Number(b.total || 0) - Number(b.amount_paid || 0));
+  const paidAmt = (b) => Number(b.amount_paid ?? b.total ?? 0);
+  const today = iso(new Date());
+
+  const live = bills.filter(b => b.status !== 'void').filter(b => !companyId || b.company_id === companyId);
+  const unpaid = live.filter(b => b.status !== 'paid' && owedB(b) > 0);
+  const billName = (b) => b.supplier?.name || b.company?.name || b.description || 'Untitled bill';
+
+  const billedPeriod = live.filter(b => inRange(acct(b), from, to)).reduce((s, b) => s + Number(b.total || 0), 0);
+  const paidPeriod = live.filter(b => b.paid_at && inRange(b.paid_at, from, to)).reduce((s, b) => s + paidAmt(b), 0);
+  const toPayNow = unpaid.reduce((s, b) => s + owedB(b), 0);
+  const overdueNow = unpaid.filter(b => b.due_date && (b.due_date || '').slice(0, 10) < today).reduce((s, b) => s + owedB(b), 0);
+
+  // Monthly billed vs paid across the range
+  const months = (() => { const keys = []; let d = startOfMonth(new Date(from)); const end = startOfMonth(new Date(to));
+    while (d <= end && keys.length < 60) { keys.push(iso(d).slice(0, 7)); d = addMonths(d, 1); } return keys; })();
+  const series = months.map(mk => ({
+    key: mk,
+    billed: live.filter(b => monthKey(acct(b)) === mk).reduce((s, b) => s + Number(b.total || 0), 0),
+    paid: live.filter(b => b.paid_at && monthKey(b.paid_at) === mk).reduce((s, b) => s + paidAmt(b), 0),
+  }));
+  const seriesMax = Math.max(1, ...series.map(m => Math.max(m.billed, m.paid)));
+
+  // Per supplier
+  const bySup = (() => {
+    const map = new Map();
+    const bump = (k, patch) => { const c = map.get(k) || { name: k, billed: 0, paid: 0, outstanding: 0, overdue: 0 };
+      map.set(k, { ...c, ...Object.fromEntries(Object.entries(patch).map(([kk, v]) => [kk, c[kk] + v])) }); };
+    for (const b of live) {
+      const n = billName(b);
+      if (inRange(acct(b), from, to)) bump(n, { billed: Number(b.total || 0) });
+      if (b.paid_at && inRange(b.paid_at, from, to)) bump(n, { paid: paidAmt(b) });
+      if (b.status !== 'paid' && owedB(b) > 0) {
+        bump(n, { outstanding: owedB(b) });
+        if (b.due_date && (b.due_date || '').slice(0, 10) < today) bump(n, { overdue: owedB(b) });
+      }
+    }
+    return [...map.values()].filter(r => r.billed || r.paid || r.outstanding).sort((a, b) => b.billed - a.billed);
+  })();
+
+  // Spend by category (billed in period)
+  const byCat = (() => { const map = new Map();
+    for (const b of live) { if (!inRange(acct(b), from, to)) continue;
+      const lbl = cats.find(c => c.id === b.category_id)?.label || 'Uncategorised';
+      map.set(lbl, (map.get(lbl) || 0) + Number(b.total || 0)); }
+    return [...map.entries()].sort((a, b) => b[1] - a[1]); })();
+  const catMax = Math.max(1, ...byCat.map(([, v]) => v));
+
+  // Aged creditors (what YOU owe, by how overdue)
+  const aged = [['Not due', 0], ['1–30', 0], ['31–60', 0], ['61–90', 0], ['90+', 0]];
+  for (const b of unpaid) {
+    const due = (b.due_date || '').slice(0, 10); let idx = 0;
+    if (due && due < today) { const days = Math.floor((new Date(today) - new Date(due)) / 86400000);
+      idx = days <= 30 ? 1 : days <= 60 ? 2 : days <= 90 ? 3 : 4; }
+    aged[idx][1] += owedB(b);
+  }
+  const agedMax = Math.max(1, ...aged.map(x => x[1]));
+
+  const upcoming = unpaid.filter(b => b.due_date).sort((a, b) => (a.due_date < b.due_date ? -1 : 1)).slice(0, 12);
+
+  const exportBills = () => {
+    const rows = live.map(b => [billName(b), b.status, b.issue_date, b.due_date, b.total, b.amount_paid, owedB(b), b.paid_at]);
+    const csv = [['Bill', 'Status', 'Issued', 'Due', 'Total', 'Paid', 'Outstanding', 'Paid at'].join(','),
+      ...rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'bills-report.csv'; a.click();
+  };
+
+  return (
+    <div className="px-6 py-4 space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Stat label="Billed (period)" value={money(billedPeriod)} tone="accent" sub={`${from} → ${to}`} />
+        <Stat label="Paid (period)" value={money(paidPeriod)} tone="good" sub="Payments made" />
+        <Stat label="To pay (now)" value={money(toPayNow)} sub={`${unpaid.length} unpaid bill${unpaid.length === 1 ? '' : 's'}`} />
+        <Stat label="Overdue (now)" value={money(overdueNow)} tone="bad" sub="Past due date" />
+      </div>
+
+      <div className="glass-card rounded-2xl p-5">
+        <div className="flex items-center gap-3 mb-4">
+          <h3 className="text-[13px] font-bold text-paper">Spend over time</h3>
+          <div className="flex items-center gap-3 ml-auto text-[11px] text-muted">
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-ember/70" /> Billed</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-400" /> Paid</span>
+          </div>
+        </div>
+        <div className="flex items-end gap-2 h-40 overflow-x-auto">
+          {series.map(m => (
+            <div key={m.key} className="flex-1 min-w-[26px] flex flex-col items-center gap-1" title={`${monthLabel(m.key)}\nBilled ${money(m.billed)}\nPaid ${money(m.paid)}`}>
+              <div className="w-full flex items-end justify-center gap-0.5 h-full">
+                <div className="w-1/2 rounded-t bg-ember/70" style={{ height: `${(m.billed / seriesMax) * 100}%`, minHeight: m.billed ? 2 : 0 }} />
+                <div className="w-1/2 rounded-t bg-red-400/80" style={{ height: `${(m.paid / seriesMax) * 100}%`, minHeight: m.paid ? 2 : 0 }} />
+              </div>
+              <div className="text-[9px] text-dim font-mono whitespace-nowrap">{monthLabel(m.key)}</div>
+            </div>
+          ))}
+          {series.length === 0 && <div className="text-dim text-sm italic m-auto">No data in range.</div>}
+        </div>
+      </div>
+
+      <div className="glass-card rounded-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-bdr flex items-center gap-2">
+          <h3 className="text-[13px] font-bold text-paper">Per supplier</h3>
+          <span className="text-xs text-dim font-mono">({bySup.length})</span>
+          <span className="text-[11px] text-dim ml-2">billed &amp; paid in period · outstanding &amp; overdue now</span>
+          <button onClick={exportBills} className="ml-auto px-3 py-1 text-xs text-muted border border-bdr rounded hover:text-paper">Export CSV</button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[640px]">
+            <thead>
+              <tr className="text-[10px] font-mono font-bold uppercase tracking-[0.12em] text-dim border-b border-bdr">
+                <th className="px-3 py-2 text-left">Supplier</th><th className="px-3 py-2 text-right">Billed</th>
+                <th className="px-3 py-2 text-right">Paid</th><th className="px-3 py-2 text-right">Outstanding</th><th className="px-3 py-2 text-right">Overdue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bySup.map(r => (
+                <tr key={r.name} className="border-b border-bdr/60">
+                  <td className="px-3 py-2 text-paper font-medium">{r.name}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{money(r.billed)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{money(r.paid)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{money(r.outstanding)}</td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${r.overdue > 0 ? 'text-red-600 font-semibold' : 'text-dim'}`}>{money(r.overdue)}</td>
+                </tr>
+              ))}
+              {bySup.length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-dim text-sm italic">No bills in range.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="glass-card rounded-2xl p-5">
+          <h3 className="text-[13px] font-bold text-paper mb-1">Spend by category</h3>
+          <div className="text-[11px] text-dim mb-4">Billed in period</div>
+          <div className="space-y-2.5">
+            {byCat.map(([lbl, amt]) => (
+              <div key={lbl} className="flex items-center gap-3">
+                <div className="w-32 text-xs text-muted truncate shrink-0">{lbl}</div>
+                <div className="flex-1 h-3.5 rounded bg-card overflow-hidden">
+                  <div className="h-full rounded bg-ember/60" style={{ width: `${(amt / catMax) * 100}%` }} />
+                </div>
+                <div className="w-24 text-right text-sm tabular-nums text-paper shrink-0">{money(amt)}</div>
+              </div>
+            ))}
+            {byCat.length === 0 && <div className="text-dim text-sm italic">No spend in range.</div>}
+          </div>
+        </div>
+        <div className="glass-card rounded-2xl p-5">
+          <h3 className="text-[13px] font-bold text-paper mb-1">Aged creditors</h3>
+          <div className="text-[11px] text-dim mb-4">Unpaid bills by how long overdue (as of today)</div>
+          <div className="space-y-2.5">
+            {aged.map(([lbl, amt]) => (
+              <div key={lbl} className="flex items-center gap-3">
+                <div className="w-16 text-xs text-muted font-mono shrink-0">{lbl}</div>
+                <div className="flex-1 h-3.5 rounded bg-card overflow-hidden">
+                  <div className={`h-full rounded ${lbl === 'Not due' ? 'bg-ember/50' : lbl === '90+' ? 'bg-red-500' : 'bg-amber-400'}`} style={{ width: `${(amt / agedMax) * 100}%` }} />
+                </div>
+                <div className="w-24 text-right text-sm tabular-nums text-paper shrink-0">{money(amt)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="glass-card rounded-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-bdr">
+          <h3 className="text-[13px] font-bold text-paper">Coming up — unpaid bills by due date</h3>
+        </div>
+        <div className="p-2">
+          {upcoming.map(b => {
+            const late = (b.due_date || '').slice(0, 10) < today;
+            return (
+              <div key={b.id} className="flex items-center gap-3 px-3 py-2 border-b border-bdr/60 last:border-b-0 text-sm">
+                <span className="flex-1 text-paper truncate">{billName(b)}</span>
+                <span className={`text-xs w-24 ${late ? 'text-red-600 font-semibold' : 'text-muted'}`}>{b.due_date}</span>
+                <span className="w-24 text-right tabular-nums text-paper">{money(owedB(b))}</span>
+              </div>
+            );
+          })}
+          {upcoming.length === 0 && <div className="px-3 py-6 text-center text-dim text-sm italic">Nothing due — all bills paid. 🎉</div>}
+        </div>
+      </div>
     </div>
   );
 }
