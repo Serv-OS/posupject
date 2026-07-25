@@ -220,12 +220,12 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
             {uk && (
               <div className="glass-card rounded-2xl p-4 space-y-3">
                 <div className="text-sm font-bold text-paper">VAT reclaim</div>
-                <div><label className={label}>Supplier VAT number</label><input className={input} value={bill.supplier_vat_number || ''} onChange={e => set('supplier_vat_number', e.target.value)} placeholder="GB123456789" /></div>
+                <div><label className={label}>Supplier VAT number (optional)</label><input className={input} value={bill.supplier_vat_number || ''} onChange={e => set('supplier_vat_number', e.target.value)} placeholder="GB123456789" /></div>
                 <Check label="Valid VAT invoice held" checked={!!bill.has_vat_invoice} onChange={v => set('has_vat_invoice', v)} />
                 <Check label="Input VAT reclaimable" checked={!!bill.vat_reclaimable} onChange={v => set('vat_reclaimable', v)} />
                 <div><label className={label}>Reclaim amount (blank = full VAT {gbp2(totals.vat)})</label><input type="number" className={input} value={bill.vat_reclaim_amount ?? ''} onChange={e => set('vat_reclaim_amount', e.target.value)} placeholder={String(totals.vat)} /></div>
-                {(!bill.has_vat_invoice || !bill.supplier_vat_number) && bill.vat_reclaimable && totals.vat > 0 &&
-                  <div className="text-[11px] text-amber-600">⚠ Not yet reclaimable — needs a valid VAT invoice + supplier VAT number.</div>}
+                {!bill.has_vat_invoice && bill.vat_reclaimable && totals.vat > 0 &&
+                  <div className="text-[11px] text-amber-600">⚠ Not yet reclaimable — tick "Valid VAT invoice held" once you have the invoice or receipt.</div>}
               </div>
             )}
 
