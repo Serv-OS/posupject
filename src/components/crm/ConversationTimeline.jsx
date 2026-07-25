@@ -39,6 +39,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [isMsCrm, setIsMsCrm] = useState(false);
+  const [mySignature, setMySignature] = useState('');
   // Images/files staged in the composer to send with an email reply.
   const [pendingFiles, setPendingFiles] = useState([]); // [{ file, name, size }]
   const attachRef = useRef(null);
@@ -80,6 +81,13 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   useEffect(() => {
     supabase.from('microsoft_connections').select('id').limit(1).then(r => setIsMsCrm(!r.error));
   }, []);
+
+  // The sender's saved signature (Account page) — appended to ticket email replies
+  // exactly like the personal Inbox does.
+  useEffect(() => {
+    supabase.from('profiles').select('email_signature').eq('id', profile.id).maybeSingle()
+      .then(r => setMySignature(r.data?.email_signature || '')).catch(() => {});
+  }, [profile.id]);
 
   // Auto-grow the composer with its content (capped at ~13 lines, then scrolls)
   // so a long reply is fully visible while writing it.
@@ -298,7 +306,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               ticket_id: subjectId,
               to: toEmail.trim(),
               subject: null, // always reply with the customer's email subject ("Re: …", threaded server-side)
-              body: body.trim(),
+              body: body.trim() + (mySignature ? `\n\n--\n${mySignature}` : ''),
               attachments: attachRefs,
             }),
           }
@@ -651,6 +659,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
             <div className="space-y-2 mb-2">
               <input className={input} value={toEmail || customerEmail} onChange={e => setToEmail(e.target.value)}
                 placeholder="To email address" />
+              {mySignature && <div className="text-[10px] text-dim px-1">Your signature will be added automatically (edit it under Account).</div>}
               {pendingFiles.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {pendingFiles.map((p, i) => (
