@@ -68,6 +68,7 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
       expense_date: exp.expense_date, description: (exp.description || '').trim() || null,
       reimburse_to_user_id: exp.reimburse_to_user_id || exp.submitter_id,
       vat_reclaimable: !!exp.vat_reclaimable, has_vat_invoice: !!exp.has_vat_invoice,
+      vat_reclaim_amount: exp.vat_reclaim_amount === '' || exp.vat_reclaim_amount == null ? null : Number(exp.vat_reclaim_amount),
       notes: (exp.notes || '').trim() || null, updated_at: nowIso(),
     };
     if (exp.type === 'mileage') {
@@ -193,6 +194,14 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
               )}
             </div>
 
+            <div className="glass-card rounded-2xl p-4 space-y-3">
+              <div className="text-sm font-bold text-paper">VAT reclaim</div>
+              <Check label="Valid VAT invoice / receipt held" checked={!!exp.has_vat_invoice} onChange={v => editable && set('has_vat_invoice', v)} />
+              <Check label="Input VAT reclaimable" checked={!!exp.vat_reclaimable} onChange={v => editable && set('vat_reclaimable', v)} />
+              <div><label className={label}>Reclaim amount (blank = full VAT)</label><input type="number" className={input} disabled={!editable} value={exp.vat_reclaim_amount ?? ''} onChange={e => set('vat_reclaim_amount', e.target.value)} /></div>
+              {!exp.has_vat_invoice && exp.vat_reclaimable && <div className="text-[11px] text-amber-600">⚠ Not yet reclaimable — tick "Valid VAT invoice / receipt held" once you have it.</div>}
+            </div>
+
             <AttachmentsCard subjectType="expense" subjectId={expenseId} profile={profile} />
             {exp.type !== 'mileage' && receiptCount === 0 && <div className="text-[11px] text-amber-600">⚠ A receipt is required before you can submit this claim.</div>}
 
@@ -243,6 +252,15 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
         </div>
       </div>
     </div>
+  );
+}
+
+function Check({ label, checked, onChange }) {
+  return (
+    <button type="button" onClick={() => onChange(!checked)} className="flex items-center gap-2 text-sm text-paper">
+      <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] ${checked ? 'bg-ember border-ember text-white' : 'border-bdr'}`}>{checked ? '✓' : ''}</span>
+      {label}
+    </button>
   );
 }
 
