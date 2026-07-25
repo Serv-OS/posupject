@@ -81,6 +81,15 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
     supabase.from('microsoft_connections').select('id').limit(1).then(r => setIsMsCrm(!r.error));
   }, []);
 
+  // Auto-grow the composer with its content (capped at ~13 lines, then scrolls)
+  // so a long reply is fully visible while writing it.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight + 2, 340) + 'px';
+  }, [body, channel]);
+
   useEffect(() => {
     load();
     // Live conversation: reload when any message lands on this record. Realtime
@@ -694,7 +703,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
             <textarea
               ref={bodyRef}
               className={input + ' resize-none pr-20'}
-              rows={channel === 'note' ? 3 : 4}
+              rows={channel === 'note' ? 3 : 5}
               value={body}
               onChange={handleBodyChange}
               placeholder={
