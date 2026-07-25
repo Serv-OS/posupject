@@ -51,6 +51,19 @@ export function computeTotals(lines = []) {
   return { net, vat, gross: round2(net + vat) };
 }
 
+// { net, vat, gross } for lines whose unit_price is VAT-INCLUSIVE: the line value
+// (qty × price) IS the gross; VAT is extracted per line with the gross-fraction
+// formula below, then summed — mirroring computeTotals' per-line-then-sum shape.
+export function computeTotalsInclusive(lines = []) {
+  let net = 0, vat = 0, gross = 0;
+  for (const l of lines) {
+    const g = lineNet(l);
+    const v = vatFractionOfGross(g, l.tax_rate ?? l.vat_rate ?? 0);
+    gross += g; vat += v; net += round2(g - v);
+  }
+  return { net: round2(net), vat: round2(vat), gross: round2(gross) };
+}
+
 // VAT contained in a VAT-INCLUSIVE (gross) amount at `rate`% = gross × rate/(100+rate).
 // At the 20% standard rate this is the 1/6 fraction HMRC uses for reclaimable VAT on
 // mileage fuel (fuel element × 1/6). Rounded to 2dp.

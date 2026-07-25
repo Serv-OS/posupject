@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
-import { computeTotals, lineNet, gbp2 } from '../../lib/money.js';
+import { computeTotals, computeTotalsInclusive, lineNet, vatFractionOfGross, round2, gbp2 } from '../../lib/money.js';
 import { isUkVat } from '../../lib/branding.js';
 import AttachmentsCard from '../crm/AttachmentsCard.jsx';
 
@@ -36,7 +36,10 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
   }, [billId]);
   useEffect(() => { load(); }, [load]);
 
-  const totals = useMemo(() => computeTotals(lines), [lines]);
+  // Inc-VAT mode: entered prices are gross; net/VAT are extracted, never guessed.
+  const inc = !!bill?.amounts_inclusive;
+  const totals = useMemo(() => inc ? computeTotalsInclusive(lines) : computeTotals(lines), [lines, inc]);
+  const lNet = (l) => inc ? round2(lineNet(l) - vatFractionOfGross(lineNet(l), Number(l.tax_rate) || 0)) : lineNet(l);
 
   if (!bill) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading bill…</div>;
 
@@ -65,6 +68,7 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
       description: (bill.description || '').trim() || null, supplier_ref: (bill.supplier_ref || '').trim() || null,
       issue_date: bill.issue_date, due_date: bill.due_date || null, currency: bill.currency || 'GBP',
       subtotal: totals.net, tax_amount: totals.vat, total: totals.gross,
+      amounts_inclusive: inc,
       vat_reclaimable: !!bill.vat_reclaimable, vat_reclaim_amount: reclaim,
       has_vat_invoice: !!bill.has_vat_invoice, supplier_vat_number: (bill.supplier_vat_number || '').trim() || null,
       amount_paid: Number(bill.amount_paid) || 0, paid_at: bill.paid_at || null,
@@ -79,7 +83,7 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
         await supabase.from('bill_line_items').insert(clean.map((l, i) => ({
           bill_id: billId, name: l.name.trim(), description: (l.description || '').trim() || null,
           qty: Number(l.qty) || 1, unit_price: Number(l.unit_price) || 0, tax_rate: Number(l.tax_rate) || 0,
-          category_id: l.category_id || null, line_total: lineNet(l), sort: i,
+          category_id: l.category_id || null, line_total: lNet(l), sort: i,
         })));
       }
     }
@@ -122,6 +126,12 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
             <div className="glass-card rounded-2xl overflow-hidden">
               <div className="px-4 py-3 border-b border-bdr flex items-center gap-2">
                 <h3 className="text-sm font-bold text-paper">Line items</h3>
+                <div className="flex items-center gap-1 ml-3">
+                  <button onClick={() => canWrite && set('amounts_inclusive', false)}
+                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition ${!inc ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Ex VAT</button>
+                  <button onClick={() => canWrite && set('amounts_inclusive', true)}
+                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition ${inc ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Inc VAT</button>
+                </div>
                 {canWrite && <button onClick={addLine} className="ml-auto text-xs text-ember hover:text-ember-deep font-medium">+ Add line</button>}
               </div>
               <div className="p-3 space-y-2">
@@ -134,14 +144,14 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                       <div><span className="text-[9px] text-dim block">Qty</span><input type="number" className={cell + ' w-full'} value={l.qty} onChange={e => setLine(i, { qty: e.target.value })} /></div>
-                      <div><span className="text-[9px] text-dim block">Unit £ (net)</span><input type="number" className={cell + ' w-full'} value={l.unit_price} onChange={e => setLine(i, { unit_price: e.target.value })} /></div>
+                      <div><span className="text-[9px] text-dim block">{inc ? 'Unit £ (inc VAT)' : 'Unit £ (net)'}</span><input type="number" className={cell + ' w-full'} value={l.unit_price} onChange={e => setLine(i, { unit_price: e.target.value })} /></div>
                       <div><span className="text-[9px] text-dim block">VAT %</span><input type="number" className={cell + ' w-full'} value={l.tax_rate ?? 20} onChange={e => setLine(i, { tax_rate: e.target.value })} /></div>
                       <div className="col-span-2"><span className="text-[9px] text-dim block">Category</span>
                         <select className={cell + ' w-full'} value={l.category_id || ''} onChange={e => setLine(i, { category_id: e.target.value || null })}>
                           <option value="">—</option>{categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                         </select></div>
                     </div>
-                    <div className="text-right text-xs text-muted">Net <span className="text-paper font-mono font-semibold">{gbp2(lineNet(l))}</span></div>
+                    <div className="text-right text-xs text-muted">{inc && <>Inc <span className="text-paper font-mono">{gbp2(lineNet(l))}</span> · </>}Net <span className="text-paper font-mono font-semibold">{gbp2(lNet(l))}</span></div>
                   </div>
                 ))}
               </div>
