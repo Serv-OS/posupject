@@ -164,6 +164,10 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
 
             <div className="glass-card rounded-2xl p-4 space-y-3">
               <div className="text-sm font-bold text-paper">Bill details</div>
+              <div><label className={label}>Bill name</label>
+                <input className={input} value={bill.description || ''} onChange={e => set('description', e.target.value)}
+                  placeholder="e.g. July electricity" />
+                <div className="text-[10px] text-dim mt-1">Shown in the bills list when there's no supplier.</div></div>
               <div><label className={label}>Supplier</label>
                 <select className={input} value={bill.supplier_id || ''} onChange={e => pickSupplier(e.target.value)}>
                   <option value="">—</option>{suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
