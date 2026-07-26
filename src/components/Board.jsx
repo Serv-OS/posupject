@@ -38,6 +38,7 @@ export default function Board({ project, profile, onOpenItem }) {
   const [filter, setFilter]   = useState({ priority:'all', type:'all', assignee:'all', feature:'all', search:'' });
   const [sort, setSort]       = useState(() => localStorage.getItem('board-sort') || 'manual');
   const [dragItem, setDragItem] = useState(null);
+  const [dropHint, setDropHint] = useState(null);   // { itemId, edge } | { bucketId: 'end' }
   const [bucketEditor, setBucketEditor] = useState(null);
   const [creating, setCreating] = useState(null);
 
@@ -204,20 +205,73 @@ export default function Board({ project, profile, onOpenItem }) {
     e.dataTransfer.effectAllowed = 'move';
   };
   const onDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+  const onDragEnd = () => { setDragItem(null); setDropHint(null); };
+
+  // Hovering a card shows where the drop will land (above or below it).
+  const onCardDragOver = (e, item) => {
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    if (!dragItem || dragItem.id === item.id) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setDropHint({ itemId: item.id, edge: e.clientY < r.top + r.height / 2 ? 'top' : 'bottom' });
+  };
+
+  // Write the new running order for a bucket, then move/insert the dragged card.
+  // Positions are rewritten 0..n so the manual order is stable and persists.
+  const commitOrder = async (bucketId, orderedIds, movedAcross) => {
+    const bucket = buckets.find(b => b.id === bucketId);
+    if (movedAcross) {
+      await supabase.from('backlog_items').update({
+        bucket_id: bucketId,
+        closed_at: bucket?.is_done ? new Date().toISOString() : null,
+      }).eq('id', dragItem.id);
+      await supabase.from('activity').insert({
+        item_id: dragItem.id, backlog_project_id: project.id, actor_id: profile.id, action: 'moved',
+        detail: { from: dragItem.bucket_id, to: bucketId, bucket_name: bucket?.name },
+      });
+    }
+    await Promise.all(orderedIds.map((id, idx) =>
+      supabase.from('backlog_items').update({ position: idx }).eq('id', id)));
+    setDragItem(null); setDropHint(null);
+    load();
+  };
+
+  // Every card in a bucket, in display order — the basis for renumbering.
+  // Uses unfiltered items so a card hidden by a filter keeps its place.
+  const bucketOrder = (bucketId) => items
+    .filter(i => i.bucket_id === bucketId)
+    .sort(SORTERS[sort] || SORTERS.manual);
+
+  // Drop onto a card: insert the dragged card immediately above or below it.
+  const onDropOnCard = async (e, target) => {
+    e.preventDefault(); e.stopPropagation();
+    const hint = dropHint;
+    setDropHint(null);
+    if (!dragItem || dragItem.id === target.id) { setDragItem(null); return; }
+    const bucketId = target.bucket_id;
+    const movedAcross = dragItem.bucket_id !== bucketId;
+    const list = bucketOrder(bucketId).filter(i => i.id !== dragItem.id);
+    let idx = list.findIndex(i => i.id === target.id);
+    if (idx < 0) idx = list.length;
+    if (hint?.itemId === target.id && hint.edge === 'bottom') idx += 1;
+    list.splice(idx, 0, dragItem);
+    // A hand-made order only shows in manual mode, so honour the intent.
+    if (sort !== 'manual') setSort('manual');
+    setItems(prev => prev.map(i => i.id === dragItem.id ? { ...i, bucket_id: bucketId } : i));
+    await commitOrder(bucketId, list.map(i => i.id), movedAcross);
+  };
+
+  // Drop on empty space in a column: send the card to the bottom of it.
   const onDrop = async (e, bucketId) => {
     e.preventDefault();
-    if (!dragItem || dragItem.bucket_id === bucketId) { setDragItem(null); return; }
-    const bucket = buckets.find(b => b.id === bucketId);
-    await supabase.from('backlog_items').update({
-      bucket_id: bucketId,
-      closed_at: bucket?.is_done ? new Date().toISOString() : null,
-    }).eq('id', dragItem.id);
-    await supabase.from('activity').insert({
-      item_id: dragItem.id, backlog_project_id: project.id, actor_id: profile.id, action: 'moved',
-      detail: { from: dragItem.bucket_id, to: bucketId, bucket_name: bucket?.name },
-    });
-    setDragItem(null);
-    load();
+    setDropHint(null);
+    if (!dragItem) return;
+    const movedAcross = dragItem.bucket_id !== bucketId;
+    const list = bucketOrder(bucketId).filter(i => i.id !== dragItem.id);
+    list.push(dragItem);
+    if (sort !== 'manual') setSort('manual');
+    if (movedAcross) setItems(prev => prev.map(i => i.id === dragItem.id ? { ...i, bucket_id: bucketId } : i));
+    await commitOrder(bucketId, list.map(i => i.id), movedAcross);
   };
 
   return (
@@ -275,6 +329,11 @@ export default function Board({ project, profile, onOpenItem }) {
               onDragStart={onDragStart}
               onDragOver={onDragOver}
               onDrop={onDrop}
+              onDragEnd={onDragEnd}
+              onCardDragOver={onCardDragOver}
+              onDropOnCard={onDropOnCard}
+              dropHint={dropHint}
+              dragItemId={dragItem?.id}
               onOpenItem={onOpenItem}
             />
           ))}
@@ -313,7 +372,7 @@ export default function Board({ project, profile, onOpenItem }) {
   );
 }
 
-function BucketColumn({ bucket, items, members, features, canWrite, sort, onAddItem, onEdit, onDelete, onMoveLeft, onMoveRight, canDelete, onDragStart, onDragOver, onDrop, onOpenItem }) {
+function BucketColumn({ bucket, items, members, features, canWrite, sort, onAddItem, onEdit, onDelete, onMoveLeft, onMoveRight, canDelete, onDragStart, onDragOver, onDrop, onDragEnd, onCardDragOver, onDropOnCard, dropHint, dragItemId, onOpenItem }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -364,6 +423,11 @@ function BucketColumn({ bucket, items, members, features, canWrite, sort, onAddI
           <Card key={i.id} item={i} members={members} features={features} sort={sort}
             onClick={() => onOpenItem(i.id)}
             onDragStart={e => onDragStart(e, i)}
+            onDragOver={e => onCardDragOver(e, i)}
+            onDrop={e => onDropOnCard(e, i)}
+            onDragEnd={onDragEnd}
+            hint={dropHint?.itemId === i.id ? dropHint.edge : null}
+            dragging={dragItemId === i.id}
             draggable={canWrite}/>
         ))}
         {!items.length && (
@@ -567,12 +631,14 @@ function CreateItemModal({ draft: initial, buckets, members, features, project, 
   );
 }
 
-function Card({ item, members, features, onClick, onDragStart, draggable, sort }) {
+function Card({ item, members, features, onClick, onDragStart, onDragOver, onDrop, onDragEnd, draggable, sort, hint, dragging }) {
   const assignee = members.find(m => m.id === item.assignee_id);
   const feature = features.find(f => f.id === item.feature_id);
   return (
-    <div draggable={draggable} onDragStart={onDragStart} onClick={onClick}
-      className="glass-inner rounded-xl p-3 cursor-pointer">
+    <div draggable={draggable} onDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop} onDragEnd={onDragEnd} onClick={onClick}
+      className={`glass-inner rounded-xl p-3 cursor-pointer transition-shadow ${dragging ? 'opacity-40' : ''} ${
+        hint === 'top' ? 'shadow-[inset_0_3px_0_0_var(--acc,#f97316)]'
+        : hint === 'bottom' ? 'shadow-[inset_0_-3px_0_0_var(--acc,#f97316)]' : ''}`}>
       <div className="flex items-start gap-2 mb-2">
         <span className="text-sm">{TYPE_ICON[item.type] || TYPE_ICON.task}</span>
         <div className="text-sm text-paper flex-1 min-w-0 leading-snug">{item.title}</div>
