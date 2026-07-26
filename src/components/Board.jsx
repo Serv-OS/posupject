@@ -20,12 +20,23 @@ const BUCKET_COLORS = [
   { name:'Purple', value:'#a855f7' },
 ];
 
+const PRIORITY_ORDER = { P0: 0, P1: 1, P2: 2, P3: 3 };
+
+// Short date for cards ("12 Jul", or "12 Jul 25" once it's a different year).
+function shortDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: '2-digit' }) });
+}
+
 export default function Board({ project, profile, onOpenItem }) {
   const [buckets, setBuckets] = useState([]);
   const [items, setItems]     = useState([]);
   const [members, setMembers] = useState([]);
   const [features, setFeatures] = useState([]);
   const [filter, setFilter]   = useState({ priority:'all', type:'all', assignee:'all', feature:'all', search:'' });
+  const [sort, setSort]       = useState(() => localStorage.getItem('board-sort') || 'manual');
   const [dragItem, setDragItem] = useState(null);
   const [bucketEditor, setBucketEditor] = useState(null);
   const [creating, setCreating] = useState(null);
@@ -33,6 +44,7 @@ export default function Board({ project, profile, onOpenItem }) {
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   useEffect(() => { load(); }, [project.id]);
+  useEffect(() => { localStorage.setItem('board-sort', sort); }, [sort]);
 
   useEffect(() => {
     const ch = supabase.channel('board-' + project.id)
@@ -65,12 +77,26 @@ export default function Board({ project, profile, onOpenItem }) {
     return true;
   }), [items, filter, profile.id]);
 
+  // Card order within each bucket. 'manual' keeps the hand-set position (the
+  // drag order); every other mode is a live sort so new work surfaces itself.
+  const SORTERS = {
+    manual:   (a, b) => (a.position ?? 0) - (b.position ?? 0),
+    newest:   (a, b) => new Date(b.created_at) - new Date(a.created_at),
+    oldest:   (a, b) => new Date(a.created_at) - new Date(b.created_at),
+    updated:  (a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at),
+    priority: (a, b) => (PRIORITY_ORDER[a.priority] ?? 9) - (PRIORITY_ORDER[b.priority] ?? 9)
+                        || new Date(a.created_at) - new Date(b.created_at),
+    title:    (a, b) => (a.title || '').localeCompare(b.title || ''),
+  };
+
   const itemsByBucket = useMemo(() => {
     const map = {};
     buckets.forEach(b => { map[b.id] = []; });
     filtered.forEach(i => { if (map[i.bucket_id]) map[i.bucket_id].push(i); });
+    const cmp = SORTERS[sort] || SORTERS.manual;
+    Object.values(map).forEach(list => list.sort(cmp));
     return map;
-  }, [buckets, filtered]);
+  }, [buckets, filtered, sort]);
 
   const openCreateModal = (bucketId) => {
     setCreating({
@@ -218,6 +244,11 @@ export default function Board({ project, profile, onOpenItem }) {
           <Select value={filter.feature} onChange={v => setFilter({ ...filter, feature: v })}
             options={[['all','All features'], ...features.map(f => [f.id, f.name])]}/>
         )}
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-[10px] font-mono uppercase tracking-[0.18em] text-dim">Sort</span>
+          <Select value={sort} onChange={setSort}
+            options={[['manual','Manual (drag order)'],['newest','Newest first'],['oldest','Oldest first'],['updated','Recently updated'],['priority','Priority (P0 first)'],['title','A → Z']]}/>
+        </div>
         {(filter.priority!=='all' || filter.type!=='all' || filter.assignee!=='all' || filter.feature!=='all' || filter.search) && (
           <button onClick={() => setFilter({ priority:'all', type:'all', assignee:'all', feature:'all', search:'' })}
             className="px-2 py-1.5 text-xs text-muted hover:text-paper">clear</button>
@@ -234,6 +265,7 @@ export default function Board({ project, profile, onOpenItem }) {
               members={members}
               features={features}
               canWrite={canWrite}
+              sort={sort}
               onAddItem={() => openCreateModal(b.id)}
               onEdit={() => setBucketEditor({ mode:'edit', bucket: b })}
               onDelete={() => deleteBucket(b)}
@@ -281,7 +313,7 @@ export default function Board({ project, profile, onOpenItem }) {
   );
 }
 
-function BucketColumn({ bucket, items, members, features, canWrite, onAddItem, onEdit, onDelete, onMoveLeft, onMoveRight, canDelete, onDragStart, onDragOver, onDrop, onOpenItem }) {
+function BucketColumn({ bucket, items, members, features, canWrite, sort, onAddItem, onEdit, onDelete, onMoveLeft, onMoveRight, canDelete, onDragStart, onDragOver, onDrop, onOpenItem }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -329,7 +361,7 @@ function BucketColumn({ bucket, items, members, features, canWrite, onAddItem, o
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
         {items.map(i => (
-          <Card key={i.id} item={i} members={members} features={features}
+          <Card key={i.id} item={i} members={members} features={features} sort={sort}
             onClick={() => onOpenItem(i.id)}
             onDragStart={e => onDragStart(e, i)}
             draggable={canWrite}/>
@@ -535,7 +567,7 @@ function CreateItemModal({ draft: initial, buckets, members, features, project, 
   );
 }
 
-function Card({ item, members, features, onClick, onDragStart, draggable }) {
+function Card({ item, members, features, onClick, onDragStart, draggable, sort }) {
   const assignee = members.find(m => m.id === item.assignee_id);
   const feature = features.find(f => f.id === item.feature_id);
   return (
@@ -559,6 +591,11 @@ function Card({ item, members, features, onClick, onDragStart, draggable }) {
         {item.images?.length > 0 && (
           <span className="text-[9px] text-dim">&#x1F4CE; {item.images.length}</span>
         )}
+        <span className="text-[9px] text-dim font-mono" title={sort === 'updated'
+          ? `Updated ${new Date(item.updated_at || item.created_at).toLocaleString()}`
+          : `Added ${new Date(item.created_at).toLocaleString()}`}>
+          {sort === 'updated' ? '\u{21BB} ' : ''}{shortDate(sort === 'updated' ? (item.updated_at || item.created_at) : item.created_at)}
+        </span>
         {assignee && (
           <span className="ml-auto w-5 h-5 rounded-full bg-ember text-ink text-[10px] font-bold flex items-center justify-center" title={assignee.display_name || assignee.email}>
             {(assignee.display_name || assignee.email)[0].toUpperCase()}
