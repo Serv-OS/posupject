@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { PhoneCall, PhoneIncoming, PhoneOutgoing, PhoneMissed, Voicemail } from 'lucide-react';
+import CallButton from '../CallButton.jsx';
 
 const fmtWhen = (d) => new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtDur = (s) => { const n = Number(s) || 0; return n >= 60 ? `${Math.floor(n / 60)}m ${n % 60}s` : `${n}s`; };
@@ -173,6 +174,9 @@ export default function CallLogPanel({ profile, onNavigate }) {
                       </div>
                     </div>
                     <div className="ml-auto flex items-center gap-2">
+                      {/* Ring them back — the number from the call, else the contact's own */}
+                      <CallButton number={number || ct?.mobile || ct?.phone} variant="icon"
+                        title={`Call ${ctName || number || ''} back`} />
                       <span className={`px-2 py-0.5 text-[9px] font-bold uppercase rounded border ${KIND_BADGE[kind]}`}>
                         {kind === 'answered' ? (md.outcome || 'connected').replace(/_/g, ' ') : kind}
                       </span>
