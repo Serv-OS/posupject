@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { round2, gbp2 } from '../../lib/money.js';
 import { computeMileage, taxYearBounds } from '../../lib/rates.js';
-import { ytdMilesBefore, canDo, EXPENSE_ACTIONS, STATUS_LABEL, STATUS_BADGE, isApprover } from '../../lib/expenseOps.js';
+import { ytdMilesBefore, canDo, EXPENSE_ACTIONS, STATUS_LABEL, STATUS_BADGE, isApprover, PAID_BY, isCompanyPaid } from '../../lib/expenseOps.js';
 import AttachmentsCard from '../crm/AttachmentsCard.jsx';
 
 const nowIso = () => new Date().toISOString();
@@ -66,6 +66,7 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
       type: exp.type, category_id: exp.category_id || null, company_id: exp.company_id || null,
       location_id: exp.location_id || null, deal_id: exp.deal_id || null, cost_context: exp.cost_context || 'ongoing',
       expense_date: exp.expense_date, description: (exp.description || '').trim() || null,
+      paid_by: exp.paid_by || 'personal',
       reimburse_to_user_id: exp.reimburse_to_user_id || exp.submitter_id,
       vat_reclaimable: !!exp.vat_reclaimable, has_vat_invoice: !!exp.has_vat_invoice,
       vat_reclaim_amount: exp.vat_reclaim_amount === '' || exp.vat_reclaim_amount == null ? null : Number(exp.vat_reclaim_amount),
@@ -97,12 +98,12 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
     })));
   };
 
-  const act = async (action, extra = {}, note) => {
+  const act = async (action, extra = {}, note, finalStatus) => {
     if (!canDo(action, exp, profile)) return;
     if (action === 'submit' && exp.type !== 'mileage' && receiptCount === 0) { alert('A receipt is required before submitting a non-mileage claim.'); return; }
     setBusy(true);
     await supabase.from('expenses').update(buildPatch()).eq('id', expenseId); // persist edits first
-    const to = EXPENSE_ACTIONS[action].to;
+    const to = finalStatus || EXPENSE_ACTIONS[action].to;
     const { error } = await supabase.from('expenses').update({ status: to, ...extra, updated_at: nowIso() }).eq('id', expenseId);
     if (!error) {
       await supabase.from('expense_events').insert({ expense_id: expenseId, actor_id: profile.id, from_status: exp.status, to_status: to, note: note || null });
@@ -117,7 +118,12 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
     load();
   };
 
-  const approve = () => act('approve', { approver_id: profile.id, approved_at: nowIso(), rejection_reason: null });
+  const approve = () => isCompanyPaid(exp)
+    ? act('approve', {
+        approver_id: profile.id, approved_at: nowIso(), rejection_reason: null,
+        paid_at: nowIso(), payment_method: 'company_card',
+      }, 'paid on the company card - no reimbursement due', 'paid')
+    : act('approve', { approver_id: profile.id, approved_at: nowIso(), rejection_reason: null });
   const reject = () => { const r = prompt('Reason for rejection?'); if (r == null) return; act('reject', { approver_id: profile.id, rejection_reason: r }, r); };
   const pay = () => { const ref = prompt('Payment reference (optional):') || null; act('pay', { paid_at: nowIso(), payment_reference: ref }, ref ? `ref ${ref}` : null); };
   const submit = () => act('submit', { submitted_at: nowIso() });
@@ -234,9 +240,15 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
               <div><label className={label}>Category</label>
                 <select className={input} disabled={!editable} value={exp.category_id || ''} onChange={e => set('category_id', e.target.value || null)}>
                   <option value="">—</option>{cats.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div>
-              <div><label className={label}>Reimburse to</label>
-                <select className={input} disabled={!isApprover(profile) && !editable} value={exp.reimburse_to_user_id || exp.submitter_id || ''} onChange={e => set('reimburse_to_user_id', e.target.value)}>
-                  {people.map(p => <option key={p.id} value={p.id}>{p.display_name || p.id.slice(0, 6)}</option>)}</select></div>
+              <div><label className={label}>Paid by</label>
+                <select className={input} disabled={!editable} value={exp.paid_by || 'personal'} onChange={e => set('paid_by', e.target.value)}>
+                  {Object.entries(PAID_BY).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+                {isCompanyPaid(exp) && <div className="text-[10px] text-dim mt-1">Recorded for VAT &amp; reporting only — it won't appear in a reimbursement run.</div>}</div>
+              {!isCompanyPaid(exp) && (
+                <div><label className={label}>Reimburse to</label>
+                  <select className={input} disabled={!isApprover(profile) && !editable} value={exp.reimburse_to_user_id || exp.submitter_id || ''} onChange={e => set('reimburse_to_user_id', e.target.value)}>
+                    {people.map(p => <option key={p.id} value={p.id}>{p.display_name || p.id.slice(0, 6)}</option>)}</select></div>
+              )}
               <div><label className={label}>Cost context</label>
                 <div className="flex gap-1 bg-card rounded-xl p-0.5">
                   {['ongoing', 'deal'].map(c => <button key={c} disabled={!editable} onClick={() => set('cost_context', c)} className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold ${exp.cost_context === c ? 'bg-ember text-white' : 'text-muted'}`}>{c === 'deal' ? 'Deal cost' : 'Ongoing'}</button>)}</div></div>
@@ -247,7 +259,10 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
                 <select className={input} disabled={!editable} value={exp.deal_id || ''} onChange={e => set('deal_id', e.target.value || null)}>
                   <option value="">—</option>{deals.filter(d => !exp.company_id || d.company_id === exp.company_id).map(d => <option key={d.id} value={d.id}>{d.title}</option>)}</select></div>
             </div>
-            {exp.status === 'paid' && <div className="glass-card rounded-2xl p-4 text-sm"><div className="text-emerald-600 font-semibold">Paid {fmtDT(exp.paid_at)}</div>{exp.payment_reference && <div className="text-xs text-muted">Ref: {exp.payment_reference}</div>}</div>}
+            {exp.status === 'paid' && <div className="glass-card rounded-2xl p-4 text-sm">
+              <div className="text-emerald-600 font-semibold">{isCompanyPaid(exp) ? `Company card ${fmtDT(exp.paid_at)}` : `Paid ${fmtDT(exp.paid_at)}`}</div>
+              {isCompanyPaid(exp) ? <div className="text-xs text-muted">No reimbursement due</div>
+                : exp.payment_reference && <div className="text-xs text-muted">Ref: {exp.payment_reference}</div>}</div>}
           </div>
         </div>
       </div>

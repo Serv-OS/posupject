@@ -65,6 +65,12 @@ export default function UsersPanel({ profile }) {
     load();
   };
 
+  // Standing arrangement for someone who always spends on the company card.
+  const changePaidBy = async (id, v) => {
+    await supabase.from('profiles').update({ default_expense_paid_by: v || null }).eq('id', id);
+    load();
+  };
+
   const changeRole = async (id, role) => {
     await supabase.from('profiles').update({ role }).eq('id', id);
     load();
@@ -244,6 +250,15 @@ export default function UsersPanel({ profile }) {
                         </button>
                       );
                     })}
+                  </div>
+                  <div className="flex items-center gap-1 mt-1">
+                    <span className="text-[9px] text-dim uppercase tracking-wider shrink-0">Expenses</span>
+                    <select value={u.default_expense_paid_by || 'personal'} onChange={e => changePaidBy(u.id, e.target.value)}
+                      title="How this person's new expense claims default: reimburse them, or record only (company card)"
+                      className={`px-1.5 py-0.5 ${input} text-[10px]`}>
+                      <option value="personal">Reimburse</option>
+                      <option value="company_card">Company card</option>
+                    </select>
                   </div>
                 </div>
                 <div className="col-span-1 flex justify-end gap-1">

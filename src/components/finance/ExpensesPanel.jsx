@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Receipt as ReceiptText, Plus, Truck as Car } from 'lucide-react';
 import { gbp2 } from '../../lib/money.js';
-import { isApprover, STATUS_LABEL, STATUS_BADGE } from '../../lib/expenseOps.js';
+import { isApprover, STATUS_LABEL, STATUS_BADGE, PAID_BY_SHORT, isCompanyPaid } from '../../lib/expenseOps.js';
 
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
 
@@ -29,8 +29,10 @@ export default function ExpensesPanel({ profile, onNavigate }) {
   useEffect(() => { load(); }, [load]);
 
   const newExpense = async () => {
+    const { data: me } = await supabase.from('profiles').select('default_expense_paid_by').eq('id', profile.id).maybeSingle();
     const { data, error } = await supabase.from('expenses').insert({
       submitter_id: profile.id, reimburse_to_user_id: profile.id, created_by: profile.id,
+      paid_by: me?.default_expense_paid_by || 'personal',
       status: 'draft', type: 'staff_claim', expense_date: new Date().toISOString().slice(0, 10),
     }).select('id').single();
     if (error) { alert(error.message); return; }
@@ -40,13 +42,17 @@ export default function ExpensesPanel({ profile, onNavigate }) {
   const mine = rows.filter(r => r.submitter_id === profile.id);
   const toApprove = rows.filter(r => r.status === 'submitted');
   const list = tab === 'mine' ? mine : tab === 'approve' ? toApprove : rows;
-  const owedToMe = mine.filter(r => r.status === 'approved').reduce((s, r) => s + Number(r.total || 0), 0);
+  const owedToMe = mine.filter(r => r.status === 'approved' && !isCompanyPaid(r)).reduce((s, r) => s + Number(r.total || 0), 0);
 
   // ── Reimbursement run: approved claims grouped by who gets paid back ──
   const personName = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email?.split('@')[0]) : 'Unknown'; };
   const monthStart = runMonth + '-01';
   const monthEnd = (() => { const [y, m] = runMonth.split('-').map(Number); return `${runMonth}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; })();
-  const runnable = rows.filter(r => r.status === 'approved' && r.expense_date && r.expense_date <= monthEnd && (includeOlder || r.expense_date >= monthStart));
+  const inRunWindow = (r) => r.expense_date && r.expense_date <= monthEnd && (includeOlder || r.expense_date >= monthStart);
+  const runnable = rows.filter(r => r.status === 'approved' && !isCompanyPaid(r) && inRunWindow(r));
+  // Company-card spend in the same window: recorded (and VAT-reclaimed), nothing to pay.
+  const companyPaid = rows.filter(r => isCompanyPaid(r) && ['approved', 'paid'].includes(r.status) && inRunWindow(r));
+  const companyPaidTotal = companyPaid.reduce((s, r) => s + Number(r.total || 0), 0);
   const runGroups = (() => {
     const m = new Map();
     for (const r of runnable) { const k = r.reimburse_to_user_id || r.submitter_id; if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
@@ -141,6 +147,27 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                 </div>
               ))}
               {runGroups.length === 0 && <div className="glass-card rounded-2xl p-8 text-center text-dim text-sm italic">No approved, unpaid claims for this run. 🎉</div>}
+
+              {companyPaid.length > 0 && (
+                <div className="glass-card rounded-2xl overflow-hidden">
+                  <div className="px-5 py-3 border-b border-bdr flex items-center gap-2">
+                    <h3 className="text-[13px] font-bold text-paper">Company card — nothing to pay</h3>
+                    <span className="text-xs text-dim font-mono">({companyPaid.length})</span>
+                    <span className="ml-auto text-sm font-bold tabular-nums text-muted">{gbp2(companyPaidTotal)}</span>
+                  </div>
+                  <div className="divide-y divide-bdr/60">
+                    {companyPaid.map(r => (
+                      <div key={r.id} onClick={() => onNavigate?.('expense', r.id)} className="px-5 py-2 flex items-center gap-3 hover:bg-card/50 cursor-pointer text-sm">
+                        <span className="shrink-0 text-dim">{r.type === 'mileage' ? <Car size={14} /> : <ReceiptText size={14} />}</span>
+                        <span className="flex-1 text-paper truncate">{r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim')}</span>
+                        <span className="text-[10px] text-dim font-mono">{r.submitter?.display_name || ''} · EXP-{r.expense_number} · {fmtD(r.expense_date)}</span>
+                        <span className="tabular-nums text-muted w-20 text-right">{gbp2(r.total)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="px-5 py-2 border-t border-bdr text-[11px] text-dim">Already settled by the company — still counted for VAT and reporting.</div>
+                </div>
+              )}
             </>
           )}
           {tab === 'mine' && (
@@ -165,6 +192,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                       <div className="text-sm text-paper font-medium truncate">{r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim')}</div>
                       <div className="text-[10px] text-dim">EXP-{r.expense_number} · {fmtD(r.expense_date)}{tab !== 'mine' ? ` · ${r.submitter?.display_name || ''}` : ''}{r.category?.label ? ` · ${r.category.label}` : ''}</div>
                     </div>
+                    {isCompanyPaid(r) && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 shrink-0">{PAID_BY_SHORT.company_card}</span>}
                     <div className="text-sm font-semibold text-paper tabular-nums shrink-0">{gbp2(r.total)}</div>
                     <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg shrink-0 w-20 text-center ${STATUS_BADGE[r.status]}`}>{STATUS_LABEL[r.status]}</span>
                   </div>

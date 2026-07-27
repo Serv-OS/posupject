@@ -23,6 +23,13 @@ export const EXPENSE_ACTIONS = {
   pay:      { from: ['approved'], to: 'paid', who: 'approver' },
 };
 
+// Who actually paid. 'personal' claims are reimbursed to the claimant;
+// 'company_card' spend is already settled by the company — it must still be
+// recorded and VAT-reclaimed, but must never enter a reimbursement run.
+export const PAID_BY = { personal: 'Personal (reimburse)', company_card: 'Company card (no reimbursement)' };
+export const PAID_BY_SHORT = { personal: 'Reimburse', company_card: 'Company card' };
+export const isCompanyPaid = (e) => e?.paid_by === 'company_card';
+
 export function isApprover(profile) {
   return profile?.role === 'owner' || profile?.role === 'editor';
 }
