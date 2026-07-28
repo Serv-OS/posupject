@@ -79,10 +79,12 @@ export default function InvoicesPanel({ profile, onNavigate }) {
     const loc = (inv.location?.name || '').toLowerCase();
     const num = `inv-${inv.invoice_number}`.toLowerCase();
     const label = (inv.label || '').toLowerCase();
+    const po = (inv.po_number || '').toLowerCase();
     if (searchField === 'company') return comp.includes(q);
     if (searchField === 'location') return loc.includes(q);
     if (searchField === 'number') return num.includes(q) || String(inv.invoice_number || '').includes(q);
-    return comp.includes(q) || loc.includes(q) || num.includes(q) || label.includes(q);
+    if (searchField === 'po') return po.includes(q);
+    return comp.includes(q) || loc.includes(q) || num.includes(q) || label.includes(q) || po.includes(q);
   };
   const filtered = invoices.filter(i => matchesTab(i) && matchesSearch(i));
 
@@ -138,6 +140,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                     <option value="company">Customer</option>
                     <option value="location">Location</option>
                     <option value="number">Invoice #</option>
+                    <option value="po">PO number</option>
                   </select>
                   <input className={input + ' !py-1.5 text-xs flex-1'} value={search} onChange={e => setSearch(e.target.value)}
                     placeholder="Search invoices…" />
@@ -155,6 +158,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                         <div className="font-mono text-xs text-dim w-20 shrink-0">INV-{inv.invoice_number}</div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm text-paper font-medium truncate">{custName(inv)}</div>
+                          {inv.po_number && <div className="text-[10px] text-muted font-mono truncate">PO {inv.po_number}</div>}
                           {inv.viewed_at && <div className="text-[10px] text-emerald-600">👁 Viewed {new Date(inv.viewed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>}
                           {inv.recurring_id && <div className="text-[10px] text-uv flex items-center gap-1"><Repeat size={10} /> recurring</div>}
                         </div>
