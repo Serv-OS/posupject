@@ -477,7 +477,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               }`}>
                 {/* Note / Internal */}
                 {isNote && (
-                  <div className={`rounded-2xl p-3 ${a.is_internal ? 'bg-amber-50 border border-amber-200' : 'glass-card'}`}>
+                  <div className={`rounded-2xl p-3 ${a.is_internal ? 'bg-amber-500/10 border border-amber-500/30' : 'glass-card'}`}>
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="w-5 h-5 rounded-full bg-amber-200 text-amber-800 text-[9px] font-bold flex items-center justify-center">{getInitial(a.actor_id)}</span>
                       <span className="text-xs font-medium text-paper">{getName(a.actor_id)}</span>
@@ -496,7 +496,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                   const recUrl = recSid ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/twilio-recording?sid=${recSid}` : null;
                   const dur = md.recording_duration || md.duration_seconds;
                   return (
-                    <div className={`rounded-2xl p-3 w-full ${isVoicemail ? 'bg-amber-50 border border-amber-200' : 'glass-card'}`}>
+                    <div className={`rounded-2xl p-3 w-full ${isVoicemail ? 'bg-amber-500/10 border border-amber-500/30' : 'glass-card'}`}>
                       <div className="flex items-center gap-2 mb-1.5">
                         <span className="text-base">{isVoicemail ? '\u{1F4FC}' : TYPE_ICON.call}</span>
                         <span className="text-xs font-medium text-paper">{a.actor_id ? getName(a.actor_id) : (md.from_number || 'Customer')}</span>
@@ -523,8 +523,8 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                 {!isNote && !isCall && (
                   <div className={`rounded-2xl p-3 ${
                     isOutbound
-                      ? 'bg-emerald-50 border border-emerald-200'
-                      : 'bg-blue-50 border border-blue-200'
+                      ? 'bg-emerald-500/10 border border-emerald-500/30'
+                      : 'bg-blue-500/10 border border-blue-500/30'
                   }`}>
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="text-sm">{TYPE_ICON[a.type]}</span>
