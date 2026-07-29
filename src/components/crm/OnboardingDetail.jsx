@@ -8,10 +8,14 @@ const STAGES = [
   'kickoff','hardware_ordered','hardware_shipped','account_menu_config',
   'staff_training','go_live_scheduled','live','handover_to_support'
 ];
+// 'on_hold' is deliberately NOT in STAGES: the stepper marks progress with
+// STAGES.indexOf(stage), so a parked record must sit outside that ladder
+// (indexOf -> -1 leaves every step neutral) and gets its own chip instead.
+const ON_HOLD = 'on_hold';
 const STAGE_LABELS = {
   kickoff:'Kickoff', hardware_ordered:'HW Ordered', hardware_shipped:'HW Shipped',
   account_menu_config:'Config', staff_training:'Training', go_live_scheduled:'Go-Live Sched.',
-  live:'Live', handover_to_support:'Handover',
+  live:'Live', handover_to_support:'Handover', on_hold:'On Hold',
 };
 
 export default function OnboardingDetail({ onboardingId, profile, onClose, onNavigate }) {
@@ -76,6 +80,13 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
     setEditing(false); load();
   };
   const set = (k, v) => setDraft({ ...draft, [k]: v });
+
+  // Coming off hold, pick up where it was parked (stage_history is newest-first)
+  // rather than dropping a nearly-live job back to Kickoff.
+  const resumeStage = () => {
+    const h = history.find(x => x.to_stage === ON_HOLD);
+    return STAGES.includes(h?.from_stage) ? h.from_stage : 'kickoff';
+  };
 
   const changeStage = async (newStage) => {
     if (newStage === ob.stage) return;
@@ -171,6 +182,14 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
               </button>
             );
           })}
+          <span className="w-px h-5 bg-bdr mx-1 self-center" />
+          <button onClick={() => changeStage(ob.stage === ON_HOLD ? resumeStage() : ON_HOLD)}
+            title={ob.stage === ON_HOLD ? `Resume at ${STAGE_LABELS[resumeStage()]}` : 'Park this onboarding'}
+            className={`px-2.5 py-1.5 text-[9px] font-bold uppercase rounded-xl transition whitespace-nowrap ${
+              ob.stage === ON_HOLD ? 'bg-amber-500 text-white' : 'bg-card text-dim hover:text-amber-600'
+            }`}>
+            {ob.stage === ON_HOLD ? '\u{23F8} On Hold' : 'Hold'}
+          </button>
         </div>
       )}
 
@@ -182,7 +201,7 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={label}>Stage</label>
                   <select className={input} value={draft.stage} onChange={e => set('stage', e.target.value)}>
-                    {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
+                    {[...STAGES, ON_HOLD].map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
                   </select></div>
                 <div><label className={label}>Owner</label>
                   <select className={input} value={draft.owner_id || ''} onChange={e => set('owner_id', e.target.value || null)}>

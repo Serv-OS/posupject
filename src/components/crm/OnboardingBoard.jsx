@@ -10,6 +10,9 @@ const STAGES = [
   { key: 'go_live_scheduled',    label: 'Go-Live Sched.',    color: '#C75A29' },
   { key: 'live',                 label: 'Live',              color: '#10b981' },
   { key: 'handover_to_support',  label: 'Handover',          color: '#948A7A' },
+  // Parked, not progress — kept last and amber so the pipeline still reads
+  // left-to-right as the happy path.
+  { key: 'on_hold',              label: 'On Hold',           color: '#f59e0b' },
 ];
 
 export default function OnboardingBoard({ profile, onSelectOnboarding, onNavigate }) {
