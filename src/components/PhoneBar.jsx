@@ -85,6 +85,24 @@ export default function PhoneBar({ profile }) {
         if (status !== 'on-call') setStatus('online');
       });
 
+      // Access tokens last 1 hour. Without this the device silently drops its
+      // registration while the heartbeat below still reports the agent online,
+      // so inbound calls ring a dead client and fall through to voicemail.
+      newDevice.on('tokenWillExpire', async () => {
+        try {
+          const { data: { session: s2 } } = await supabase.auth.getSession();
+          const r2 = await fetch(
+            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/twilio-voice-token`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${s2?.access_token}` } }
+          );
+          const { token: fresh } = await r2.json();
+          if (fresh) newDevice.updateToken(fresh);
+          else console.error('Twilio token refresh returned no token');
+        } catch (e) {
+          console.error('Twilio token refresh failed:', e);
+        }
+      });
+
       newDevice.on('unregistered', () => {
         setStatus('offline');
       });
@@ -197,6 +215,14 @@ export default function PhoneBar({ profile }) {
   useEffect(() => {
     if (status === 'online' || status === 'on-call') {
       const interval = setInterval(() => {
+        // Never claim to be online when the device isn't actually registered —
+        // a stale 'online' row makes callers wait through 25s of ringing nothing
+        // before voicemail. (Guarded: if the SDK exposes no state, behave as before.)
+        const devState = deviceRef.current?.state;
+        if (devState && devState !== 'registered' && status !== 'on-call') {
+          setStatus('offline');
+          return;
+        }
         supabase.from('agent_status').upsert({
           profile_id: profile.id,
           status: status === 'on-call' ? 'busy' : 'online',
