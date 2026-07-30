@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import TimerButton from './TimerButton.jsx';
+import AttachmentsCard from './AttachmentsCard.jsx';
 
 const STATUS_OPTIONS = ['todo', 'in_progress', 'blocked', 'done'];
 const STATUS_STYLES = {
@@ -320,6 +321,8 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
                   </div>
                 </Card>
               )}
+
+              <AttachmentsCard subjectType="task" subjectId={taskId} profile={profile} />
             </div>
           </div>
         )}

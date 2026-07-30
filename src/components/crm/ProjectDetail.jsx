@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import TimerButton from './TimerButton.jsx';
+import AttachmentsCard from './AttachmentsCard.jsx';
 
 const STATUS_STYLES = {
   todo: 'bg-blue-100 text-blue-700 border border-blue-200',
@@ -385,6 +386,8 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                     </Card>
                   );
                 })()}
+
+                <AttachmentsCard subjectType="project" subjectId={projectId} profile={profile} />
               </div>
 
               {/* MIDDLE: Tasks */}
