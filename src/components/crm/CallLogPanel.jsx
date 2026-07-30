@@ -14,6 +14,9 @@ export const callKind = (a) => {
   return 'answered';
 };
 
+// Last 10 digits, so +44 7700 900123 / 07700900123 / (770) 090-0123 all match.
+const lastDigits = (s) => (s || '').replace(/\D/g, '').slice(-10);
+
 const KIND_BADGE = {
   answered: 'bg-emerald-100 text-emerald-700 border-emerald-200',
   missed: 'bg-red-100 text-red-700 border-red-200',
@@ -31,6 +34,10 @@ export default function CallLogPanel({ profile, onNavigate }) {
   const [dateTo, setDateTo] = useState('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [newContact, setNewContact] = useState(null);   // { number, first_name, last_name, email }
+  const [saving, setSaving] = useState(false);
+
+  const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   const load = useCallback(async () => {
     const [a, p, c] = await Promise.all([
@@ -58,6 +65,36 @@ export default function CallLogPanel({ profile, onNavigate }) {
     return p ? (p.display_name || p.email) : null;
   };
   const contactOf = (a) => contacts.find(c => c.id === a.contact_id);
+
+  // Create a contact straight from a call, then adopt every other call from the
+  // same number so the whole history shows the name, not just this row.
+  const saveContact = async () => {
+    const f = newContact;
+    if (!f) return;
+    if (!f.first_name.trim() && !f.last_name.trim()) { alert('Give the contact at least a first or last name.'); return; }
+    setSaving(true);
+    const { data: contact, error } = await supabase.from('contacts').insert({
+      first_name: f.first_name.trim() || null,
+      last_name: f.last_name.trim() || null,
+      email: f.email.trim() || null,
+      phone: f.number || null,
+      owner_id: profile.id,
+    }).select().single();
+    if (error) { setSaving(false); alert('Could not create contact: ' + error.message); return; }
+
+    const want = lastDigits(f.number);
+    const ids = calls.filter(a => {
+      if (a.contact_id) return false;
+      const m = a.channel_metadata || {};
+      const n = a.direction === 'inbound' ? m.from_number : (m.to_number || m.from_number);
+      return want && lastDigits(n) === want;
+    }).map(a => a.id);
+    if (ids.length) await supabase.from('crm_activities').update({ contact_id: contact.id }).in('id', ids);
+
+    setSaving(false);
+    setNewContact(null);
+    load();
+  };
 
   const filtered = useMemo(() => calls.filter(a => {
     if (dirFilter !== 'all' && a.direction !== dirFilter) return false;
@@ -177,6 +214,11 @@ export default function CallLogPanel({ profile, onNavigate }) {
                       {/* Ring them back — the number from the call, else the contact's own */}
                       <CallButton number={number || ct?.mobile || ct?.phone} variant="icon"
                         title={`Call ${ctName || number || ''} back`} />
+                      {canWrite && !ct && number && (
+                        <button onClick={() => setNewContact({ number, first_name: '', last_name: '', email: '' })}
+                          title={`Add ${number} to contacts`}
+                          className="text-[11px] font-semibold text-ember hover:text-ember-deep whitespace-nowrap">+ Add contact</button>
+                      )}
                       <span className={`px-2 py-0.5 text-[9px] font-bold uppercase rounded border ${KIND_BADGE[kind]}`}>
                         {kind === 'answered' ? (md.outcome || 'connected').replace(/_/g, ' ') : kind}
                       </span>
@@ -198,6 +240,43 @@ export default function CallLogPanel({ profile, onNavigate }) {
 
         </div>
       </div>
+
+      {newContact && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !saving && setNewContact(null)}>
+          <div className="glass-raised rounded-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-bdr">
+              <div className="text-sm font-bold text-paper">New contact</div>
+              <div className="text-[11px] text-muted font-mono">{newContact.number}</div>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">First name</label>
+                  <input autoFocus className={input + ' w-full !py-1.5 text-sm'} value={newContact.first_name}
+                    onChange={e => setNewContact({ ...newContact, first_name: e.target.value })} />
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Last name</label>
+                  <input className={input + ' w-full !py-1.5 text-sm'} value={newContact.last_name}
+                    onChange={e => setNewContact({ ...newContact, last_name: e.target.value })} />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Email (optional)</label>
+                <input className={input + ' w-full !py-1.5 text-sm'} value={newContact.email}
+                  onChange={e => setNewContact({ ...newContact, email: e.target.value })} />
+              </div>
+              <div className="text-[11px] text-dim">Earlier calls from this number will be linked to the new contact too.</div>
+            </div>
+            <div className="px-5 py-3 border-t border-bdr flex justify-end gap-2">
+              <button onClick={() => setNewContact(null)} disabled={saving} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button>
+              <button onClick={saveContact} disabled={saving} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50">
+                {saving ? 'Saving…' : 'Create contact'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
