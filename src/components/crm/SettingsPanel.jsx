@@ -80,6 +80,8 @@ export default function SettingsPanel({ profile }) {
       voice_greeting: next.voice_greeting ?? null,
       voicemail_prompt: next.voicemail_prompt ?? null,
       voice_id: next.voice_id ?? null,
+      signature_names: next.signature_names ?? null,
+      signature_template: next.signature_template ?? null,
       auto_reply_email_enabled: next.auto_reply_email_enabled ?? false,
       auto_reply_email_subject: next.auto_reply_email_subject ?? null,
       auto_reply_email_message: next.auto_reply_email_message ?? null,
@@ -368,6 +370,25 @@ export default function SettingsPanel({ profile }) {
                 </div>
               </div>
               <div className="p-5 space-y-5">
+                {/* Reply signature — optional pool of names to sign replies as */}
+                <div>
+                  <div className="text-sm font-medium text-paper">Reply signature</div>
+                  <div className="text-xs text-muted mb-2">One name per line. Each ticket reply is signed by a randomly chosen name. Leave empty to use each agent's own signature.</div>
+                  <textarea disabled={!isOwner} rows={4}
+                    className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none disabled:opacity-60"
+                    value={(settings.signature_names || []).join('\n')}
+                    onChange={e => setSettings(s => ({ ...s, signature_names: e.target.value.split('\n') }))}
+                    onBlur={e => saveSettings({ signature_names: e.target.value.split('\n').map(x => x.trim()).filter(Boolean) })}
+                    placeholder={'Sarah\nJames\nPriya\nTom\nEllie'} />
+                  <textarea disabled={!isOwner} rows={3}
+                    className="w-full mt-2 px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none disabled:opacity-60"
+                    value={settings.signature_template || ''}
+                    onChange={e => setSettings(s => ({ ...s, signature_template: e.target.value }))}
+                    onBlur={e => saveSettings({ signature_template: e.target.value })}
+                    placeholder={'{{name}}\nSupport Team'} />
+                  <div className="text-[11px] text-dim mt-1">Signature block — {'{{name}}'} is replaced with the chosen name. Defaults to just the name.</div>
+                </div>
+
                 {/* Email auto-reply */}
                 <div>
                   <button type="button" disabled={!isOwner}

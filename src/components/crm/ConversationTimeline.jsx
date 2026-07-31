@@ -40,6 +40,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [aiError, setAiError] = useState('');
   const [isMsCrm, setIsMsCrm] = useState(false);
   const [mySignature, setMySignature] = useState('');
+  const [sigPool, setSigPool] = useState({ names: [], template: '' });
   // Images/files staged in the composer to send with an email reply.
   const [pendingFiles, setPendingFiles] = useState([]); // [{ file, name, size }]
   const attachRef = useRef(null);
@@ -87,7 +88,22 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   useEffect(() => {
     supabase.from('profiles').select('email_signature').eq('id', profile.id).maybeSingle()
       .then(r => setMySignature(r.data?.email_signature || '')).catch(() => {});
+    // Optional shared pool: replies get signed by a random name from it.
+    supabase.from('support_settings').select('signature_names, signature_template').eq('id', 1).maybeSingle()
+      .then(r => setSigPool({ names: r.data?.signature_names || [], template: r.data?.signature_template || '' }))
+      .catch(() => {});
   }, [profile.id]);
+
+  // The signature for THIS send: a random name from the shared pool when one is
+  // configured, otherwise the agent's own. Picked per send, so a thread can be
+  // answered by different names.
+  const signatureForSend = () => {
+    const names = (sigPool.names || []).filter(Boolean);
+    if (!names.length) return mySignature;
+    const name = names[Math.floor(Math.random() * names.length)];
+    const tpl = (sigPool.template || '').trim();
+    return tpl ? tpl.replace(/\{\{\s*name\s*\}\}/g, name) : name;
+  };
 
   // Auto-grow the composer with its content (capped at ~13 lines, then scrolls)
   // so a long reply is fully visible while writing it.
@@ -306,7 +322,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               ticket_id: subjectId,
               to: toEmail.trim(),
               subject: null, // always reply with the customer's email subject ("Re: …", threaded server-side)
-              body: body.trim() + (mySignature ? `\n\n--\n${mySignature}` : ''),
+              body: (() => { const sig = signatureForSend(); return body.trim() + (sig ? `\n\n--\n${sig}` : ''); })(),
               attachments: attachRefs,
             }),
           }
@@ -659,7 +675,9 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
             <div className="space-y-2 mb-2">
               <input className={input} value={toEmail || customerEmail} onChange={e => setToEmail(e.target.value)}
                 placeholder="To email address" />
-              {mySignature && <div className="text-[10px] text-dim px-1">Your signature will be added automatically (edit it under Account).</div>}
+              {(sigPool.names || []).filter(Boolean).length > 0
+                ? <div className="text-[10px] text-dim px-1">Signed by one of {(sigPool.names || []).filter(Boolean).length} support names, picked at random (Settings &rarr; Support).</div>
+                : mySignature && <div className="text-[10px] text-dim px-1">Your signature will be added automatically (edit it under Account).</div>}
               {pendingFiles.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {pendingFiles.map((p, i) => (

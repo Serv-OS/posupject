@@ -247,6 +247,15 @@ body {
 .prose-tight ul, .prose-tight ol { margin: 0.3em 0; padding-left: 1.5em; }
 .prose-tight a { color: rgb(var(--c-primary-deep)); text-decoration: underline; }
 
+/* Notification popover: opaque, never translucent. Over a busy page (and
+   especially on a phone) the glass let content bleed through and the list
+   became unreadable. */
+.notif-pop, .notif-pop .glass-card {
+  background: var(--drawer-bg) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 /* ============================================================
    Mobile responsiveness (unchanged behaviour, theme-aware)
    ============================================================ */

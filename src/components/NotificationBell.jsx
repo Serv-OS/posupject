@@ -79,7 +79,7 @@ export default function NotificationBell({ profile, onNavigate }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-80 max-h-[70vh] overflow-y-auto glass-card rounded-2xl shadow-xl z-50">
+        <div className="notif-pop absolute right-0 top-full mt-2 w-[min(20rem,calc(100vw-1.5rem))] max-h-[70vh] overflow-y-auto glass-card rounded-2xl shadow-xl z-50">
           <div className="px-4 py-3 border-b border-bdr flex items-center justify-between sticky top-0 glass-card">
             <div className="text-sm font-bold text-paper">Notifications</div>
             {unread > 0 && (
