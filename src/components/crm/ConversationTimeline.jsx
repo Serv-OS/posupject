@@ -3,8 +3,8 @@ import { supabase } from '../../lib/supabase';
 import { cleanEmailBody, hasQuotedTail } from '../../lib/emailText';
 import { emailHtmlFor, sanitizeEmailHtml } from '../../lib/emailHtml';
 
-const TYPE_ICON = { call: '\u{1F4DE}', email: '\u{1F4E7}', sms: '\u{1F4AC}', note: '\u{1F4DD}', meeting: '\u{1F91D}', whatsapp: '\u{1F4F2}' };
-const TYPE_LABEL = { call: 'Call', email: 'Email', sms: 'SMS', note: 'Note', meeting: 'Meeting', whatsapp: 'WhatsApp' };
+const TYPE_ICON = { call: '\u{1F4DE}', email: '\u{1F4E7}', sms: '\u{1F4AC}', note: '\u{1F4DD}', meeting: '\u{1F91D}', whatsapp: '\u{1F4F2}', chat: '\u{1F4AD}' };
+const TYPE_LABEL = { call: 'Call', email: 'Email', sms: 'SMS', note: 'Note', meeting: 'Meeting', whatsapp: 'WhatsApp', chat: 'Chat' };
 const CHANNEL_TABS = [
   { key: 'note', label: 'Note', icon: '\u{1F4DD}' },
   { key: 'email', label: 'Email', icon: '\u{1F4E7}' },
