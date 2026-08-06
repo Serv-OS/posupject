@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { computeTotals, computeTotalsInclusive, lineNet, vatFractionOfGross, round2, gbp2 } from '../../lib/money.js';
 import { isUkVat } from '../../lib/branding.js';
+import { canDeleteBill, deleteBill, billLabel } from '../../lib/billOps.js';
 import AttachmentsCard from '../crm/AttachmentsCard.jsx';
 
 const STATUS = ['draft', 'to_pay', 'partially_paid', 'paid', 'void'];
@@ -17,6 +19,10 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
   const [categories, setCategories] = useState([]);
   const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState('');
+  // The status as last saved. Delete is offered on this, not on the working
+  // copy — picking "Draft" in the dropdown must not make Delete appear for a
+  // bill that is still to_pay in the database.
+  const [savedStatus, setSavedStatus] = useState(null);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
   const uk = isUkVat();
 
@@ -30,7 +36,7 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
       supabase.from('deals').select('id, title, company_id').order('created_at', { ascending: false }).limit(500),
       supabase.from('expense_categories').select('id, label, default_tax_rate, reclaimable').eq('active', true).order('sort'),
     ]);
-    setBill(b.data); setLines((li.data || []).map(x => ({ ...x })));
+    setBill(b.data); setSavedStatus(b.data?.status ?? null); setLines((li.data || []).map(x => ({ ...x })));
     setSuppliers(s.data || []); setCompanies(c.data || []); setLocations(l.data || []);
     setDeals(d.data || []); setCategories(cat.data || []);
   }, [billId]);
@@ -98,6 +104,16 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
     setBill(p => ({ ...p, status: 'paid', amount_paid: totals.gross, paid_at: new Date().toISOString() }));
   };
 
+  // Drafts only — anything raised is voided instead, so the record survives.
+  const removeBill = async () => {
+    if (!confirm(`Delete ${billLabel(bill, suppliers.find(s => s.id === bill.supplier_id)?.name)}?\n\nIts lines and attachments go with it. This cannot be undone.`)) return;
+    setSaving(true);
+    const res = await deleteBill(supabase, billId);
+    setSaving(false);
+    if (!res.ok) { alert('Could not delete: ' + res.error); load(); return; }
+    onClose();
+  };
+
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
   const cell = "px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper focus:outline-none focus:border-ember";
@@ -115,6 +131,12 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
             {flash && <span className="text-sm text-emerald-600 font-medium">✓ {flash}</span>}
             <button onClick={() => save()} disabled={saving} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>
             {bill.status !== 'paid' && <button onClick={markPaid} className="px-4 py-2 text-sm font-semibold rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200">Mark paid</button>}
+            {canDeleteBill({ status: savedStatus }, profile) && (
+              <button onClick={removeBill} disabled={saving} title="Delete this draft"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-xl text-red-600 border border-red-200 hover:bg-red-50 transition disabled:opacity-50">
+                <Trash2 size={15} /> Delete
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -234,7 +256,10 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
               <div><label className={label}>Status</label>
                 <select className={input} value={bill.status} onChange={e => set('status', e.target.value)}>
                   {STATUS.map(s => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
-                </select></div>
+                </select>
+                {savedStatus && savedStatus !== 'draft' && (
+                  <div className="text-[10px] text-dim mt-1">Raised bills can't be deleted — set <span className="text-paper">Void</span> to retire one. Only drafts can be deleted.</div>
+                )}</div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={label}>Amount paid £</label><input type="number" className={input} value={bill.amount_paid || 0} onChange={e => set('amount_paid', e.target.value)} /></div>
                 <div><label className={label}>Paid date</label><input type="date" className={input} value={bill.paid_at ? bill.paid_at.slice(0, 10) : ''} onChange={e => set('paid_at', e.target.value || null)} /></div>

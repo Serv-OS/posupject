@@ -19,6 +19,20 @@ function advance(fromIso: string, frequency: string, dayOfMonth: number): string
   return next.toISOString().slice(0, 10);
 }
 
+// Advance to the first occurrence AFTER today.
+//
+// Stepping a single period was the bug behind duplicate invoices: a schedule
+// that had fallen behind (next_run 1 Jul, today 3 Aug) advanced only to 1 Aug,
+// which is still due — so the daily cron billed it again the next morning, and
+// the next, until it caught up. One invoice per day instead of per month.
+function advancePastToday(fromIso: string, frequency: string, dayOfMonth: number, todayIso: string): string {
+  let next = advance(fromIso, frequency, dayOfMonth);
+  for (let i = 0; i < 120 && next <= todayIso; i++) {
+    next = advance(next, frequency, dayOfMonth);
+  }
+  return next;
+}
+
 serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -42,11 +56,24 @@ serve(async (req) => {
         const { data: inv, error: invErr } = await supabase.from("invoices").insert({
           company_id: sched.company_id, location_id: sched.location_id, contact_id: sched.contact_id,
           recurring_id: sched.id, status: "draft", issue_date: todayIso, due_date: dueDate,
+          recurring_period: sched.next_run,   // unique per schedule — the DB rejects a repeat
           tax_rate: sched.tax_rate, subtotal, tax_amount: taxAmount, total,
           terms: sched.terms, notes: sched.notes, email_to: sched.email_to,
           created_by: sched.created_by,
         }).select().single();
-        if (invErr) throw invErr;
+        if (invErr) {
+          // 23505 = the one-per-period guard. Someone/something already billed
+          // this occurrence, so skip it and move the schedule on.
+          if ((invErr as any).code === "23505") {
+            await supabase.from("recurring_invoices").update({
+              next_run: advancePastToday(sched.next_run, sched.frequency, sched.day_of_month, todayIso),
+              last_run_at: new Date().toISOString(),
+            }).eq("id", sched.id);
+            results.push({ schedule: sched.id, skipped: "already invoiced for this period" });
+            continue;
+          }
+          throw invErr;
+        }
 
         if (lines.length) {
           await supabase.from("invoice_line_items").insert(lines.map((l: any, i: number) => ({
@@ -95,7 +122,7 @@ serve(async (req) => {
 
         // Advance the schedule so repeat runs don't duplicate
         await supabase.from("recurring_invoices").update({
-          next_run: advance(sched.next_run, sched.frequency, sched.day_of_month),
+          next_run: advancePastToday(sched.next_run, sched.frequency, sched.day_of_month, todayIso),
           last_run_at: new Date().toISOString(),
         }).eq("id", sched.id);
 

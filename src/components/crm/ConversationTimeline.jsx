@@ -15,7 +15,10 @@ const CALL_OUTCOMES = ['connected', 'voicemail', 'no_answer', 'busy', 'wrong_num
 const TICKET_STAGES = ['new','in_progress','waiting_on_customer','escalated','resolved','closed'];
 const TICKET_STAGE_LABELS = { new:'New', in_progress:'In Progress', waiting_on_customer:'Waiting on Customer', escalated:'Escalated', resolved:'Resolved', closed:'Closed' };
 
-export default function ConversationTimeline({ subjectType, subjectId, profile, contacts, ticket, onTicketUpdated }) {
+// `active` is false while a phone is showing the Details tab: the list is
+// display:none then, which loses its scroll position, so it is put back at the
+// latest message when the tab comes back. Desktop callers leave it alone.
+export default function ConversationTimeline({ subjectType, subjectId, profile, contacts, ticket, onTicketUpdated, active = true }) {
   const [activities, setActivities] = useState([]);
   const [members, setMembers] = useState([]);
   // Default channel: match the ticket's inbound channel, or 'note'
@@ -31,6 +34,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [isInternal, setIsInternal] = useState(true);
   const [sending, setSending] = useState(false);
   const [askStatus, setAskStatus] = useState(false);
+  const [editTo, setEditTo] = useState(false);   // phones: reveal the To field
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showMentions, setShowMentions] = useState(false);
@@ -105,13 +109,15 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
     return tpl ? tpl.replace(/\{\{\s*name\s*\}\}/g, name) : name;
   };
 
-  // Auto-grow the composer with its content (capped at ~13 lines, then scrolls)
-  // so a long reply is fully visible while writing it.
+  // Auto-grow the composer with its content so a long reply is fully visible
+  // while writing it. Capped at ~13 lines on desktop; much tighter on a phone,
+  // where a tall box would leave no room for the conversation above it.
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
+    const cap = typeof window !== 'undefined' && window.innerWidth < 1024 ? 150 : 340;
     el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight + 2, 340) + 'px';
+    el.style.height = Math.min(el.scrollHeight + 2, cap) + 'px';
   }, [body, channel]);
 
   useEffect(() => {
@@ -130,11 +136,12 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   }, [subjectType, subjectId]);
 
   useEffect(() => {
-    // Scroll to bottom on new activities
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [activities]);
+    // Scroll to bottom on new activities, and again whenever the list comes
+    // back into view. Skipped while hidden — clientHeight is 0 then and the
+    // write would be thrown away.
+    const el = scrollRef.current;
+    if (el && el.clientHeight > 0) el.scrollTop = el.scrollHeight;
+  }, [activities, active]);
 
   const load = async () => {
     const [a, m, tpl] = await Promise.all([
@@ -451,21 +458,24 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
 
   return (
     <div className="flex flex-col h-full">
-      {/* Conversation header — count + jump-to-oldest/latest */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-bdr shrink-0">
-        <h3 className="text-sm font-bold text-paper">Conversation</h3>
+      {/* Conversation header — count + jump-to-oldest/latest. The title is
+          dropped on phones, where the tab above already says "Conversation". */}
+      <div className="flex items-center gap-2 px-3 lg:px-4 py-1.5 lg:py-2.5 border-b border-bdr shrink-0">
+        <h3 className="hidden lg:block text-sm font-bold text-paper">Conversation</h3>
         <span className="text-[10px] font-mono text-dim bg-card px-2 py-0.5 rounded-full">{activities.length} {activities.length === 1 ? 'message' : 'messages'}</span>
-        <div className="flex-1" />
+        {/* ml-auto rather than a flex-1 spacer: the global ≤640px rule gives any
+            .flex-1 inside a bordered header a 100% basis, which pushed these
+            onto a second row on a phone. */}
         {activities.length > 1 && (
           <>
-            <button onClick={scrollToTop} title="Jump to oldest" className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-muted hover:text-paper hover:bg-card transition">↑ Oldest</button>
+            <button onClick={scrollToTop} title="Jump to oldest" className="ml-auto px-2.5 py-1 rounded-lg text-[11px] font-semibold text-muted hover:text-paper hover:bg-card transition">↑ Oldest</button>
             <button onClick={scrollToBottom} title="Jump to latest" className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-muted hover:text-paper hover:bg-card transition">↓ Latest</button>
           </>
         )}
       </div>
       {/* Messages */}
       <div className="relative flex-1 min-h-0 flex flex-col">
-      <div ref={scrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div ref={scrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto overscroll-contain px-3 lg:px-4 py-3 lg:py-4 space-y-3">
         {activities.length === 0 && (
           <div className="text-center text-dim text-xs py-8 italic">No conversation yet. Start by adding a note or sending a message.</div>
         )}
@@ -484,7 +494,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                 </div>
               )}
             <div className={`flex ${isNote ? 'justify-center' : isOutbound ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] ${
+              <div className={`max-w-[92%] lg:max-w-[80%] ${
                 isNote
                   ? 'w-full'
                   : isOutbound
@@ -599,10 +609,13 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
 
       {/* Composer */}
       {canWrite && (
-        <div className="border-t border-bdr px-4 py-3">
-          {/* Channel indicator + tabs */}
+        <div className="conv-composer border-t border-bdr px-3 lg:px-4 py-2 lg:py-3 shrink-0"
+          style={{ paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))' }}>
+          {/* Channel indicator + tabs. The "contacted via" line is desktop-only —
+              on a phone that row is height the reply box needs, and the same
+              detail sits one tap away under Details. */}
           {ticketChannel && ticketChannel !== 'web' && (
-            <div className="flex items-center gap-2 mb-2 px-1">
+            <div className="hidden lg:flex items-center gap-2 mb-2 px-1">
               <span className="text-[10px] text-muted">Customer contacted via</span>
               <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase rounded-lg ${
                 ticketChannel === 'sms' ? 'bg-blue-100 text-blue-700' : ticketChannel === 'email' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'
@@ -611,7 +624,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               {ticket?.customer_email && <span className="text-[10px] text-muted">{ticket.customer_email}</span>}
             </div>
           )}
-          <div className="flex gap-1 mb-3">
+          <div className="flex gap-1 mb-2 lg:mb-3">
             {CHANNEL_TABS.map(t => (
               <button key={t.key} onClick={() => {
                 setChannel(t.key);
@@ -619,7 +632,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                 if (t.key === 'email' && customerEmail) setToEmail(customerEmail);
                 if (t.key === 'sms' && ticket?.customer_phone) setToPhone(ticket.customer_phone);
               }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition ${
+                className={`flex items-center gap-1 lg:gap-1.5 px-2 lg:px-3 py-1.5 text-[11px] lg:text-xs font-medium rounded-xl transition ${
                   channel === t.key ? 'bg-ember text-white'
                   : t.key === ticketChannel ? 'bg-ember/10 text-ember border border-ember/20'
                   : 'bg-card text-muted hover:text-paper'
@@ -629,29 +642,30 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
               </button>
             ))}
 
-            {/* Right-aligned tools: attach (email) + AI draft + Templates */}
+            {/* Right-aligned tools: attach (email) + AI draft + Templates.
+                Icon-only on phones so all four channel tabs still fit one row. */}
             <div className="ml-auto flex items-center gap-1">
             {subjectType === 'ticket' && channel === 'email' && (
               <>
                 <button onClick={() => attachRef.current?.click()} title="Attach image"
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-xl bg-card text-muted hover:text-paper transition">
-                  {'\u{1F4CE}'} Attach
+                  className="flex items-center gap-1 px-2 lg:px-3 py-1.5 text-[11px] lg:text-xs font-medium rounded-xl bg-card text-muted hover:text-paper transition">
+                  {'\u{1F4CE}'} <span className="hidden sm:inline">Attach</span>
                 </button>
                 <input ref={attachRef} type="file" accept="image/*,.pdf" multiple className="hidden" onChange={onPickAttach} />
               </>
             )}
             {subjectType === 'ticket' && channel !== 'call' && (
-              <button onClick={generateDraft} disabled={aiLoading}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-xl bg-ember/15 text-ember-deep border border-ember/25 hover:bg-ember/25 disabled:opacity-50">
-                {aiLoading ? 'Generating…' : '✨ AI reply'}
+              <button onClick={generateDraft} disabled={aiLoading} title="AI reply"
+                className="flex items-center gap-1 px-2 lg:px-3 py-1.5 text-[11px] lg:text-xs font-semibold rounded-xl bg-ember/15 text-ember-deep border border-ember/25 hover:bg-ember/25 disabled:opacity-50">
+                {aiLoading ? <>✨ <span className="hidden sm:inline">Generating…</span></> : <>✨ <span className="hidden sm:inline">AI reply</span></>}
               </button>
             )}
             {/* Templates picker */}
             {channel !== 'call' && availableTemplates.length > 0 && (
               <div className="relative">
-                <button onClick={() => setShowTemplates(v => !v)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-xl bg-card text-muted hover:text-paper transition">
-                  {'\u{1F4C4}'} Templates {'\u{25BE}'}
+                <button onClick={() => setShowTemplates(v => !v)} title="Templates"
+                  className="flex items-center gap-1 px-2 lg:px-3 py-1.5 text-[11px] lg:text-xs font-medium rounded-xl bg-card text-muted hover:text-paper transition">
+                  {'\u{1F4C4}'} <span className="hidden sm:inline">Templates</span> {'\u{25BE}'}
                 </button>
                 {showTemplates && (
                   <div className="absolute right-0 bottom-full mb-1 w-64 max-h-60 overflow-y-auto glass-card rounded-xl shadow-xl z-30">
@@ -673,11 +687,19 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
           {/* Email fields */}
           {channel === 'email' && (
             <div className="space-y-2 mb-2">
-              <input className={input} value={toEmail || customerEmail} onChange={e => setToEmail(e.target.value)}
+              {/* Phones: the address is a single line you tap to change, rather
+                  than a full-width field competing with the message box. */}
+              <button type="button" onClick={() => setEditTo(v => !v)}
+                className="lg:hidden w-full flex items-center gap-2 px-3 py-1.5 rounded-xl bg-card border border-bdr text-left">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-dim shrink-0">To</span>
+                <span className="flex-1 min-w-0 truncate text-xs text-paper">{(toEmail || customerEmail) || 'Add an address'}</span>
+                <span className="text-[10px] text-muted shrink-0">{editTo ? 'Done' : 'Change'}</span>
+              </button>
+              <input className={`${input} ${editTo ? 'block' : 'hidden'} lg:block`} value={toEmail || customerEmail} onChange={e => setToEmail(e.target.value)}
                 placeholder="To email address" />
               {(sigPool.names || []).filter(Boolean).length > 0
-                ? <div className="text-[10px] text-dim px-1">Signed by one of {(sigPool.names || []).filter(Boolean).length} support names, picked at random (Settings &rarr; Support).</div>
-                : mySignature && <div className="text-[10px] text-dim px-1">Your signature will be added automatically (edit it under Account).</div>}
+                ? <div className="hidden lg:block text-[10px] text-dim px-1">Signed by one of {(sigPool.names || []).filter(Boolean).length} support names, picked at random (Settings &rarr; Support).</div>
+                : mySignature && <div className="hidden lg:block text-[10px] text-dim px-1">Your signature will be added automatically (edit it under Account).</div>}
               {pendingFiles.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {pendingFiles.map((p, i) => (
@@ -701,7 +723,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
 
           {/* Call fields */}
           {channel === 'call' && (
-            <div className="grid grid-cols-3 gap-2 mb-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
               <select className={input} value={direction} onChange={e => setDirection(e.target.value)}>
                 <option value="outbound">Outbound call</option>
                 <option value="inbound">Inbound call</option>
@@ -729,8 +751,8 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
           <div className="relative">
             <textarea
               ref={bodyRef}
-              className={input + ' resize-none pr-20'}
-              rows={channel === 'note' ? 3 : 5}
+              className={input + ' resize-none pr-20 lg:min-h-[110px]'}
+              rows={3}
               value={body}
               onChange={handleBodyChange}
               placeholder={
@@ -770,20 +792,28 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                 else save();
               }}
               disabled={sending || (!body.trim() && channel !== 'call')}
-              className="absolute bottom-2 right-2 btn-glass px-4 py-1.5 rounded-xl text-xs disabled:opacity-50">
+              className="absolute bottom-2 right-2 btn-glass px-4 py-2 lg:py-1.5 rounded-xl text-xs disabled:opacity-50">
               {sending ? '...' : channel === 'note' ? 'Add' : channel === 'call' ? 'Log' : 'Send'}
             </button>
+            {/* Status picker: a popover on desktop, a bottom sheet on phones —
+                anchored to the button it was drawn off the bottom of the screen. */}
             {askStatus && (
-              <div className="absolute bottom-11 right-2 z-30 w-60 glass-raised rounded-xl shadow-xl overflow-hidden">
-                <div className="px-3 py-2 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim border-b border-bdr">Send &amp; set ticket status</div>
-                {TICKET_STAGES.map(s => (
-                  <button key={s} onClick={() => { setAskStatus(false); save(s); }}
-                    className="w-full px-3 py-2 text-left text-sm text-paper hover:bg-ember/10 flex items-center justify-between transition">
-                    <span>{TICKET_STAGE_LABELS[s]}</span>
-                    {ticket?.stage === s && <span className="text-[10px] font-mono text-dim">current</span>}
-                  </button>
-                ))}
-              </div>
+              <>
+                <div className="lg:hidden fixed inset-0 z-40 bg-black/40" onClick={() => setAskStatus(false)} />
+                <div className="fixed inset-x-3 bottom-3 z-50 lg:absolute lg:inset-x-auto lg:bottom-11 lg:right-2 lg:z-30 lg:w-60 glass-raised rounded-2xl lg:rounded-xl shadow-xl overflow-hidden"
+                  style={{ marginBottom: 'env(safe-area-inset-bottom)' }}>
+                  <div className="px-3 py-2 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim border-b border-bdr">Send &amp; set ticket status</div>
+                  {TICKET_STAGES.map(s => (
+                    <button key={s} onClick={() => { setAskStatus(false); save(s); }}
+                      className="w-full px-4 lg:px-3 py-3 lg:py-2 text-left text-sm text-paper hover:bg-ember/10 border-b border-bdr last:border-b-0 lg:border-b-0 flex items-center justify-between transition">
+                      <span>{TICKET_STAGE_LABELS[s]}</span>
+                      {ticket?.stage === s && <span className="text-[10px] font-mono text-dim">current</span>}
+                    </button>
+                  ))}
+                  <button onClick={() => setAskStatus(false)}
+                    className="lg:hidden w-full px-4 py-3 text-center text-sm font-semibold text-muted">Cancel</button>
+                </div>
+              </>
             )}
           </div>
         </div>

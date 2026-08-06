@@ -42,6 +42,11 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
   const [draft, setDraft] = useState({});
   const [creatingContact, setCreatingContact] = useState(false);
   const [newContact, setNewContact] = useState({ first_name: '', last_name: '', email: '', phone: '' });
+  // Phones can't show three columns at once. Below lg the screen becomes two
+  // tabs — the conversation (default, because that's the job) and everything
+  // else — so the reply box gets the whole height instead of a nested scroll
+  // buried under the side cards.
+  const [tab, setTab] = useState('chat');
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -197,53 +202,65 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
   return (
-    <div className="h-full flex flex-col">
+    <div data-ticket-screen className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-6 py-5 border-b border-bdr flex items-center gap-4">
-        <button onClick={onClose} className="text-muted hover:text-paper text-lg">&larr;</button>
+      <div className="px-3 lg:px-6 py-2.5 lg:py-5 border-b border-bdr flex items-start lg:items-center gap-2.5 lg:gap-4 shrink-0">
+        <button onClick={onClose} className="text-muted hover:text-paper text-lg shrink-0 leading-none py-1">&larr;</button>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-start gap-2">
             {ticket.ticket_number && (
-              <span className="px-2 py-0.5 text-xs font-mono font-bold rounded-lg bg-ink-soft text-ember border border-bdr shrink-0">
+              <span className="px-1.5 lg:px-2 py-0.5 text-[11px] lg:text-xs font-mono font-bold rounded-lg bg-ink-soft text-ember border border-bdr shrink-0">
                 #{ticket.ticket_number}
               </span>
             )}
-            <div className="text-xl font-bold text-paper truncate">{ticket.subject}</div>
+            <div className="text-[15px] leading-snug lg:text-xl font-bold text-paper line-clamp-2 lg:line-clamp-1">{ticket.subject}</div>
           </div>
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            <span className={`badge-status ${STAGE_STYLES[ticket.stage]}`}>{STAGE_LABELS[ticket.stage]}</span>
+          <div data-ticket-chrome className="flex items-center gap-1.5 lg:gap-2 mt-1.5 lg:mt-1 flex-wrap">
+            {/* Stage: chips strip on desktop, a one-tap native picker on phones */}
+            {canWrite ? (
+              <span className="lg:hidden relative inline-flex">
+                <select value={ticket.stage} onChange={e => changeStage(e.target.value)} aria-label="Ticket status"
+                  className={`appearance-none pl-2 pr-6 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wide ${STAGE_STYLES[ticket.stage]}`}>
+                  {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
+                </select>
+                <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] opacity-70">{'▾'}</span>
+              </span>
+            ) : (
+              <span className={`lg:hidden badge-status ${STAGE_STYLES[ticket.stage]}`}>{STAGE_LABELS[ticket.stage]}</span>
+            )}
+            <span className={`hidden lg:inline-flex badge-status ${STAGE_STYLES[ticket.stage]}`}>{STAGE_LABELS[ticket.stage]}</span>
             <SlaBadge ticket={ticket} />
             <span className="text-xs text-dim font-mono">{ticket.priority}</span>
-            <span className="text-xs text-muted">{ticket.ticket_type}</span>
+            <span className="hidden lg:inline text-xs text-muted">{ticket.ticket_type}</span>
             {company && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-lg bg-slate-100 text-slate-600 border border-slate-200 cursor-pointer hover:border-slate-300"
+              <span className="hidden lg:inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-lg bg-slate-100 text-slate-600 border border-slate-200 cursor-pointer hover:border-slate-300"
                 onClick={() => onNavigate?.('company', company.id)}>
                 {'\u{1F3E2}'} {company.name}
               </span>
             )}
             {ticket.channel && (
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase rounded-lg ${
+              <span className={`hidden lg:inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase rounded-lg ${
                 ticket.channel === 'sms' ? 'bg-blue-100 text-blue-700' : ticket.channel === 'email' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'
               }`}>{ticket.channel}</span>
             )}
-            {ticket.customer_phone && <span className="text-xs text-muted">{ticket.customer_phone}</span>}
-            {ticket.customer_email && <span className="text-xs text-muted">{ticket.customer_email}</span>}
+            {ticket.customer_phone && <span className="hidden lg:inline text-xs text-muted">{ticket.customer_phone}</span>}
+            {ticket.customer_email && <span className="hidden lg:inline text-xs text-muted">{ticket.customer_email}</span>}
           </div>
         </div>
         {!editing && (
-          <div className="flex gap-2 items-center">
+          <div className="flex gap-1.5 lg:gap-2 items-center shrink-0">
             <TimerButton subjectType="ticket" subjectId={ticketId} label={ticket.subject} profile={profile} />
-            {canWrite && <button onClick={startEdit} className="btn-ghost px-4 py-2 rounded-xl text-sm">Edit</button>}
+            {canWrite && <button onClick={startEdit} className="btn-ghost px-3 lg:px-4 py-1.5 lg:py-2 rounded-xl text-xs lg:text-sm">Edit</button>}
             {profile.role === 'owner' && (
-              <button onClick={deleteRecord} className="px-3 py-2 text-xs text-red-600 border border-red-200 rounded-xl hover:bg-red-50 transition">Delete</button>
+              <button onClick={deleteRecord} className="hidden lg:block px-3 py-2 text-xs text-red-600 border border-red-200 rounded-xl hover:bg-red-50 transition">Delete</button>
             )}
           </div>
         )}
       </div>
 
-      {/* Stage bar */}
+      {/* Stage bar — desktop only; phones use the picker in the header */}
       {canWrite && (
-        <div className="px-6 py-2 border-b border-bdr flex gap-0.5 overflow-x-auto">
+        <div className="hidden lg:flex px-6 py-2 border-b border-bdr gap-0.5 overflow-x-auto shrink-0">
           {STAGES.map((s, i) => {
             const isActive = ticket.stage === s;
             const isPast = STAGES.indexOf(ticket.stage) > i;
@@ -257,15 +274,27 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
         </div>
       )}
 
+      {/* Mobile tabs */}
+      {!editing && (
+        <div data-ticket-chrome className="lg:hidden flex gap-1 px-3 py-1.5 border-b border-bdr shrink-0">
+          {[['chat', 'Conversation'], ['details', 'Details']].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`flex-1 py-1.5 rounded-xl text-xs font-semibold transition ${
+                tab === k ? 'bg-ember text-white' : 'bg-card text-muted'
+              }`}>{l}</button>
+          ))}
+        </div>
+      )}
+
       {/* Content */}
       {editing ? (
-        <div className="flex-1 min-h-0 overflow-y-auto p-6">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 lg:p-6">
           <div className="max-w-3xl">
             <Card title="Edit Support Ticket">
               <div className="space-y-3">
                 <div><label className={label}>Subject</label><input className={input} value={draft.subject || ''} onChange={e => set('subject', e.target.value)} /></div>
                 <div><label className={label}>Description</label><textarea className={input + ' resize-none'} rows={4} value={draft.description || ''} onChange={e => set('description', e.target.value)} /></div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div><label className={label}>Stage</label><select className={input} value={draft.stage} onChange={e => set('stage', e.target.value)}>
                     {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}</select></div>
                   <div><label className={label}>Priority</label><select className={input} value={draft.priority} onChange={e => set('priority', e.target.value)}>
@@ -291,10 +320,15 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
           </div>
         </div>
       ) : (
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-5 p-6 max-w-[1600px] w-full mx-auto overflow-y-auto lg:overflow-hidden">
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-0 lg:gap-5 p-0 lg:p-6 max-w-[1600px] w-full mx-auto overflow-hidden">
+
+            {/* Side cards. On a phone this is one scrolling "Details" pane; on
+                desktop the wrapper drops out of layout (display:contents) so the
+                two rails sit either side of the conversation, placed by order. */}
+            <div className={`${tab === 'details' ? 'flex' : 'hidden'} lg:contents flex-1 min-h-0 flex-col overflow-y-auto p-4 gap-4`}>
 
             {/* LEFT rail — own scroll */}
-            <div className="lg:w-[300px] lg:shrink-0 lg:overflow-y-auto space-y-5">
+            <div className="lg:order-1 lg:w-[300px] lg:shrink-0 lg:overflow-y-auto space-y-4 lg:space-y-5">
               {/* Customer card: show who contacted us, match or create a contact */}
               {(ticket.customer_phone || ticket.customer_email || matchedContact) && (
                 <Card title="Customer">
@@ -431,15 +465,8 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
               )}
             </div>
 
-            {/* CENTER: Conversation — fills the viewport height, only the list scrolls */}
-            <div className="flex-1 min-w-0 flex flex-col min-h-[560px] lg:min-h-0">
-              <div className="flex-1 min-h-0 glass-card rounded-2xl overflow-hidden flex flex-col">
-                <ConversationTimeline subjectType="ticket" subjectId={ticketId} profile={profile} contacts={[]} ticket={ticket} onTicketUpdated={load} />
-              </div>
-            </div>
-
             {/* RIGHT rail — own scroll */}
-            <div className="lg:w-[312px] lg:shrink-0 lg:overflow-y-auto space-y-5">
+            <div className="lg:order-3 lg:w-[312px] lg:shrink-0 lg:overflow-y-auto space-y-4 lg:space-y-5">
               <Card title="Company">
                 {company ? (
                   <div onClick={() => onNavigate?.('company', company.id)}
@@ -503,6 +530,15 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                   </div>
                 ) : <Empty>No stage changes</Empty>}
               </Card>
+            </div>
+            </div>
+
+            {/* CENTER: Conversation — fills the height, only the message list scrolls.
+                Edge-to-edge on a phone so replies get the full width. */}
+            <div className={`${tab === 'chat' ? 'flex' : 'hidden'} lg:flex lg:order-2 flex-1 min-w-0 flex-col min-h-0`}>
+              <div className="flex-1 min-h-0 glass-card border-0 lg:border rounded-none lg:rounded-2xl overflow-hidden flex flex-col">
+                <ConversationTimeline subjectType="ticket" subjectId={ticketId} profile={profile} contacts={[]} ticket={ticket} onTicketUpdated={load} active={tab === 'chat'} />
+              </div>
             </div>
           </div>
         )}

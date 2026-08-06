@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { Wallet, Plus, Repeat, X, Trash2 } from 'lucide-react';
 import { gbp2, computeTotals } from '../../lib/money.js';
 import { advanceRunDate, buildBillFromSchedule, isDue } from '../../lib/recurringBills.js';
+import { canDeleteBill, deleteBill, billLabel } from '../../lib/billOps.js';
 
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
 
@@ -29,6 +30,7 @@ export default function BillsPanel({ profile, onNavigate }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [editSched, setEditSched] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(null);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   const load = useCallback(async () => {
@@ -68,6 +70,18 @@ export default function BillsPanel({ profile, onNavigate }) {
       await supabase.from('recurring_bills').update({ next_run: advanceRunDate(s.next_run, s.frequency, s.day_of_month), last_run_at: new Date().toISOString() }).eq('id', s.id);
     }
     setTab('bills'); load();
+  };
+
+  // Delete a draft straight from the list — the usual case is clearing a
+  // mis-keyed or duplicate entry, and opening it first to bin it is a chore.
+  const removeBill = async (b, e) => {
+    e.stopPropagation();                                   // the row itself navigates
+    if (!confirm(`Delete ${billLabel(b)}?\n\nIts lines and attachments go with it. This cannot be undone.`)) return;
+    setDeleting(b.id);
+    const res = await deleteBill(supabase, b.id);
+    setDeleting(null);
+    if (!res.ok) alert('Could not delete: ' + res.error);
+    load();                                                // refresh either way
   };
 
   const supName = (b) => b.supplier?.name || b.company?.name || b.description || 'Untitled bill';
@@ -126,7 +140,7 @@ export default function BillsPanel({ profile, onNavigate }) {
                     : filtered.map(b => {
                       const st = billStatus(b);
                       return (
-                        <div key={b.id} onClick={() => onNavigate?.('bill', b.id)} className="px-5 py-3 flex items-center gap-4 hover:bg-card/50 cursor-pointer">
+                        <div key={b.id} onClick={() => onNavigate?.('bill', b.id)} className="group px-5 py-3 flex items-center gap-4 hover:bg-card/50 cursor-pointer">
                           <div className="font-mono text-xs text-dim w-20 shrink-0">BILL-{b.bill_number}</div>
                           <div className="flex-1 min-w-0">
                             <div className="text-sm text-paper font-medium truncate">{supName(b)}</div>
@@ -139,6 +153,17 @@ export default function BillsPanel({ profile, onNavigate }) {
                           <div className="text-xs text-muted shrink-0 w-24 text-right">Due {fmtD(b.due_date)}</div>
                           <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{gbp2(b.total)}</div>
                           <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg shrink-0 w-20 text-center ${BADGE[st]}`}>{STATUS_LABEL[st]}</span>
+                          {/* Drafts only. The slot is always there so the row
+                              contents don't shift as you move down the list. */}
+                          <span className="w-7 shrink-0 flex justify-end">
+                            {canDeleteBill(b, profile) && (
+                              <button onClick={(e) => removeBill(b, e)} disabled={deleting === b.id}
+                                title="Delete this draft" aria-label={`Delete ${billLabel(b)}`}
+                                className="p-1 rounded-lg text-dim opacity-100 lg:opacity-0 lg:group-hover:opacity-100 focus:opacity-100 hover:text-red-600 hover:bg-red-50 transition disabled:opacity-50">
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </span>
                         </div>
                       );
                     })}

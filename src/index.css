@@ -82,6 +82,13 @@ body.dark {
 
 html, body, #root { height: 100%; }
 
+/* Phones: --app-vh is the visual viewport height, published by main.jsx. It
+   shrinks when the keyboard opens, so bottom-docked UI (the ticket reply box)
+   stays above it instead of being covered. Falls back to 100% without JS. */
+@media (max-width: 1023px) {
+  html, body, #root { height: var(--app-vh, 100%); }
+}
+
 body {
   color: rgb(var(--c-text));
   font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -273,6 +280,16 @@ body {
   .grid.grid-cols-12 { grid-template-columns: minmax(0, 1fr) !important; }
   .grid.grid-cols-12 > * { grid-column: auto !important; }
   main .overflow-y-auto { overflow-x: auto; }
+}
+
+/* Writing a ticket reply on a phone: the keyboard eats ~40% of the screen, and
+   the ticket chrome on top of that leaves barely a line of conversation
+   visible. While a composer field has focus the chrome steps aside and gives
+   that room back; it returns the moment the box is dismissed. Browsers without
+   :has() simply keep the full header. */
+@media (max-width: 1023px) {
+  [data-ticket-screen]:has(.conv-composer textarea:focus) [data-ticket-chrome],
+  [data-ticket-screen]:has(.conv-composer input:focus) [data-ticket-chrome] { display: none; }
 }
 
 @media (max-width: 640px) {
