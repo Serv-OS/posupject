@@ -53,7 +53,15 @@ export default function PublicForm({ slug }) {
   const showLogo = form?.settings?.show_logo !== false && branding?.logo_url;
   const cols = Math.min(3, Math.max(1, Number(form?.settings?.columns) || 1));
   const maxW = cols >= 3 ? 'max-w-3xl' : cols === 2 ? 'max-w-2xl' : 'max-w-md';
-  const gridCols = cols === 3 ? 'sm:grid-cols-3' : cols === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-1';
+  // Breakpoints are measured against the IFRAME, not the page, because that is
+  // the viewport inside an embed. Tailwind's sm: is 640px, and the embed snippet
+  // used to cap the iframe at 480px — so a 2-column form was always rendered as
+  // one column on every site it was embedded on. These thresholds are the
+  // narrowest at which the columns are still comfortable to fill in.
+  const gridCols = cols === 3
+    ? 'min-[560px]:grid-cols-2 min-[820px]:grid-cols-3'
+    : cols === 2 ? 'min-[440px]:grid-cols-2'
+    : 'grid-cols-1';
 
   const setVal = (k, v) => setValues(prev => ({ ...prev, [k]: v }));
 

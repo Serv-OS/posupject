@@ -108,7 +108,13 @@ export default function FormBuilder({ formId, profile, onClose, onNavigate }) {
   if (!form) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading…</div>;
 
   const publicUrl = `${window.location.origin}/f/${form.slug}`;
-  const iframeCode = `<iframe src="${publicUrl}" style="width:100%;max-width:480px;height:640px;border:0;" title="${form.name}"></iframe>`;
+  // The iframe is the viewport the form lays out against, so a 2 or 3 column
+  // form needs a frame wide enough for its columns — 480px for everything is
+  // what made the column setting look broken when embedded.
+  const embedCols = Math.min(3, Math.max(1, Number(form.settings?.columns) || 1));
+  const embedWidth = embedCols === 3 ? 900 : embedCols === 2 ? 680 : 480;
+  const embedHeight = embedCols === 1 ? 640 : 560;
+  const iframeCode = `<iframe src="${publicUrl}" style="width:100%;max-width:${embedWidth}px;height:${embedHeight}px;border:0;" title="${form.name}"></iframe>`;
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
