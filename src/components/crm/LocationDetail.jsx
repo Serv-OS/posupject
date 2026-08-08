@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { LocationTradingCard } from './TradingCard.jsx';
 import TimerButton from './TimerButton.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
 import AssociationManager from './AssociationManager.jsx';
@@ -205,6 +206,8 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                   {location.notes && <Field label="Notes" value={location.notes} />}
                 </div>
               </Card>
+
+              <LocationTradingCard location={location} canWrite={canWrite} onSaved={load} />
 
               <Card title="Key Dates">
                 <div className="space-y-3">

@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
+import { pipelineTotals, DEFAULT_STAGE_WEIGHTS } from '../../lib/trading';
+import { gbp0 } from '../../lib/money';
 
 // CEO-defined targets (see project_sales_targets memory)
 const MONTHLY_ARR_QUOTA = 48000;   // $48K new ARR per AE per month
@@ -35,6 +37,8 @@ export default function ReportingDashboard({ profile }) {
   const [members, setMembers] = useState([]);
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [trading, setTrading] = useState([]);
+  const [weights, setWeights] = useState(DEFAULT_STAGE_WEIGHTS);
   const [tab, setTab] = useState('leads');
   const [leads, setLeads] = useState([]);
   const [leadDays, setLeadDays] = useState(30);
@@ -58,8 +62,14 @@ export default function ReportingDashboard({ profile }) {
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('crm_activities').select('actor_id, type, occurred_at').gte('occurred_at', startOfMonth().toISOString()),
       supabase.from('leads').select('*'),
+      supabase.from('deal_trading').select('*'),
+      supabase.from('deal_stage_weights').select('stage, probability'),
     ]);
     setDeals(results[0].data || []);
+    setTrading(results[14]?.data || []);
+    if (results[15]?.data?.length) {
+      setWeights(Object.fromEntries(results[15].data.map(w => [w.stage, Number(w.probability)])));
+    }
     setOnboardings(results[1].data || []);
     setTickets(results[2].data || []);
     setTasks(results[3].data || []);
@@ -272,6 +282,7 @@ export default function ReportingDashboard({ profile }) {
         {tabBtn('tasks', 'Tasks')}
         {tabBtn('modules', 'Modules')}
         {tabBtn('customers', 'Customers')}
+        {tabBtn('volume', 'Volume')}
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
@@ -573,6 +584,105 @@ export default function ReportingDashboard({ profile }) {
             </>
           )}
 
+          {tab === 'volume' && (() => {
+            // Volume running through the system: what the venues themselves take,
+            // not what we bill them. Best case and likely case sit side by side
+            // on purpose — a raw pipeline total flatters early-stage deals, and a
+            // weighted one alone hides how much is genuinely in play.
+            const t = pipelineTotals(trading, weights);
+            const byStage = Object.entries(
+              trading.filter(d => d.stage !== 'closed_won' && d.stage !== 'closed_lost')
+                .reduce((acc, d) => {
+                  const k = d.stage || 'unknown';
+                  acc[k] = acc[k] || { n: 0, rev: 0, weighted: 0 };
+                  acc[k].n += 1;
+                  acc[k].rev += Number(d.est_monthly_revenue) || 0;
+                  acc[k].weighted += (Number(d.est_monthly_revenue) || 0) * (weights[k] ?? 0);
+                  return acc;
+                }, {}),
+            ).sort((a, b) => b[1].rev - a[1].rev);
+            const missing = trading.filter(d => !d.est_monthly_revenue && d.stage !== 'closed_lost');
+            const won = trading.filter(d => d.stage === 'closed_won' && d.est_monthly_revenue)
+              .sort((a, b) => Number(b.est_monthly_revenue) - Number(a.est_monthly_revenue));
+
+            return (
+              <div className="space-y-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <Stat label="Won — monthly volume" value={gbp0(t.wonRevenue)}
+                    sub={`${t.wonCount} deals · ${gbp0(t.wonRevenue * 12)}/yr`} tone="emerald" />
+                  <Stat label="Pipeline — best case" value={gbp0(t.openRevenue)} sub={`${t.openCount} open deals`} />
+                  <Stat label="Pipeline — likely" value={gbp0(t.weightedRevenue)} sub="weighted by stage" tone="amber" />
+                  <Stat label="Transactions won / month" value={(t.wonTransactions || 0).toLocaleString('en-GB')}
+                    sub={`${(t.openTransactions || 0).toLocaleString('en-GB')} more in pipeline`} />
+                </div>
+
+                <div className="glass-card rounded-2xl overflow-hidden">
+                  <div className="px-5 py-3.5 border-b border-bdr flex items-center gap-2">
+                    <h3 className="text-[13px] font-bold text-paper">Open pipeline by stage</h3>
+                  </div>
+                  <div className="divide-y divide-bdr">
+                    {byStage.length === 0 && <div className="p-6 text-center text-dim text-sm italic">No open deals with figures.</div>}
+                    {byStage.map(([stage, v]) => (
+                      <div key={stage} className="px-5 py-3 flex items-center gap-4">
+                        <div className="w-44 shrink-0 text-sm text-paper capitalize">{stage.replace(/_/g, ' ')}</div>
+                        <div className="text-xs text-dim w-16 shrink-0">{v.n} deal{v.n === 1 ? '' : 's'}</div>
+                        <div className="text-[10px] text-dim w-12 shrink-0 tabular-nums">{Math.round((weights[stage] ?? 0) * 100)}%</div>
+                        <div className="flex-1 h-2 rounded-full bg-card overflow-hidden">
+                          <div className="h-full bg-ember/60" style={{ width: `${t.openRevenue ? (v.rev / t.openRevenue) * 100 : 0}%` }} />
+                        </div>
+                        <div className="w-28 text-right text-sm text-paper tabular-nums shrink-0">{gbp0(v.rev)}</div>
+                        <div className="w-28 text-right text-sm text-muted tabular-nums shrink-0">{gbp0(v.weighted)}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="px-5 py-2 border-t border-bdr flex justify-end gap-4 text-[10px] font-mono uppercase tracking-wider text-dim">
+                    <span className="w-28 text-right">best case</span><span className="w-28 text-right">likely</span>
+                  </div>
+                </div>
+
+                {missing.length > 0 && (
+                  <div className="glass-card rounded-2xl overflow-hidden">
+                    <div className="px-5 py-3.5 border-b border-bdr flex items-center gap-2">
+                      <h3 className="text-[13px] font-bold text-paper">No figures yet</h3>
+                      <span className="text-xs text-dim font-mono">({missing.length})</span>
+                      <span className="ml-auto text-[11px] text-dim">every one of these is missing from the totals above</span>
+                    </div>
+                    <div className="divide-y divide-bdr max-h-64 overflow-y-auto">
+                      {missing.map(d => (
+                        <div key={d.deal_id} className="px-5 py-2.5 flex items-center gap-3 text-xs">
+                          <span className="flex-1 min-w-0 truncate text-paper">{d.name}</span>
+                          <span className="text-dim capitalize shrink-0">{(d.stage || '').replace(/_/g, ' ')}</span>
+                          <span className="text-dim shrink-0 w-20 text-right">{d.site_count} site{d.site_count === 1 ? '' : 's'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {won.length > 0 && (
+                  <div className="glass-card rounded-2xl overflow-hidden">
+                    <div className="px-5 py-3.5 border-b border-bdr flex items-center gap-2">
+                      <h3 className="text-[13px] font-bold text-paper">Volume won</h3>
+                      <span className="text-xs text-dim font-mono">({won.length})</span>
+                    </div>
+                    <div className="divide-y divide-bdr max-h-80 overflow-y-auto">
+                      {won.map(d => (
+                        <div key={d.deal_id} className="px-5 py-2.5 flex items-center gap-3 text-xs">
+                          <span className="flex-1 min-w-0 truncate text-paper">{d.name}</span>
+                          <span className="text-dim shrink-0">{d.site_count} site{d.site_count === 1 ? '' : 's'}</span>
+                          <span className="text-muted tabular-nums shrink-0 w-24 text-right">
+                            {d.est_avg_transaction ? '£' + Number(d.est_avg_transaction).toFixed(2) + ' avg' : ''}
+                          </span>
+                          <span className="text-paper font-semibold tabular-nums shrink-0 w-28 text-right">{gbp0(d.est_monthly_revenue)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {tab === 'customers' && (
             <>
               <div className="grid grid-cols-4 gap-3">
@@ -641,6 +751,19 @@ function MetricCard({ label, value, sub, color = 'text-paper' }) {
       <div className={`text-3xl font-bold font-mono ${color}`}>{value}</div>
       <div className="text-[9px] font-mono uppercase tracking-[0.18em] text-dim mt-1.5">{label}</div>
       {sub && <div className="text-xs text-ember mt-1">{sub}</div>}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, tone }) {
+  const color = tone === 'emerald' ? 'text-emerald-600'
+    : tone === 'amber' ? 'text-amber-600'
+    : tone === 'red' ? 'text-red-600' : 'text-paper';
+  return (
+    <div className="glass-card rounded-2xl p-4">
+      <div className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim mb-1">{label}</div>
+      <div className={`text-2xl font-bold tabular-nums ${color}`}>{value}</div>
+      {sub && <div className="text-[11px] text-dim mt-0.5">{sub}</div>}
     </div>
   );
 }

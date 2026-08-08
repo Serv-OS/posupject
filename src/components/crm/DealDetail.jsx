@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { DealTradingCard } from './TradingCard.jsx';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
@@ -246,6 +247,8 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                   </div>
                 </div>
               </Card>
+
+              <DealTradingCard dealId={dealId} canWrite={canWrite} onNavigate={onNavigate} />
 
               <Card title="Company">
                 {company ? (
