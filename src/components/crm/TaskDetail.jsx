@@ -52,7 +52,8 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
     const { id, created_at, updated_at, ...patch } = draft;
     if (patch.status === 'done' && task.status !== 'done') patch.completed_at = new Date().toISOString();
     if (patch.status !== 'done') patch.completed_at = null;
-    await supabase.from('tasks').update(patch).eq('id', taskId);
+    const { error } = await supabase.from('tasks').update(patch).eq('id', taskId);
+    if (error) { alert('Could not save: ' + error.message); return; }
     setEditing(false);
     load();
   };

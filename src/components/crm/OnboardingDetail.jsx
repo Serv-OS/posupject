@@ -70,7 +70,8 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
   const save = async () => {
     const oldStage = ob.stage;
     const { id, created_at, updated_at, ...patch } = draft;
-    await supabase.from('onboardings').update(patch).eq('id', onboardingId);
+    const { error } = await supabase.from('onboardings').update(patch).eq('id', onboardingId);
+    if (error) { alert('Could not save: ' + error.message); return; }
     if (patch.stage !== oldStage) {
       await supabase.from('stage_history').insert({
         object_type: 'onboarding', object_id: onboardingId,

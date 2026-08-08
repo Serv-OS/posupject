@@ -36,7 +36,8 @@ export default function FeatureRequestDetail({ requestId, profile, onClose, onNa
   const startEdit = () => { setDraft({ ...request }); setEditing(true); };
   const save = async () => {
     const { id, created_at, updated_at, ...patch } = draft;
-    await supabase.from('feature_requests').update(patch).eq('id', requestId);
+    const { error } = await supabase.from('feature_requests').update(patch).eq('id', requestId);
+    if (error) { alert('Could not save: ' + error.message); return; }
     setEditing(false); load();
   };
   const set = (k, v) => setDraft({ ...draft, [k]: v });

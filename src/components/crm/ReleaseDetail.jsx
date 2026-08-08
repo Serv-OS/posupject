@@ -29,7 +29,8 @@ export default function ReleaseDetail({ releaseId, profile, onClose }) {
   const save = async () => {
     const { id, created_at, updated_at, ...patch } = draft;
     if (patch.status === 'released' && !release.released_at) patch.released_at = new Date().toISOString();
-    await supabase.from('releases').update(patch).eq('id', releaseId);
+    const { error } = await supabase.from('releases').update(patch).eq('id', releaseId);
+    if (error) { alert('Could not save: ' + error.message); return; }
     setEditing(false); load();
   };
   const set = (k, v) => setDraft({ ...draft, [k]: v });

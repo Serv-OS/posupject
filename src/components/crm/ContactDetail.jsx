@@ -35,7 +35,8 @@ export default function ContactDetail({ contactId, profile, onClose, onNavigate,
   const startEdit = () => { setDraft({ ...contact }); setEditing(true); };
   const save = async () => {
     const { id, created_at, updated_at, ...patch } = draft;
-    await supabase.from('contacts').update(patch).eq('id', contactId);
+    const { error } = await supabase.from('contacts').update(patch).eq('id', contactId);
+    if (error) { alert('Could not save: ' + error.message); return; }
     setEditing(false); load();
   };
   const set = (k, v) => setDraft({ ...draft, [k]: v });

@@ -60,7 +60,8 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
   const startEdit = () => { setDraft({ ...company }); setEditing(true); };
   const save = async () => {
     const { id, created_at, updated_at, ...patch } = draft;
-    await supabase.from('companies').update(patch).eq('id', companyId);
+    const { error } = await supabase.from('companies').update(patch).eq('id', companyId);
+    if (error) { alert('Could not save: ' + error.message); return; }
     setEditing(false); load();
   };
   const set = (k, v) => setDraft({ ...draft, [k]: v });

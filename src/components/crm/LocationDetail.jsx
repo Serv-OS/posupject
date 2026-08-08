@@ -32,6 +32,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   const [projects, setProjects] = useState([]);
   const [leads, setLeads] = useState([]);
   const [editing, setEditing] = useState(false);
+  const [saveErr, setSaveErr] = useState('');
   const [draft, setDraft] = useState({});
   const [members, setMembers] = useState([]);
 
@@ -63,11 +64,25 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
     }
   };
 
-  const startEdit = () => { setDraft({ ...location }); setEditing(true); };
+  const startEdit = () => { setDraft({ ...location }); setEditing(true); setSaveErr(''); };
+
+  // Only the fields this form actually edits. It used to spread the whole row
+  // minus id/created_at/updated_at, which broke the moment the table gained a
+  // generated column (est_monthly_transactions): Postgres refuses any write to
+  // one, the update failed, and because the result was never checked the panel
+  // closed as though it had saved. An allow-list cannot rot that way.
+  const EDITABLE = [
+    'name', 'address', 'city', 'postcode', 'phone', 'email', 'venue_type',
+    'covers', 'status', 'owner_id', 'notes', 'kickoff_at',
+    'expected_install_date', 'actual_install_date', 'go_live_date', 'activation_date',
+  ];
+
   const save = async () => {
-    const { id, created_at, updated_at, ...patch } = draft;
-    await supabase.from('locations').update(patch).eq('id', locationId);
-    setEditing(false); load();
+    const patch = {};
+    for (const k of EDITABLE) if (k in draft) patch[k] = draft[k] === '' ? null : draft[k];
+    const { error } = await supabase.from('locations').update(patch).eq('id', locationId);
+    if (error) { setSaveErr(error.message); return; }   // stay open, keep their typing
+    setSaveErr(''); setEditing(false); load();
   };
   const set = (k, v) => setDraft({ ...draft, [k]: v });
 
@@ -185,8 +200,13 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
               <div className="mt-3"><label className={label}>Notes</label><textarea className={input + ' resize-none'} rows={3} value={draft.notes || ''} onChange={e => set('notes', e.target.value)} /></div>
               <div className="flex gap-2 mt-4">
                 <button onClick={save} className="px-5 py-2 bg-ember text-ink text-sm font-semibold rounded hover:bg-ember-deep">Save</button>
-                <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm text-muted border border-bdr rounded">Cancel</button>
+                <button onClick={() => { setEditing(false); setSaveErr(''); }} className="px-4 py-2 text-sm text-muted border border-bdr rounded">Cancel</button>
               </div>
+              {saveErr && (
+                <div className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                  Couldn't save: {saveErr}
+                </div>
+              )}
             </Card>
           </div>
         ) : (
