@@ -184,6 +184,26 @@ export default function Shell({ session }) {
     else if (type === 'lead_list') { setView('leads'); }
   };
 
+  // Deep link from a notification email or chat message: ?open=<type>:<id>
+  // performs exactly the navigation the in-app bell would (NotificationBell
+  // calls onNavigate(entity_type, link_id) — the emails now carry that same
+  // pair in the URL). Runs once the profile is loaded, then strips the param
+  // so refresh and bookmarks behave normally. A malformed link just lands on
+  // the dashboard, as before.
+  useEffect(() => {
+    if (!profile) return;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const target = q.get('open');
+      if (!target) return;
+      const [type, id] = target.split(':');
+      if (type) navigateTo(type, id || null);
+      q.delete('open');
+      const rest = q.toString();
+      window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''));
+    } catch { /* bad link — default view */ }
+  }, [profile?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!profile) return <div className="h-full flex items-center justify-center text-muted text-sm">Loading profile...</div>;
 
   const renderMain = () => {

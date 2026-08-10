@@ -174,6 +174,17 @@ serve(async (req) => {
     if (!n) return json({ error: "not found" }, 404);
     if (n.emailed_at || n.smsed_at || n.chatted_at || n.chat_dm_at) return json({ skipped: "already delivered" });
 
+    // Land on the RECORD, not the dashboard. Every notification already knows
+    // what it is about (entity_type + link_id — the in-app bell navigates with
+    // exactly this pair), but the email button linked to the bare app URL, so
+    // "Open CRM" dropped people on whatever screen the app opened with and left
+    // them hunting for the lead or ticket the email was about. Shell.jsx reads
+    // ?open=<type>:<id> on load and performs the same navigation as the bell.
+    const deepUrl = n.entity_type && n.link_id
+      ? `${appUrl}/?open=${encodeURIComponent(n.entity_type)}:${encodeURIComponent(n.link_id)}`
+      : appUrl;
+    const openLabel = n.entity_type ? `Open ${String(n.entity_type).replace(/_/g, " ")}` : "Open CRM";
+
     const { data: p } = await supabase.from("profiles")
       .select("email, phone, mobile, display_name").eq("id", n.recipient_id).maybeSingle();
     if (!p) return json({ skipped: "no profile" });
@@ -196,7 +207,7 @@ serve(async (req) => {
   <div style="font-size:13px;color:#777;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">CRM notification</div>
   <div style="font-size:18px;font-weight:700;color:#111;margin-bottom:6px">${n.title || "Notification"}</div>
   ${n.body ? `<div style="font-size:14px;color:#444;margin-bottom:18px">${n.body}</div>` : ""}
-  <a href="${appUrl}" style="display:inline-block;background:#15C26A;color:#fff;font-weight:600;font-size:14px;padding:10px 22px;border-radius:8px;text-decoration:none">Open CRM</a>
+  <a href="${deepUrl}" style="display:inline-block;background:#15C26A;color:#fff;font-weight:600;font-size:14px;padding:10px 22px;border-radius:8px;text-decoration:none">${openLabel}</a>
   <div style="font-size:11px;color:#999;margin-top:20px">You can change notification preferences in your account settings.</div>
 </div>`;
         await sendInvoiceEmail(supabase, p.email, n.title || "CRM notification", html);
@@ -239,7 +250,7 @@ serve(async (req) => {
       if (saRaw) {
         try {
           const token = await getChatAppToken(JSON.parse(saRaw));
-          const r = await dmChatUser(token, p.email, n.title, n.body, appUrl);
+          const r = await dmChatUser(token, p.email, n.title, n.body, deepUrl);
           results.chat_dm = r;
           if (r === "sent") updates.chat_dm_at = new Date().toISOString();
         } catch (e) { results.chat_dm = "failed: " + (e as Error).message; }
@@ -275,7 +286,7 @@ serve(async (req) => {
           const { data: rows } = await rq;
           const recipientIds = [...new Set([n.recipient_id, ...((rows || []).map((r: any) => r.recipient_id))])].filter(Boolean);
           const mentionIds = (await Promise.all(recipientIds.map((id) => resolveGoogleId(supabase, id)))).filter(Boolean) as string[];
-          await postToChat(cfg.chat_webhook_url, n.title, n.body, appUrl, mentionIds);
+          await postToChat(cfg.chat_webhook_url, n.title, n.body, deepUrl, mentionIds);
           updates.chatted_at = new Date().toISOString();
           results.chat = "sent";
         } catch (e) { results.chat = "failed: " + (e as Error).message; }
