@@ -27,14 +27,23 @@ export default function TimeOffView({ profile }) {
     load();
   };
 
+  // Dates already behind us are a record, not a request — there is nobody to
+  // approve leave that has already been taken. It used to be refused outright
+  // ("Holiday must be a future date"), which meant holiday taken before this
+  // module existed could never be logged and every balance showed 0 taken.
+  const isBackfill = form.start_date < isoDate(new Date());
+
   const addRequest = async () => {
     if (!form.user_id) { alert('Pick a staff member'); return; }
-    if (form.type === 'holiday' && form.start_date < isoDate(new Date())) { alert('Holiday must be a future date.'); return; }
     const days = daysBetween(form.start_date, form.end_date);
-    const { error } = await supabase.from('time_off').insert({
+    const row = {
       user_id: form.user_id, type: form.type, start_date: form.start_date, end_date: form.end_date,
-      days, note: form.note.trim() || null, status: 'pending',
-    });
+      days, note: form.note.trim() || null,
+      ...(isBackfill
+        ? { status: 'approved', decided_by: profile.id, decided_at: new Date().toISOString() }
+        : { status: 'pending' }),
+    };
+    const { error } = await supabase.from('time_off').insert(row);
     if (error) { alert(error.message); return; }
     setForm({ user_id: '', type: 'holiday', start_date: isoDate(new Date()), end_date: isoDate(new Date()), note: '' });
     setAdding(false); load();
@@ -72,7 +81,13 @@ export default function TimeOffView({ profile }) {
                 <div><label className={label}>To</label><input type="date" className={input} value={form.end_date} onChange={e => setForm({ ...form, end_date: e.target.value })} /></div>
               </div>
               <input className={input} placeholder="Note (optional)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} />
-              <div className="flex gap-2"><button onClick={addRequest} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold">Submit</button>
+              {isBackfill && (
+                <div className="text-xs text-amber-600 bg-amber-500/10 border border-amber-500/25 rounded-xl px-3 py-2">
+                  These dates are in the past, so this is logged as <b>taken</b> straight away — no approval step —
+                  and it comes off the balance immediately.
+                </div>
+              )}
+              <div className="flex gap-2"><button onClick={addRequest} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold">{isBackfill ? 'Log as taken' : 'Submit'}</button>
                 <button onClick={() => setAdding(false)} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>
             </div>
           )}

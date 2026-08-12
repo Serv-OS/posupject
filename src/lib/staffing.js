@@ -49,9 +49,15 @@ export function daysBetween(startIso, endIso) {
 // Leave balance for one user this year from their time_off rows (holiday only).
 export function leaveBalance(timeOffRows, userId, entitlement) {
   const todayIso = isoDate(new Date());
+  // The comment above always said "this year"; the code counted every year it
+  // could see. Harmless while nothing in the past could be logged — but now
+  // that holiday CAN be backfilled, last year's fortnight must not drain this
+  // year's allowance. Scoped by the year the leave starts in.
+  const thisYear = todayIso.slice(0, 4);
   let taken = 0, booked = 0;
   for (const r of timeOffRows) {
     if (r.user_id !== userId || r.type !== 'holiday' || r.status !== 'approved') continue;
+    if (String(r.start_date).slice(0, 4) !== thisYear) continue;
     if (r.start_date <= todayIso) taken += Number(r.days || 0);
     else booked += Number(r.days || 0);
   }
