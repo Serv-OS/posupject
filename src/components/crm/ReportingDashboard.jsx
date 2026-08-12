@@ -310,9 +310,20 @@ export default function ReportingDashboard({ profile }) {
 
   // Onboarding metrics
   const obMetrics = useMemo(() => {
+    // Board order (OnboardingBoard.STAGES), so the report reads like the board
+    // instead of whatever order the rows happened to arrive in.
+    const ORDER = ['kickoff','hardware_ordered','hardware_shipped','on_hold','account_menu_config','staff_training','go_live_scheduled','live','handover_to_support'];
+    const LABELS = { kickoff:'Kickoff', hardware_ordered:'HW ordered', hardware_shipped:'HW shipped', on_hold:'On hold', account_menu_config:'Config', staff_training:'Training', go_live_scheduled:'Go-live scheduled', live:'Live', handover_to_support:'Handover to support' };
     const byStage = {};
     onboardings.forEach(o => { byStage[o.stage] = (byStage[o.stage] || 0) + 1; });
-    return { total: onboardings.length, live: onboardings.filter(o => o.stage === 'live').length, byStage };
+    const ordered = [...ORDER.filter(k => byStage[k]), ...Object.keys(byStage).filter(k => !ORDER.includes(k))]
+      .map(k => [LABELS[k] || k.replace(/_/g, ' '), byStage[k]]);
+    // A venue at Handover has GONE live — onboarding is finished and support
+    // owns it. Counting only stage==='live' pushed every handed-over venue
+    // back into "In progress", so finished jobs read as unfinished.
+    const live = onboardings.filter(o => ['live', 'handover_to_support'].includes(o.stage)).length;
+    const onHold = onboardings.filter(o => o.stage === 'on_hold').length;
+    return { total: onboardings.length, live, onHold, inProgress: onboardings.length - live - onHold, byStage: ordered };
   }, [onboardings]);
 
   // Support metrics
@@ -470,34 +481,45 @@ export default function ReportingDashboard({ profile }) {
           {tab === 'sales' && (
             <>
               {/* Range: close rate means nothing without a window */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 {[[30,'30 days'],[90,'90 days'],[365,'12 months'],[0,'All time']].map(([d, l]) => (
                   <button key={d} onClick={() => setDealDays(d)}
-                    className={`px-3 py-1.5 text-xs font-medium rounded transition ${dealDays === d ? 'bg-card text-paper' : 'text-muted hover:text-paper'}`}>{l}</button>
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg transition ${dealDays === d ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>{l}</button>
                 ))}
-                <span className="text-[10px] text-dim ml-2">Closed deals in this window; pipeline is always current</span>
+                <span className="text-[10px] text-dim ml-auto">Closed deals in this window · pipeline is always current</span>
               </div>
 
-              <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                 <MetricCard label="Won" value={salesMetrics.won} sub={formatCurrency(salesMetrics.wonValue)} color="text-emerald-600" />
                 <MetricCard label="Close rate" value={`${salesMetrics.winRate}%`} sub={`${salesMetrics.won} won · ${salesMetrics.lost} lost`} />
-                <MetricCard label="One-off revenue" value={formatCurrency(salesMetrics.wonOneOff)} color="text-emerald-600" />
-                <MetricCard label="Recurring (ARR)" value={formatCurrency(salesMetrics.wonRecurring)} color="text-ember" />
-                <MetricCard label="Avg deal" value={formatCurrency(salesMetrics.avgDeal)} />
-                <MetricCard label="Avg days to close" value={salesMetrics.avgDays ?? '—'} sub={salesMetrics.avgDays == null ? 'needs closed dates' : ''} />
+                <MetricCard label="One-off revenue" value={formatCurrency(salesMetrics.wonOneOff)} sub={'\u00A0'}
+                  color={salesMetrics.wonOneOff > 0 ? 'text-emerald-600' : 'text-dim'} />
+                <MetricCard label="Recurring (ARR)" value={formatCurrency(salesMetrics.wonRecurring)} sub={'\u00A0'}
+                  color={salesMetrics.wonRecurring > 0 ? 'text-ember' : 'text-dim'} />
+                <MetricCard label="Avg deal" value={formatCurrency(salesMetrics.avgDeal)} sub={'\u00A0'} />
+                {/* "0" here looked like a bug. Under a day is a real answer for
+                    passed-in deals logged the day they sign — say it in words. */}
+                <MetricCard
+                  label="Avg time to close"
+                  value={salesMetrics.avgDays == null ? '—' : salesMetrics.avgDays < 1 ? 'Same day' : `${salesMetrics.avgDays}d`}
+                  sub={salesMetrics.avgDays == null ? 'needs closed dates' : '\u00A0'} />
               </div>
 
               {/* Monthly won trend — the shape of the year at a glance */}
               <div className="glass-card rounded-2xl p-4">
                 <div className={label + ' mb-3'}>Won by month (12 months)</div>
-                <div className="flex items-end gap-1.5" style={{ height: 120 }}>
+                <div className="flex items-end gap-1.5">
                   {(() => {
                     const max = Math.max(1, ...salesMetrics.months.map(m => m.value));
                     return salesMetrics.months.map(m => (
-                      <div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1" title={`${m.label}: ${m.count} won, ${formatCurrency(m.value)}`}>
-                        {m.count > 0 && <div className="text-[9px] font-mono text-emerald-600">{m.count}</div>}
-                        <div className="w-full rounded-t bg-emerald-500/70" style={{ height: `${Math.round((m.value / max) * 88)}px`, minHeight: m.value > 0 ? 3 : 0 }} />
-                        <div className="text-[9px] font-mono text-dim">{m.label}</div>
+                      <div key={m.key} className="flex-1 min-w-0 flex flex-col items-center justify-end" title={`${m.label}: ${m.count} won, ${formatCurrency(m.value)}`}>
+                        {m.value > 0 && <div className="text-[9px] font-mono text-emerald-600 whitespace-nowrap">{formatCurrency(m.value)}</div>}
+                        {m.count > 0 && <div className="text-[9px] font-mono text-dim">{m.count} won</div>}
+                        <div className="w-full flex items-end justify-center border-b border-bdr" style={{ height: 96 }}>
+                          <div className={`w-3/4 rounded-t ${m.value > 0 ? 'bg-emerald-500/70' : 'bg-card'}`}
+                            style={{ height: `${m.value > 0 ? Math.max(6, Math.round((m.value / max) * 92)) : 2}px` }} />
+                        </div>
+                        <div className="text-[9px] font-mono text-dim mt-1">{m.label}</div>
                       </div>
                     ));
                   })()}
@@ -681,15 +703,16 @@ export default function ReportingDashboard({ profile }) {
 
           {tab === 'onboarding' && (
             <>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
                 <MetricCard label="Total" value={obMetrics.total} />
-                <MetricCard label="Live" value={obMetrics.live} color="text-emerald-600" />
-                <MetricCard label="In Progress" value={obMetrics.total - obMetrics.live} color="text-orange-600" />
+                <MetricCard label="Live (incl. handed over)" value={obMetrics.live} color="text-emerald-600" />
+                <MetricCard label="In Progress" value={obMetrics.inProgress} color="text-orange-600" />
+                <MetricCard label="On Hold" value={obMetrics.onHold} color="text-amber-600" />
               </div>
               <div className="glass-card rounded-2xl p-4">
-                <div className={label + ' mb-3'}>By Stage</div>
-                {Object.entries(obMetrics.byStage).map(([k, v]) => (
-                  <div key={k} className="flex justify-between py-1 text-xs"><span className="text-paper">{k.replace(/_/g,' ')}</span><span className="text-ember font-mono">{v}</span></div>
+                <div className={label + ' mb-3'}>By Stage (board order)</div>
+                {obMetrics.byStage.map(([k, v]) => (
+                  <div key={k} className="flex justify-between py-1 text-xs"><span className="text-paper">{k}</span><span className="text-ember font-mono">{v}</span></div>
                 ))}
               </div>
               <button onClick={() => exportCSV(
