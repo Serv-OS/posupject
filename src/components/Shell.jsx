@@ -126,9 +126,22 @@ export default function Shell({ session }) {
   // Start a lead from a record (company/location/contact detail "Create lead")
   const startLead = (prefill) => { setLeadPrefill(prefill); setView('leads'); };
 
+  const [profileErr, setProfileErr] = useState(null);
   const refreshProfile = async () => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-    if (data) setProfile(data);
+    // This used to ignore its own error, so any failure — most often a stale
+    // auth token after a long-lived tab — left "Loading profile..." on screen
+    // forever with no way out short of clearing localStorage by hand. Failures
+    // now say what happened and offer the exit; an expired session signs
+    // itself out to the login screen.
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+    if (data) { setProfile(data); setProfileErr(null); return; }
+    const msg = error?.message || 'No profile found for this login.';
+    if (/JWT|token|expired|invalid/i.test(msg)) {
+      try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* already dead */ }
+      window.location.reload();
+      return;
+    }
+    setProfileErr(msg);
   };
 
   useEffect(() => {
@@ -204,7 +217,22 @@ export default function Shell({ session }) {
     } catch { /* bad link — default view */ }
   }, [profile?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!profile) return <div className="h-full flex items-center justify-center text-muted text-sm">Loading profile...</div>;
+  if (!profile) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-sm">
+        {profileErr ? (
+          <>
+            <div className="text-red-600 max-w-md text-center">Couldn't load your profile: {profileErr}</div>
+            <button
+              onClick={async () => { try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* stale */ } localStorage.clear(); window.location.reload(); }}
+              className="px-4 py-2 rounded-xl border border-bdr text-paper hover:bg-card">
+              Sign out and try again
+            </button>
+          </>
+        ) : <div className="text-muted">Loading profile...</div>}
+      </div>
+    );
+  }
 
   const renderMain = () => {
     switch (view) {
