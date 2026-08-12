@@ -21,6 +21,20 @@ export default function TimeOffView({ profile }) {
 
   const nameOf = (id) => { const p = staff.find(s => s.id === id); return p?.display_name || p?.email?.split('@')[0] || '?'; };
   const pending = requests.filter(r => r.status === 'pending');
+  // Approved leave that hasn't finished yet — the "booked" days on the balance
+  // bar. These were invisible: once approved, an entry could be neither seen
+  // nor cancelled, so a wrongly-booked fortnight was stuck on the balance.
+  const todayIso = isoDate(new Date());
+  const upcoming = requests
+    .filter(r => r.status === 'approved' && r.end_date >= todayIso)
+    .sort((a, b) => a.start_date.localeCompare(b.start_date));
+
+  const cancelBooking = async (r) => {
+    if (!confirm(`Remove ${nameOf(r.user_id)}'s ${r.type} (${r.days} day${r.days === 1 ? '' : 's'}, starting ${new Date(r.start_date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})?\n\nThe days go straight back on their balance.`)) return;
+    const { error } = await supabase.from('time_off').delete().eq('id', r.id);
+    if (error) { alert('Could not remove it: ' + error.message); return; }
+    load();
+  };
 
   const decide = async (id, status) => {
     await supabase.from('time_off').update({ status, decided_by: profile.id, decided_at: new Date().toISOString() }).eq('id', id);
@@ -118,6 +132,38 @@ export default function TimeOffView({ profile }) {
                         <button onClick={() => decide(r.id, 'approved')} className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 text-xs font-semibold hover:bg-emerald-500/25"><Check size={14} /> Approve</button>
                         <button onClick={() => decide(r.id, 'denied')} className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl bg-red-500/10 text-red-600 border border-red-500/25 text-xs font-semibold hover:bg-red-500/20"><X size={14} /> Deny</button>
                       </div>
+                    )}
+                  </div>
+                ))}
+              </div>}
+          </div>
+
+          {/* Upcoming approved leave — visible, and removable while it still matters */}
+          <div>
+            <div className="text-[11px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-2">Upcoming &amp; booked ({upcoming.length})</div>
+            {upcoming.length === 0
+              ? <div className="glass-card rounded-2xl p-6 text-center text-dim text-sm italic">Nothing booked ahead</div>
+              : <div className="glass-card rounded-2xl overflow-hidden divide-y divide-bdr">
+                {upcoming.map(r => (
+                  <div key={r.id} className="px-5 py-3 flex items-center gap-3">
+                    <span className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${r.type === 'sick' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}`}>
+                      {r.type === 'sick' ? <Thermometer size={16} /> : <Plane size={16} />}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-paper truncate">{nameOf(r.user_id)}</div>
+                      <div className="text-xs text-muted">
+                        {new Date(r.start_date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                        {r.end_date !== r.start_date && ` – ${new Date(r.end_date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`}
+                        {' · '}{r.days} day{r.days !== 1 ? 's' : ''} · <span className="capitalize">{r.type}</span>
+                        {r.start_date <= todayIso && <span className="text-emerald-600 font-semibold"> · under way</span>}
+                        {r.note && <span className="text-dim"> · "{r.note}"</span>}
+                      </div>
+                    </div>
+                    {canWrite && (
+                      <button onClick={() => cancelBooking(r)}
+                        className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-xl bg-red-500/10 text-red-600 border border-red-500/25 text-xs font-semibold hover:bg-red-500/20">
+                        <X size={13} /> Remove
+                      </button>
                     )}
                   </div>
                 ))}
