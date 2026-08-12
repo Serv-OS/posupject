@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { pipelineTotals, DEFAULT_STAGE_WEIGHTS } from '../../lib/trading';
 import { gbp0 } from '../../lib/money';
+import { oneOffValue, recurringValue, totalValue } from '../../lib/dealValue';
 
 // CEO-defined targets (see project_sales_targets memory)
 const MONTHLY_ARR_QUOTA = 48000;   // $48K new ARR per AE per month
@@ -168,24 +169,107 @@ export default function ReportingDashboard({ profile }) {
   }, [leads, stageHistory, leadDays, members]);
 
   // Sales metrics
+  const [dealDays, setDealDays] = useState(90);
+
   const salesMetrics = useMemo(() => {
+    // ── Deal analytics ──────────────────────────────────────────────────────
+    // Close rate is measured on DEALS, never leads. A big share of what gets
+    // signed here never had a lead at all — deals are passed in to close — so
+    // any funnel that starts at leads simply doesn't see them.
+    //
+    // Value model: one-off = hardware + services (falling back to the deal's
+    // headline value when those aren't broken out, which is how the passed-in
+    // one-time deals are recorded); recurring = SaaS ARR + payments ARR.
+    // Value rules live in lib/dealValue.js and are pinned by tests — reporting
+    // must never re-invent what a deal is worth.
+    const oneOff = oneOffValue;
+    const recurring = recurringValue;
+    const totalOf = totalValue;
+    const closedAt = (d) => new Date(d.closed_at || d.updated_at || d.created_at);
+
+    const cutoff = dealDays === 0 ? null : new Date(Date.now() - dealDays * 86400000);
+    const inRange = (d) => !cutoff || closedAt(d) >= cutoff;
+
     const pipeline = deals.filter(d => !['closed_won','closed_lost'].includes(d.stage));
-    const won = deals.filter(d => d.stage === 'closed_won');
-    const lost = deals.filter(d => d.stage === 'closed_lost');
-    const pipelineValue = pipeline.reduce((s, d) => s + (d.value || 0), 0);
-    const wonValue = won.reduce((s, d) => s + (d.value || 0), 0);
-    const winRate = (won.length + lost.length) > 0 ? Math.round((won.length / (won.length + lost.length)) * 100) : 0;
+    const wonAll = deals.filter(d => d.stage === 'closed_won');
+    const won = wonAll.filter(inRange);
+    const lost = deals.filter(d => d.stage === 'closed_lost').filter(inRange);
+    const closed = [...won, ...lost];
 
-    // By stage
-    const byStage = {};
-    deals.forEach(d => { byStage[d.stage] = (byStage[d.stage] || 0) + 1; });
+    const pipelineValue = pipeline.reduce((s, d) => s + totalOf(d), 0);
+    const wonValue = won.reduce((s, d) => s + totalOf(d), 0);
+    const wonOneOff = won.reduce((s, d) => s + oneOff(d), 0);
+    const wonRecurring = won.reduce((s, d) => s + recurring(d), 0);
+    const winRate = closed.length ? Math.round((won.length / closed.length) * 100) : 0;
+    const avgDeal = won.length ? wonValue / won.length : 0;
+    const daysToClose = won
+      .filter(d => d.closed_at && d.created_at)
+      .map(d => (new Date(d.closed_at) - new Date(d.created_at)) / 86400000);
+    const avgDays = daysToClose.length ? Math.round(daysToClose.reduce((a, b) => a + b, 0) / daysToClose.length) : null;
 
-    // By owner
+    // How the deal arrived: a deal a lead points at came through the funnel;
+    // everything else was passed in directly. Detected from the data, so nobody
+    // has to remember to tag anything.
+    const leadDealIds = new Set(leads.map(l => l.deal_id).filter(Boolean));
+    const channelOf = (d) => leadDealIds.has(d.id) ? 'From leads' : 'Passed in / direct';
+    const byChannel = {};
+    closed.forEach(d => {
+      const c = byChannel[channelOf(d)] || (byChannel[channelOf(d)] = { won: 0, lost: 0, value: 0 });
+      if (d.stage === 'closed_won') { c.won += 1; c.value += totalOf(d); } else c.lost += 1;
+    });
+    pipeline.forEach(d => {
+      const c = byChannel[channelOf(d)] || (byChannel[channelOf(d)] = { won: 0, lost: 0, value: 0 });
+      c.open = (c.open || 0) + 1;
+    });
+
+    // Monthly won trend, last 12 months — count and value.
+    const months = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
+      months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        label: d.toLocaleDateString('en-GB', { month: 'short' }), count: 0, value: 0 });
+    }
+    const byKey = Object.fromEntries(months.map(m => [m.key, m]));
+    wonAll.forEach(d => {
+      const c = closedAt(d);
+      const k = `${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}`;
+      if (byKey[k]) { byKey[k].count += 1; byKey[k].value += totalOf(d); }
+    });
+
+    // Lost reasons — why deals die, ranked.
+    const lostReasons = {};
+    lost.forEach(d => { const r = (d.lost_reason || 'No reason recorded').trim(); lostReasons[r] = (lostReasons[r] || 0) + 1; });
+
+    // By owner: closed performance, not just deal counts.
     const byOwner = {};
-    deals.forEach(d => { const n = ownerName(d.owner_id) || 'Unassigned'; byOwner[n] = (byOwner[n] || 0) + 1; });
+    closed.forEach(d => {
+      const n = ownerName(d.owner_id) || 'Unassigned';
+      const o = byOwner[n] || (byOwner[n] = { won: 0, lost: 0, value: 0 });
+      if (d.stage === 'closed_won') { o.won += 1; o.value += totalOf(d); } else o.lost += 1;
+    });
 
-    return { total: deals.length, pipeline: pipeline.length, pipelineValue, won: won.length, wonValue, lost: lost.length, winRate, byStage, byOwner };
-  }, [deals]);
+    // By source label, for the deals that carry one.
+    const bySource = {};
+    closed.forEach(d => {
+      const src = (d.source || 'not set').trim();
+      const o = bySource[src] || (bySource[src] = { won: 0, lost: 0, value: 0 });
+      if (d.stage === 'closed_won') { o.won += 1; o.value += totalOf(d); } else o.lost += 1;
+    });
+
+    // Pipeline by stage with value, so open coverage is visible next to closed.
+    const byStage = {};
+    pipeline.forEach(d => {
+      const o = byStage[d.stage] || (byStage[d.stage] = { count: 0, value: 0 });
+      o.count += 1; o.value += totalOf(d);
+    });
+
+    return {
+      total: deals.length, pipeline: pipeline.length, pipelineValue,
+      won: won.length, wonValue, wonOneOff, wonRecurring, lost: lost.length,
+      winRate, avgDeal, avgDays, byChannel, months, lostReasons, byOwner, bySource, byStage,
+      totalOf, channelOf,
+    };
+  }, [deals, leads, members, dealDays]);
 
   // Quota, commission & activity goals per AE (this month / this week)
   const quotaMetrics = useMemo(() => {
@@ -385,29 +469,121 @@ export default function ReportingDashboard({ profile }) {
 
           {tab === 'sales' && (
             <>
-              <div className="grid grid-cols-4 gap-3">
-                <MetricCard label="Pipeline" value={salesMetrics.pipeline} sub={formatCurrency(salesMetrics.pipelineValue)} />
+              {/* Range: close rate means nothing without a window */}
+              <div className="flex items-center gap-1.5">
+                {[[30,'30 days'],[90,'90 days'],[365,'12 months'],[0,'All time']].map(([d, l]) => (
+                  <button key={d} onClick={() => setDealDays(d)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded transition ${dealDays === d ? 'bg-card text-paper' : 'text-muted hover:text-paper'}`}>{l}</button>
+                ))}
+                <span className="text-[10px] text-dim ml-2">Closed deals in this window; pipeline is always current</span>
+              </div>
+
+              <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
                 <MetricCard label="Won" value={salesMetrics.won} sub={formatCurrency(salesMetrics.wonValue)} color="text-emerald-600" />
-                <MetricCard label="Lost" value={salesMetrics.lost} color="text-red-600" />
-                <MetricCard label="Win Rate" value={`${salesMetrics.winRate}%`} />
+                <MetricCard label="Close rate" value={`${salesMetrics.winRate}%`} sub={`${salesMetrics.won} won · ${salesMetrics.lost} lost`} />
+                <MetricCard label="One-off revenue" value={formatCurrency(salesMetrics.wonOneOff)} color="text-emerald-600" />
+                <MetricCard label="Recurring (ARR)" value={formatCurrency(salesMetrics.wonRecurring)} color="text-ember" />
+                <MetricCard label="Avg deal" value={formatCurrency(salesMetrics.avgDeal)} />
+                <MetricCard label="Avg days to close" value={salesMetrics.avgDays ?? '—'} sub={salesMetrics.avgDays == null ? 'needs closed dates' : ''} />
               </div>
+
+              {/* Monthly won trend — the shape of the year at a glance */}
+              <div className="glass-card rounded-2xl p-4">
+                <div className={label + ' mb-3'}>Won by month (12 months)</div>
+                <div className="flex items-end gap-1.5" style={{ height: 120 }}>
+                  {(() => {
+                    const max = Math.max(1, ...salesMetrics.months.map(m => m.value));
+                    return salesMetrics.months.map(m => (
+                      <div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1" title={`${m.label}: ${m.count} won, ${formatCurrency(m.value)}`}>
+                        {m.count > 0 && <div className="text-[9px] font-mono text-emerald-600">{m.count}</div>}
+                        <div className="w-full rounded-t bg-emerald-500/70" style={{ height: `${Math.round((m.value / max) * 88)}px`, minHeight: m.value > 0 ? 3 : 0 }} />
+                        <div className="text-[9px] font-mono text-dim">{m.label}</div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
+                {/* THE question: how do deals arrive, and how well does each close */}
                 <div className="glass-card rounded-2xl p-4">
-                  <div className={label + ' mb-3'}>By Stage</div>
-                  {Object.entries(salesMetrics.byStage).map(([k, v]) => (
-                    <div key={k} className="flex justify-between py-1 text-xs"><span className="text-paper">{k.replace(/_/g,' ')}</span><span className="text-ember font-mono">{v}</span></div>
-                  ))}
+                  <div className={label + ' mb-1'}>How deals arrive</div>
+                  <div className="text-[10px] text-dim mb-3">Detected from the data — a deal a lead points at came through the funnel; the rest were passed in to close.</div>
+                  {Object.entries(salesMetrics.byChannel).map(([k, v]) => {
+                    const closed = v.won + v.lost;
+                    const rate = closed ? Math.round((v.won / closed) * 100) : null;
+                    return (
+                      <div key={k} className="py-2 border-b border-bdr last:border-0">
+                        <div className="flex justify-between text-xs">
+                          <span className="text-paper font-medium">{k}</span>
+                          <span className="text-emerald-600 font-mono">{formatCurrency(v.value)}</span>
+                        </div>
+                        <div className="flex justify-between text-[11px] text-muted mt-0.5">
+                          <span>{v.won} won · {v.lost} lost{v.open ? ` · ${v.open} open` : ''}</span>
+                          <span className="font-mono">{rate == null ? '—' : `${rate}% close`}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {Object.keys(salesMetrics.byChannel).length === 0 && <div className="text-xs text-dim italic py-2">No closed deals in this window.</div>}
                 </div>
+
                 <div className="glass-card rounded-2xl p-4">
-                  <div className={label + ' mb-3'}>By Owner</div>
-                  {Object.entries(salesMetrics.byOwner).map(([k, v]) => (
-                    <div key={k} className="flex justify-between py-1 text-xs"><span className="text-paper">{k}</span><span className="text-ember font-mono">{v}</span></div>
+                  <div className={label + ' mb-3'}>By owner (closed in window)</div>
+                  {Object.entries(salesMetrics.byOwner).sort((a, b) => b[1].value - a[1].value).map(([k, v]) => {
+                    const closed = v.won + v.lost;
+                    return (
+                      <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
+                        <span className="text-paper">{k}</span>
+                        <span className="text-muted">{v.won}/{closed} won · <span className="text-emerald-600 font-mono">{formatCurrency(v.value)}</span></span>
+                      </div>
+                    );
+                  })}
+                  {Object.keys(salesMetrics.byOwner).length === 0 && <div className="text-xs text-dim italic py-2">No closed deals in this window.</div>}
+                </div>
+
+                <div className="glass-card rounded-2xl p-4">
+                  <div className={label + ' mb-3'}>By source</div>
+                  {Object.entries(salesMetrics.bySource).sort((a, b) => (b[1].won + b[1].lost) - (a[1].won + a[1].lost)).map(([k, v]) => {
+                    const closed = v.won + v.lost;
+                    const rate = closed ? Math.round((v.won / closed) * 100) : 0;
+                    return (
+                      <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
+                        <span className="text-paper">{k}</span>
+                        <span className="text-muted font-mono">{rate}% · {formatCurrency(v.value)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="glass-card rounded-2xl p-4">
+                  <div className={label + ' mb-3'}>Why deals were lost</div>
+                  {Object.entries(salesMetrics.lostReasons).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+                    <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
+                      <span className="text-paper">{k}</span><span className="text-red-600 font-mono">{v}</span>
+                    </div>
                   ))}
+                  {Object.keys(salesMetrics.lostReasons).length === 0 && <div className="text-xs text-dim italic py-2">Nothing lost in this window.</div>}
                 </div>
               </div>
+
+              {/* Open pipeline, valued — what's coming, next to what closed */}
+              <div className="glass-card rounded-2xl p-4">
+                <div className={label + ' mb-3'}>Open pipeline — {salesMetrics.pipeline} deals · {formatCurrency(salesMetrics.pipelineValue)}</div>
+                {Object.entries(salesMetrics.byStage).map(([k, v]) => (
+                  <div key={k} className="flex justify-between py-1 text-xs">
+                    <span className="text-paper">{k.replace(/_/g, ' ')}</span>
+                    <span className="text-muted font-mono">{v.count} · {formatCurrency(v.value)}</span>
+                  </div>
+                ))}
+              </div>
+
               <button onClick={() => exportCSV(
-                ['Name','Company','Stage','Value','Owner','Source','Created'],
-                deals.map(d => [d.name, companies.find(c=>c.id===d.company_id)?.name, d.stage, d.value, ownerName(d.owner_id), d.source, d.created_at]),
+                ['Name','Company','Stage','Channel','Source','One-off','Recurring ARR','Total','Owner','Created','Closed'],
+                deals.map(d => [d.name, companies.find(c => c.id === d.company_id)?.name, d.stage,
+                  salesMetrics.channelOf(d), d.source,
+                  oneOffValue(d), recurringValue(d),
+                  totalValue(d), ownerName(d.owner_id), d.created_at, d.closed_at]),
                 'deals-export.csv'
               )} className="px-3 py-1.5 text-xs text-muted border border-bdr rounded hover:text-paper">Export deals CSV</button>
             </>
