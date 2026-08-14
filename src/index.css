@@ -301,3 +301,32 @@ body {
   .border-b.flex.items-center > .flex-1 { flex-basis: 100%; }
   input.w-72, input.w-56, input.w-48 { width: 100% !important; }
 }
+
+/* Phones scroll like a page, not like a desktop app.
+   The shell's nested-scroll layout (main overflow-hidden, each screen h-full,
+   a panel inside doing the scrolling) is right on a desktop and wrong on a
+   phone: after the toolbars and headers there's a sliver left, and THAT sliver
+   was the only thing that scrolled — near-invisible on a phone zoomed for
+   bigger fonts. Below lg, main itself scrolls and screens take their natural
+   height, so every screen is one continuous page. The ticket screen keeps its
+   own layout (docked reply box) and is excluded; browsers without :has() drop
+   the whole rule and keep the old behaviour. */
+@media (max-width: 1023px) {
+  main:not(:has([data-ticket-screen])) {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  main:not(:has([data-ticket-screen])) .h-full {
+    height: auto !important;
+    min-height: 100%;
+  }
+  /* Tailwind's flex-1 means flex-basis:0 — the scroll panel contributes no
+     natural height, so even with h-full unwound the screen never grows past
+     the viewport and the panel goes straight back to trapping the scroll.
+     Restoring basis:auto lets content set the height; inside genuinely
+     fixed-height containers (modals) shrink + min-h-0 still win, so those
+     keep their internal scroll. */
+  main:not(:has([data-ticket-screen])) .overflow-y-auto {
+    flex-basis: auto !important;
+  }
+}

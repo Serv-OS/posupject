@@ -49,10 +49,12 @@ export default function BankFeedPanel({ profile }) {
   };
   const pickBank = async (inst) => {
     setBusy('init'); setErr(''); setPicker(null);
-    const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'init', institution_id: inst.id } });
+    const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'init', institution_id: inst.id, country: inst.country || 'GB' } });
     setBusy('');
-    if (error || data?.error || !data?.link) { setErr('Could not start the connection. ' + (error?.message || data?.error || '')); return; }
-    window.location.href = data.link;   // hosted GoCardless + bank consent page
+    if (error || data?.error) { setErr('Could not connect. ' + (error?.message || data?.error || '')); return; }
+    if (data.link) { window.location.href = data.link; return; }   // hosted bank-consent flow (Open Banking providers)
+    if (data.connected) { load(); return; }                         // Google Sheets: linked directly, no redirect
+    setErr('Could not connect — unexpected response.');
   };
   const refresh = async (connId) => {
     setBusy('sync:' + connId); setErr('');
@@ -153,7 +155,7 @@ export default function BankFeedPanel({ profile }) {
                 })}
             </div>
           </div>
-          <div className="text-[11px] text-dim">"Create bill" makes a paid bill from the transaction (date, amount, payee pre‑filled). Bank data is read‑only via Open Banking — no payments are ever made from here.</div>
+          <div className="text-[11px] text-dim">"Create bill" makes a paid bill from the transaction (date, amount, payee pre‑filled). Bank data is read‑only (Monzo Business → Google Sheets auto‑export) — no payments are ever made from here.</div>
         </div>
       </div>
 
