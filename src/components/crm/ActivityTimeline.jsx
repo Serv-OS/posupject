@@ -133,12 +133,15 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
     setSending(false);
   };
 
-  // Record the outcome of a meeting after the fact (e.g. a scheduled calendar
-  // meeting that has now happened — or didn't).
+  // Record (or correct) the outcome of a meeting — a scheduled meeting that has
+  // now happened, didn't, or moved. Always changeable: a mis-click on "No show"
+  // used to be permanent, which also meant the control vanished from a meeting
+  // once anyone touched it.
   const setMeetingOutcome = async (activity, value) => {
-    await supabase.from('crm_activities')
+    const { error } = await supabase.from('crm_activities')
       .update({ channel_metadata: { ...(activity.channel_metadata || {}), outcome: value } })
       .eq('id', activity.id);
+    if (error) { alert('Could not save the outcome: ' + error.message); return; }
     load();
   };
 
@@ -257,22 +260,28 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
                 <span className="text-paper font-medium">{getName(a.actor_id)}</span>
                 <span className="text-dim">{TYPE_LABEL[a.type] || a.type}</span>
                 {a.direction && !isMeeting && <span className="text-dim">{a.direction === 'inbound' ? '← in' : '→ out'}</span>}
-                {isMeeting && mOutcome && (
+                {/* Outcome — how the meeting actually went (No show lives here).
+                    Always present on a meeting so it can be logged AND changed:
+                    once set it stays a dropdown in its outcome colour, and a
+                    meeting still in the future can be marked cancelled or
+                    rescheduled without waiting for the day to pass. */}
+                {isMeeting && !mOutcome && isFuture && (
+                  <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-blue-100 text-blue-700">Scheduled</span>
+                )}
+                {isMeeting && (canWrite ? (
+                  <select value={mOutcome || ''} onChange={e => e.target.value && setMeetingOutcome(a, e.target.value)}
+                    title={mOutcome ? 'Change the outcome' : 'Log the outcome of this meeting'}
+                    className={`px-1.5 py-0.5 text-[10px] font-bold uppercase rounded-lg cursor-pointer focus:outline-none border ${
+                      mOutcome ? `${OUTCOME_STYLE[mOutcome] || 'bg-slate-200 text-slate-600'} border-transparent`
+                               : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
+                    {!mOutcome && <option value="">Log outcome…</option>}
+                    {MEETING_OUTCOMES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                ) : mOutcome && (
                   <span className={`px-1.5 py-0.5 text-[9px] font-bold uppercase rounded ${OUTCOME_STYLE[mOutcome] || 'bg-slate-200 text-slate-600'}`}>
                     {(MEETING_OUTCOMES.find(([k]) => k === mOutcome)?.[1]) || mOutcome}
                   </span>
-                )}
-                {isMeeting && !mOutcome && (
-                  isFuture
-                    ? <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-blue-100 text-blue-700">Scheduled</span>
-                    : canWrite && (
-                      <select defaultValue="" onChange={e => e.target.value && setMeetingOutcome(a, e.target.value)}
-                        className="px-1.5 py-0.5 text-[10px] bg-amber-50 border border-amber-300 text-amber-800 rounded-lg focus:outline-none">
-                        <option value="">Log outcome…</option>
-                        {MEETING_OUTCOMES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                      </select>
-                    )
-                )}
+                ))}
                 <span className="text-dim ml-auto">{timeAgo(a.occurred_at)}</span>
               </div>
               {a.type === 'email' && a.channel_metadata?.to && <div className="text-[10px] text-dim mt-0.5">To: {a.channel_metadata.to}</div>}
