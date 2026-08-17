@@ -36,3 +36,12 @@ verify_jwt = false
 verify_jwt = false
 [functions.twilio-voicemail]
 verify_jwt = false
+
+# Audited 17 Aug 2026 against the LIVE posture: these are public in
+# production but were missing here, so a bulk `supabase functions deploy`
+# (the CI workflow) would have silently locked them behind JWT — killing
+# the website chatbot, the mailbox pollers and the webhooks.
+[functions.admin-set-password]
+verify_jwt = false
+[functions.bank-sync]
+verify_jwt = false
