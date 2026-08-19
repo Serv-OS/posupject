@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { supabase } from '../../lib/supabase';
 import { cleanEmailBody, hasQuotedTail } from '../../lib/emailText';
 import { emailHtmlFor, sanitizeEmailHtml } from '../../lib/emailHtml';
@@ -150,7 +151,9 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
     return m ? (m.display_name || m.email.split('@')[0]) : 'Unknown';
   };
 
-  const input = "w-full px-3 py-2 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
+  // text-base is deliberate: iOS zooms the page when a focused field is under
+  // 16px, which yanks the layout around mid-sentence.
+  const input = "w-full px-3.5 py-2.5 bg-card border border-bdr rounded-xl text-base text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
   const emailReady = type === 'email' && direction === 'outbound' && !!mailProvider;
 
@@ -176,8 +179,19 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
         </div>
       </div>
 
-      {adding && (
-        <form onSubmit={save} className="bg-card border border-bdr rounded-lg p-4 mb-4 space-y-3">
+      {adding && createPortal((
+        // Portalled to <body> on purpose: this sits inside a .glass-card, whose
+        // backdrop-filter would otherwise make it the containing block for a
+        // fixed overlay and clip the dialog to the card.
+        <div className="fixed inset-0 z-[60] bg-black/40 flex items-stretch sm:items-center justify-center sm:p-6"
+          onClick={e => e.target === e.currentTarget && setAdding(false)}>
+          <form onSubmit={save}
+            className="bg-scene sm:rounded-2xl shadow-2xl w-full sm:max-w-2xl flex flex-col max-h-full overflow-y-auto p-5 sm:p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-bold text-paper">{type === 'email' ? 'New email' : 'Log activity'}</h3>
+              <button type="button" onClick={() => { setAdding(false); setSendError(''); }}
+                className="ml-auto w-9 h-9 rounded-xl text-muted hover:text-paper hover:bg-card text-xl leading-none">×</button>
+            </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={label}>Type</label>
@@ -223,7 +237,7 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
                   {aiLoading ? 'Generating…' : '✨ Draft with AI'}</button>
               )}
             </div>
-            <textarea className={input + ' resize-none'} rows={emailReady ? 6 : 4} value={body} onChange={e => setBody(e.target.value)} placeholder={emailReady ? 'Write your email…' : 'Notes, details...'} />
+            <textarea className={input + ' resize-y leading-relaxed'} rows={emailReady ? 14 : 6} value={body} onChange={e => setBody(e.target.value)} placeholder={emailReady ? 'Write your email…' : 'Notes, details...'} />
             {aiError && <div className="text-[11px] text-red-600 mt-1">{aiError}</div>}
             {body && subjectType === 'ticket' && <div className="text-[10px] text-dim mt-1">AI draft — review &amp; edit before saving.</div>}
           </div>
@@ -231,21 +245,22 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
             <div className="text-[11px] text-dim">Connect your mailbox (Account → Connect Microsoft/Google) to send from here — for now this logs the email only.</div>
           )}
           {sendError && <div className="text-[11px] text-red-600">{sendError}</div>}
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap sticky bottom-0 bg-scene pt-2">
             {emailReady ? (
               <>
                 <button type="button" onClick={sendEmail} disabled={sending || !to.trim() || !body.trim()}
-                  className="px-3 py-1.5 bg-ember text-ink text-xs font-semibold rounded hover:bg-ember-deep disabled:opacity-50">
+                  className="px-5 py-2.5 bg-ember text-ink text-sm font-bold rounded-xl hover:bg-ember-deep disabled:opacity-50">
                   {sending ? 'Sending…' : 'Send email'}</button>
-                <button type="submit" className="px-3 py-1.5 text-xs text-muted border border-bdr rounded">Log only</button>
+                <button type="submit" className="px-4 py-2.5 text-sm text-muted border border-bdr rounded-xl">Log only</button>
               </>
             ) : (
-              <button type="submit" className="px-3 py-1.5 bg-ember text-ink text-xs font-semibold rounded hover:bg-ember-deep">Save</button>
+              <button type="submit" className="px-5 py-2.5 bg-ember text-ink text-sm font-bold rounded-xl hover:bg-ember-deep">Save</button>
             )}
-            <button type="button" onClick={() => { setAdding(false); setSendError(''); }} className="px-3 py-1.5 text-xs text-muted border border-bdr rounded">Cancel</button>
+            <button type="button" onClick={() => { setAdding(false); setSendError(''); }} className="px-4 py-2.5 text-sm text-muted border border-bdr rounded-xl">Cancel</button>
           </div>
-        </form>
-      )}
+          </form>
+        </div>
+      ), document.body)}
 
       <div className="space-y-2">
         {activities.map(a => {
