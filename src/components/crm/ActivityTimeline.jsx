@@ -186,7 +186,8 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
         <div className="fixed inset-0 z-[60] bg-black/40 flex items-stretch sm:items-center justify-center sm:p-6"
           onClick={e => e.target === e.currentTarget && setAdding(false)}>
           <form onSubmit={save}
-            className="bg-scene sm:rounded-2xl shadow-2xl w-full sm:max-w-2xl flex flex-col max-h-full overflow-y-auto p-5 sm:p-6 space-y-4">
+            style={{ background: 'var(--scene)' }}
+            className="sm:rounded-2xl shadow-2xl w-full sm:max-w-2xl flex flex-col max-h-full overflow-y-auto p-5 sm:p-6 space-y-4">
             <div className="flex items-center gap-3">
               <h3 className="text-lg font-bold text-paper">{type === 'email' ? 'New email' : 'Log activity'}</h3>
               <button type="button" onClick={() => { setAdding(false); setSendError(''); }}
@@ -245,7 +246,7 @@ export default function ActivityTimeline({ subjectType, subjectId, profile, cont
             <div className="text-[11px] text-dim">Connect your mailbox (Account → Connect Microsoft/Google) to send from here — for now this logs the email only.</div>
           )}
           {sendError && <div className="text-[11px] text-red-600">{sendError}</div>}
-          <div className="flex gap-2 flex-wrap sticky bottom-0 bg-scene pt-2">
+          <div style={{ background: 'var(--scene)' }} className="flex gap-2 flex-wrap sticky bottom-0 pt-2 -mx-1 px-1">
             {emailReady ? (
               <>
                 <button type="button" onClick={sendEmail} disabled={sending || !to.trim() || !body.trim()}
