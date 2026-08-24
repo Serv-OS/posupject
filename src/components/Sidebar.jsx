@@ -7,7 +7,7 @@ import {
   Bug, Star, List, Layout, Layers, Package, ChevronRight, Plus, Mail, Calendar, MessageSquare, Clock, Plane, CreditCard, Receipt, TrendingUp,
   Warehouse, Boxes, PackagePlus, PackageMinus, ShoppingCart, ClipboardCheck, Truck, Factory,
   Settings as SettingsIcon, Users as UsersIcon, FileSignature, PhoneCall, Wallet, Tags, Percent, Landmark,
-  Search, PanelLeftClose, PanelLeftOpen, Pin, History
+  Search, PanelLeftClose, PanelLeftOpen, Pin, History, CalendarCheck
 } from 'lucide-react';
 
 // Core pinned block (un-grouped, top).
@@ -47,7 +47,7 @@ const COLLAPSIBLE = [
     ['modules', 'Modules', LayoutGrid], ['feature_requests', 'Feature Requests', Sparkles], ['releases', 'Releases', Flag],
   ] },
   { id: 'workforce', label: 'Workforce', items: [
-    ['time', 'Time Tracking', Clock], ['schedule', 'Schedule', Calendar], ['timeoff', 'Time Off', Plane],
+    ['time', 'Time Tracking', Clock], ['schedule', 'Schedule', Calendar], ['bookings', 'Booking Page', CalendarCheck], ['timeoff', 'Time Off', Plane],
     ['staff', 'Staff', User], ['departments', 'Departments & Areas', Building2],
   ] },
   { id: 'insights', label: 'Insights', items: [

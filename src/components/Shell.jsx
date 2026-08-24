@@ -29,6 +29,7 @@ import VatReturnPanel from './finance/VatReturnPanel.jsx';
 import BankFeedPanel from './finance/BankFeedPanel.jsx';
 import ReportsPanel from './crm/ReportsPanel.jsx';
 import ScheduleView from './staffing/ScheduleView.jsx';
+import BookingsPanel from './crm/BookingsPanel.jsx';
 import TimeOffView from './staffing/TimeOffView.jsx';
 import StaffView from './staffing/StaffView.jsx';
 import DepartmentsView from './staffing/DepartmentsView.jsx';
@@ -354,6 +355,8 @@ export default function Shell({ session }) {
         return <BankFeedPanel profile={profile} />;
       case 'finance_reports':
         return <ReportsPanel profile={profile} onNavigate={navigateTo} />;
+      case 'bookings':
+        return <BookingsPanel profile={profile} />;
       case 'schedule':
         return <ScheduleView profile={profile} />;
       case 'timeoff':

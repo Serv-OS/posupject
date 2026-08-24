@@ -45,3 +45,8 @@ verify_jwt = false
 verify_jwt = false
 [functions.bank-sync]
 verify_jwt = false
+
+# The public booking page: visitors have no login, so this is reachable
+# without a JWT. It only ever exposes free slot times, never calendar detail.
+[functions.booking-public]
+verify_jwt = false

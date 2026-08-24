@@ -7,6 +7,7 @@ import PublicForm from './components/PublicForm.jsx';
 import PublicQuote from './components/PublicQuote.jsx';
 import PublicInvoice from './components/PublicInvoice.jsx';
 import BankCallback from './components/BankCallback.jsx';
+import BookingPage from './components/BookingPage.jsx';
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -14,6 +15,8 @@ export default function App() {
 
   // Public, no-login form route: /f/<slug> (embeddable on any website)
   const formMatch = window.location.pathname.match(/^\/f\/([^/?#]+)/);
+  // Public booking page, no login: /book/<slug>
+  const bookMatch = window.location.pathname.match(/^\/book\/([^/?#]+)/);
   // Public quote route: /q/<token>
   const quoteMatch = window.location.pathname.match(/^\/q\/([^/?#]+)/);
   // Public invoice route: /i/<token>
@@ -33,6 +36,9 @@ export default function App() {
 
   if (formMatch) {
     return <PublicForm slug={decodeURIComponent(formMatch[1])} />;
+  }
+  if (bookMatch) {
+    return <BookingPage slug={decodeURIComponent(bookMatch[1])} />;
   }
   if (quoteMatch) {
     return <PublicQuote token={decodeURIComponent(quoteMatch[1])} />;
