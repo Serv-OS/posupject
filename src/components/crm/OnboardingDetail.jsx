@@ -3,6 +3,8 @@ import { supabase } from '../../lib/supabase';
 import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
+import OnboardingPackCard from './OnboardingPackCard.jsx';
+import AttachmentsCard from './AttachmentsCard.jsx';
 
 const STAGES = [
   'kickoff','hardware_ordered','hardware_shipped','account_menu_config',
@@ -32,6 +34,7 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
   const [jobTypes, setJobTypes] = useState([]);
   const [showNewProject, setShowNewProject] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [packContacts, setPackContacts] = useState([]);   // contacts on this job, for the onboarding pack
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -60,6 +63,16 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
       setCompany(c.data);
       setLocations(l.data || []);
     }
+    // Contacts linked to this onboarding — the pack is emailed to one of them.
+    const { data: assoc } = await supabase.from('associations')
+      .select('from_type, from_id, to_type, to_id')
+      .or(`and(from_type.eq.onboarding,from_id.eq.${onboardingId},to_type.eq.contact),and(to_type.eq.onboarding,to_id.eq.${onboardingId},from_type.eq.contact)`);
+    const contactIds = (assoc || []).map(x => (x.from_type === 'contact' ? x.from_id : x.to_id));
+    if (contactIds.length) {
+      const { data: cts } = await supabase.from('contacts').select('id, first_name, last_name, email').in('id', contactIds);
+      setPackContacts(cts || []);
+    } else setPackContacts([]);
+
     if (o.data?.deal_id) {
       const { data: d } = await supabase.from('deals').select('*').eq('id', o.data.deal_id).single();
       setDeal(d);
@@ -133,6 +146,7 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
   if (!ob) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading...</div>;
 
   const ownerName = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email.split('@')[0]) : 'Unassigned'; };
+  const venue = locations.find(l => l.id === ob.location_id) || null;
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
@@ -144,11 +158,22 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
         <button onClick={onClose} className="text-muted hover:text-paper text-lg">&larr;</button>
         <div className="flex-1 min-w-0">
           <div className="text-xl font-bold text-paper truncate">
-            {company?.name || 'Unknown'} Onboarding
+            {venue?.name || company?.name || 'Unknown'} Onboarding
           </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             <span className="badge-status bg-orange-100 text-orange-700 border border-orange-200">{STAGE_LABELS[ob.stage]}</span>
             <span className="text-xs text-muted">Owner: {ownerName(ob.owner_id)}</span>
+            {/* The venue is the primary link: this job installs a till at a
+                site, not at a company. The company sits one step behind. */}
+            {venue && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-lg bg-ember/10 text-ember-deep border border-ember/25 cursor-pointer hover:border-ember/50"
+                onClick={() => onNavigate?.('location', venue.id)}>
+                {'\u{1F4CD}'} {venue.name}{venue.city ? ` · ${venue.city}` : ''}
+              </span>
+            )}
+            {!venue && (
+              <span className="text-[10px] font-bold text-amber">No venue set — set one so the pack and files land on the site</span>
+            )}
             {company && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-lg bg-slate-100 text-slate-600 border border-slate-200 cursor-pointer hover:border-slate-300"
                 onClick={() => onNavigate?.('company', company.id)}>
@@ -268,6 +293,19 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
                 </div>
               </Card>
 
+              <Card title="Venue being onboarded">
+                {venue ? (
+                  <div onClick={() => onNavigate?.('location', venue.id)}
+                    className="p-3 glass-inner rounded-xl cursor-pointer flex items-center gap-3 border-l-2 border-ember">
+                    <div className="w-10 h-10 rounded-xl bg-ember/15 border border-ember/25 flex items-center justify-center text-lg shrink-0">{'\u{1F4CD}'}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-base font-semibold text-paper truncate">{venue.name}</div>
+                      <div className="text-xs text-muted">{[venue.venue_type, venue.city].filter(Boolean).join(' / ') || 'Venue'}</div>
+                    </div>
+                  </div>
+                ) : <Empty>No venue set. Use Edit to choose which site this job is for.</Empty>}
+              </Card>
+
               <Card title="Company">
                 {company ? (
                   <div onClick={() => onNavigate?.('company', company.id)}
@@ -281,10 +319,10 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
                 ) : <Empty>No company</Empty>}
               </Card>
 
-              <Card title="Locations" count={locations.length}>
-                {locations.length > 0 ? (
+              <Card title="Other venues at this company" count={locations.filter(l => l.id !== ob.location_id).length}>
+                {locations.filter(l => l.id !== ob.location_id).length > 0 ? (
                   <div className="space-y-2">
-                    {locations.map(l => (
+                    {locations.filter(l => l.id !== ob.location_id).map(l => (
                       <div key={l.id} onClick={() => onNavigate?.('location', l.id)}
                         className="p-3 glass-inner rounded-xl cursor-pointer">
                         <div className="text-sm font-medium text-paper">{l.name}</div>
@@ -311,6 +349,27 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
 
             {/* MIDDLE: Activity + Contacts */}
             <div className="col-span-4 space-y-4">
+              <OnboardingPackCard
+                onboarding={ob}
+                company={company}
+                location={venue}
+                locations={locations}
+                contacts={packContacts}
+                profile={profile}
+                onChanged={load}
+              />
+
+              {/* The customer's uploads live on the venue, but they are read
+                  here — chasing a menu should not mean opening another record. */}
+              {ob.location_id && (
+                <AttachmentsCard
+                  subjectType="location"
+                  subjectId={ob.location_id}
+                  profile={profile}
+                  title={`Files · ${venue?.name || 'this venue'}`}
+                />
+              )}
+
               <Card title="Activity">
                 <ActivityTimeline subjectType="onboarding" subjectId={onboardingId} profile={profile} />
               </Card>

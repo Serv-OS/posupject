@@ -21,9 +21,10 @@ function iconFor(mime = '', name = '') {
 const isImg = (a) => (a.mime_type || '').toLowerCase().startsWith('image/');
 // Cloud-link attachments (OneDrive/Drive shared as a link) store the URL as the path.
 const isLink = (a) => /^https?:\/\//.test(a.file_path || '');
-const sourceLabel = (s) => s === 'inbound_email' ? ' · from email' : s === 'outbound_email' ? ' · sent' : '';
+const sourceLabel = (s) => s === 'inbound_email' ? ' · from email' : s === 'outbound_email' ? ' · sent'
+  : s === 'onboarding_form' ? ' · onboarding pack' : '';
 
-export default function AttachmentsCard({ subjectType, subjectId, profile }) {
+export default function AttachmentsCard({ subjectType, subjectId, profile, title = 'Attachments', hint }) {
   const [items, setItems] = useState([]);
   const [previews, setPreviews] = useState({}); // id -> signed thumbnail url (images only)
   const [uploading, setUploading] = useState(false);
@@ -100,7 +101,7 @@ export default function AttachmentsCard({ subjectType, subjectId, profile }) {
   return (
     <div className="glass-card rounded-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-bdr flex items-center gap-2">
-        <h3 className="text-sm font-bold text-paper">Attachments</h3>
+        <h3 className="text-sm font-bold text-paper">{title}</h3>
         <span className="text-xs text-dim font-mono">({items.length})</span>
         {canWrite && (
           <>

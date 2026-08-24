@@ -15,10 +15,25 @@ export async function handleClosedWon(dealId, profileId) {
     .select('id').eq('deal_id', dealId).limit(1);
   if (existing?.length > 0) return existing[0];
 
+  // The venue being onboarded. The deal already carries it as an affected
+  // location; not copying it here is what leaves onboardings pinned to a
+  // company instead of the site being installed.
+  const { data: locLinks } = await supabase.from('associations')
+    .select('from_type, from_id, to_type, to_id')
+    .or(`and(from_type.eq.deal,from_id.eq.${dealId},to_type.eq.location),and(to_type.eq.deal,to_id.eq.${dealId},from_type.eq.location)`)
+    .limit(1);
+  const link = locLinks?.[0];
+  let locationId = link ? (link.from_type === 'location' ? link.from_id : link.to_id) : null;
+  if (!locationId && deal.company_id) {
+    const { data: venues } = await supabase.from('locations').select('id').eq('company_id', deal.company_id).limit(2);
+    if (venues?.length === 1) locationId = venues[0].id;
+  }
+
   // Create the onboarding
   const { data: onboarding } = await supabase.from('onboardings').insert({
     company_id: deal.company_id,
     deal_id: dealId,
+    location_id: locationId,
     owner_id: deal.owner_id,
     notes: `Auto-created from deal: ${deal.name}`,
   }).select().single();

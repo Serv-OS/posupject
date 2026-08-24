@@ -8,6 +8,7 @@ import PublicQuote from './components/PublicQuote.jsx';
 import PublicInvoice from './components/PublicInvoice.jsx';
 import BankCallback from './components/BankCallback.jsx';
 import BookingPage from './components/BookingPage.jsx';
+import OnboardingPack from './components/OnboardingPack.jsx';
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -15,6 +16,8 @@ export default function App() {
 
   // Public, no-login form route: /f/<slug> (embeddable on any website)
   const formMatch = window.location.pathname.match(/^\/f\/([^/?#]+)/);
+  // Customer's onboarding pack, no login: /onboarding/<token>
+  const packMatch = window.location.pathname.match(/^\/onboarding\/([^/?#]+)/);
   // Public booking page, no login: /book/<slug>
   const bookMatch = window.location.pathname.match(/^\/book\/([^/?#]+)/);
   // Public quote route: /q/<token>
@@ -36,6 +39,9 @@ export default function App() {
 
   if (formMatch) {
     return <PublicForm slug={decodeURIComponent(formMatch[1])} />;
+  }
+  if (packMatch) {
+    return <OnboardingPack token={decodeURIComponent(packMatch[1])} />;
   }
   if (bookMatch) {
     return <BookingPage slug={decodeURIComponent(bookMatch[1])} />;

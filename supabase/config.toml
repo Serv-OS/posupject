@@ -50,3 +50,8 @@ verify_jwt = false
 # without a JWT. It only ever exposes free slot times, never calendar detail.
 [functions.booking-public]
 verify_jwt = false
+
+# The customer's onboarding pack: they have no login, so the token in the URL
+# is the credential. The SEND side (onboarding-form-send) stays JWT-protected.
+[functions.onboarding-form]
+verify_jwt = false
