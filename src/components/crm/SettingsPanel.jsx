@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import ChatSitesCard from './ChatSitesCard.jsx';
 import { supabase } from '../../lib/supabase';
 import { TEAM_OPTIONS, TEAM_LABELS } from '../UsersPanel.jsx';
 import AiSettingsCard from './AiSettingsCard.jsx';
@@ -592,6 +593,8 @@ export default function SettingsPanel({ profile }) {
               </div>
             </div>
           )}
+
+          <ChatSitesCard profile={profile} />
 
           {/* Quote terms */}
           {settings && (

@@ -55,3 +55,12 @@ verify_jwt = false
 # is the credential. The SEND side (onboarding-form-send) stays JWT-protected.
 [functions.onboarding-form]
 verify_jwt = false
+
+# The support chatbot: the widget runs on a customer's website with no login,
+# so the function is public and validates the site key and Origin itself.
+[functions.chat]
+verify_jwt = false
+[functions.kb-ingest]
+verify_jwt = false
+[functions.kb-learn]
+verify_jwt = false
