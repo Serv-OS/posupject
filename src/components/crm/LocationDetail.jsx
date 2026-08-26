@@ -76,6 +76,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
     'name', 'address', 'city', 'postcode', 'phone', 'email', 'venue_type',
     'covers', 'status', 'owner_id', 'notes', 'kickoff_at',
     'expected_install_date', 'actual_install_date', 'go_live_date', 'activation_date',
+    'venue_code',
   ];
 
   const save = async () => {
@@ -188,6 +189,24 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                 <div><label className={label}>Address</label><input className={input} value={draft.address || ''} onChange={e => set('address', e.target.value)} /></div>
                 <div><label className={label}>City</label><input className={input} value={draft.city || ''} onChange={e => set('city', e.target.value)} /></div>
                 <div><label className={label}>Postcode</label><input className={input} value={draft.postcode || ''} onChange={e => set('postcode', e.target.value)} /></div>
+                {/* The venue's ID in ServOS. Copied from the ServOS admin portal
+                    when the venue is set up, and it is how the support chat knows
+                    which venue is on the line. Names cannot do this job: ServOS
+                    calls a site "Leeds" while we hold three Leeds venues under
+                    different brands. Uppercased on entry so SV-1001 and sv-1001
+                    cannot become two different venues. */}
+                <div>
+                  <label className={label}>ServOS venue ID</label>
+                  <input
+                    className={`${input} font-mono`}
+                    value={draft.venue_code || ''}
+                    onChange={e => set('venue_code', e.target.value.trim().toUpperCase() || null)}
+                    placeholder="SV-1001"
+                  />
+                  <div className="text-[10px] text-dim mt-1">
+                    From the ServOS admin portal, beside the venue name. Links this record to the till.
+                  </div>
+                </div>
                 <div><label className={label}>Phone</label><input className={input} value={draft.phone || ''} onChange={e => set('phone', e.target.value)} /></div>
                 <div><label className={label}>Email</label><input className={input} value={draft.email || ''} onChange={e => set('email', e.target.value)} /></div>
                 <div><label className={label}>Onboarding call</label><input className={input} type="datetime-local" value={(draft.kickoff_at || '').slice(0, 16)} onChange={e => set('kickoff_at', e.target.value || null)} /></div>
@@ -223,6 +242,17 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                   <Field label="Venue Type" value={location.venue_type} />
                   <Field label="Covers" value={location.covers} />
                   <Field label="Status" value={location.status} badge={STATUS_COLORS[location.status]} />
+                  {/* Called out rather than left blank: an unlinked venue means the
+                      support chat cannot tell who is calling, which is a thing to
+                      fix, not an empty field to scroll past. */}
+                  <div>
+                    <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-0.5">ServOS venue ID</div>
+                    {location.venue_code ? (
+                      <div className="text-sm text-paper font-mono">{location.venue_code}</div>
+                    ) : (
+                      <div className="text-sm text-dim italic">Not linked — support chat cannot identify this venue</div>
+                    )}
+                  </div>
                   <Field label="Owner" value={ownerName(location.owner_id)} />
                   {location.notes && <Field label="Notes" value={location.notes} />}
                 </div>
@@ -230,8 +260,8 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
 
               <LocationTradingCard location={location} canWrite={canWrite} onSaved={load} />
 
-              <PosLinkCard locationId={locationId} value={location.pos_location_id} profile={profile}
-                onSaved={(v) => setLocation(l => ({ ...l, pos_location_id: v }))} />
+              <PosLinkCard locationId={locationId} code={location.venue_code} posId={location.pos_location_id}
+                profile={profile} onSaved={(v) => setLocation(l => ({ ...l, ...v }))} />
 
               <Card title="Key Dates">
                 <div className="space-y-3">

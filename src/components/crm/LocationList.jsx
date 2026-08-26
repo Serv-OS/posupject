@@ -217,6 +217,10 @@ export default function LocationList({ profile, onSelect, onNavigate }) {
                 <Chip icon={'\u{1F4CD}'}>{l.city}</Chip>
                 <Chip>{l.venue_type}</Chip>
                 <Chip>{l.covers ? `${l.covers} covers` : ''}</Chip>
+                {/* Shown ONLY when linked. An unlinked venue is the normal state
+                    for a prospect, so flagging every one of those would be noise;
+                    the detail panel is where the gap is called out. */}
+                {l.venue_code && <Chip tone="slate" icon={'\u{1F5A5}'}>{l.venue_code}</Chip>}
               </ChipRow>
             </RecordCard>
           );
