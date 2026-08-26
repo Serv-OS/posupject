@@ -332,11 +332,19 @@ serve(async (req) => {
       ? session.context as Record<string, unknown> : null;
     const reportedVenue = ctxObj ? String(ctxObj.Venue || "").trim() : "";
     const reportedVenueId = ctxObj ? String(ctxObj.VenueId || "").trim() : "";
+    const reportedVenueCode = ctxObj ? String(ctxObj.VenueCode || "").trim() : "";
 
-    // Match on the POS id, NEVER on the name. The POS calls a site "Leeds" while
-    // this CRM holds three Leeds venues under different brands, so a name match
-    // would confidently pick the wrong customer. An unmapped venue falls through
-    // and the bot asks, which is the correct behaviour when we genuinely cannot tell.
+    // Match on the venue CODE first, then the raw POS id. NEVER on the name: the
+    // POS calls a site "Leeds" while this CRM holds three Leeds venues under
+    // different brands, so a name match would confidently pick the wrong customer.
+    // The code is the one a human copies into the CRM record when a venue is set
+    // up, which is why it wins. An unmatched venue falls through and the bot asks,
+    // which is the right behaviour when we genuinely cannot tell.
+    if (!location && reportedVenueCode) {
+      const { data } = await supabase.from("locations")
+        .select("id, name, city").eq("venue_code", reportedVenueCode).maybeSingle();
+      if (data) location = data;
+    }
     if (!location && reportedVenueId) {
       const { data } = await supabase.from("locations")
         .select("id, name, city").eq("pos_location_id", reportedVenueId).maybeSingle();
@@ -412,7 +420,7 @@ serve(async (req) => {
         ? session.context as Record<string, unknown> : null;
       if (!ctx) return "";
       const bits = Object.entries(ctx)
-        .filter(([k]) => k !== "Venue" && k !== "VenueId")  // ids are plumbing, not conversation
+        .filter(([k]) => !["Venue", "VenueId", "VenueCode"].includes(k))  // ids are plumbing, not conversation
         .map(([k, v]) => `${k}: ${v}`);
       if (!bits.length) return "";
       return `Their device reports: ${bits.join(", ")}. Use this instead of asking, ` +
