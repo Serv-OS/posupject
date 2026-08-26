@@ -17,21 +17,34 @@ export default function BookingsPanel({ profile }) {
   const [bookings, setBookings] = useState([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [myCalendar, setMyCalendar] = useState(null);   // this user's own Google connection
+  const [showAll, setShowAll] = useState(false);        // owners can look at everyone's
+  const [people, setPeople] = useState([]);
+  const [allCount, setAllCount] = useState(0);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
   const myZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   const load = async (keepId) => {
-    const [t, b] = await Promise.all([
+    const [t, b, g, pr] = await Promise.all([
       supabase.from('booking_types').select('*').order('created_at'),
       supabase.from('bookings').select('*').order('starts_at', { ascending: true }),
+      // A booking page books into ITS OWN host's calendar, so a new page has to
+      // start from the calendar the person creating it has connected — not from
+      // whoever's page happens to be on screen.
+      supabase.from('user_integrations').select('email').eq('profile_id', profile.id).eq('provider', 'google').maybeSingle(),
+      supabase.from('profiles').select('id, email, display_name'),
     ]);
-    const list = t.data || [];
+    setMyCalendar(g.data?.email || null);
+    setPeople(pr.data || []);
+    const all = t.data || [];
+    const list = showAll ? all : all.filter(x => x.host_user_id === profile.id);
     setTypes(list);
     const want = keepId || bt?.id;
     setBt(list.find(x => x.id === want) || list[0] || null);
+    setAllCount(all.length);
     setBookings(b.data || []);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [showAll]);
 
   // A new meeting type starts from the one you are looking at, because the
   // hours and timezone are almost always the same — it is the name, length and
@@ -42,13 +55,20 @@ export default function BookingsPanel({ profile }) {
     const base = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'meeting';
     let slug = base, n = 2;
     while (types.some(t => t.slug === slug)) slug = `${base}-${n++}`;
+    if (!myCalendar && !confirm(
+      'You have no Google calendar connected, so this page cannot check your availability yet.\n\n' +
+      'Create it anyway? Connect a calendar in Account and it will start working.')) return;
+    // Mine, on my calendar. Only the shape of the day is worth copying from
+    // whatever page is on screen, and only when it is also mine.
+    const copyFrom = bt && bt.host_user_id === profile.id ? bt : null;
     const { data, error } = await supabase.from('booking_types').insert({
       slug, name: name.trim(),
-      host_user_id: bt?.host_user_id || profile.id, host_email: bt?.host_email || profile.email,
-      timezone: bt?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-      hours: bt?.hours || {}, duration_mins: bt?.duration_mins || 30,
-      buffer_mins: bt?.buffer_mins ?? 15, min_notice_hrs: bt?.min_notice_hrs ?? 12,
-      max_days_ahead: bt?.max_days_ahead ?? 30, slot_step_mins: bt?.slot_step_mins ?? 30,
+      host_user_id: profile.id, host_email: myCalendar || profile.email,
+      timezone: copyFrom?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      hours: copyFrom?.hours || {"1":[["09:00","17:00"]],"2":[["09:00","17:00"]],"3":[["09:00","17:00"]],"4":[["09:00","17:00"]],"5":[["09:00","17:00"]]},
+      duration_mins: copyFrom?.duration_mins || 30,
+      buffer_mins: copyFrom?.buffer_mins ?? 15, min_notice_hrs: copyFrom?.min_notice_hrs ?? 12,
+      max_days_ahead: copyFrom?.max_days_ahead ?? 30, slot_step_mins: copyFrom?.slot_step_mins ?? 30,
     }).select().single();
     if (error) { alert('Could not create: ' + error.message); return; }
     load(data.id);
@@ -82,7 +102,21 @@ export default function BookingsPanel({ profile }) {
     else setHours(dow, [['09:00','17:00']]);
   };
 
-  if (!bt) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading…</div>;
+  if (!bt) return (
+    <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">
+      <div className="text-base font-bold text-paper">You don't have a booking page yet</div>
+      <div className="text-sm text-muted max-w-md">
+        Make one and you get a link that shows your real availability, reads your own calendar, and books
+        straight into it. Yours alone — colleagues have their own.
+      </div>
+      {canWrite && <button onClick={addType} className="btn-glass px-5 py-2.5 rounded-xl text-sm font-semibold">Create my booking page</button>}
+      {allCount > 0 && profile.role === 'owner' && !showAll && (
+        <button onClick={() => setShowAll(true)} className="text-xs text-ember hover:underline">
+          Show the team's {allCount} page{allCount === 1 ? '' : 's'}
+        </button>
+      )}
+    </div>
+  );
 
   const link = `${window.location.origin}/book/${bt.slug}`;
   const upcoming = bookings.filter(b => b.status === 'confirmed' && new Date(b.starts_at) >= new Date());
@@ -95,9 +129,14 @@ export default function BookingsPanel({ profile }) {
         <div>
           <div className="text-lg font-bold text-paper">Booking page</div>
           <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">
-            {types.length} meeting type{types.length === 1 ? '' : 's'} · {upcoming.length} upcoming · hours in {bt.timezone.replace(/_/g,' ')}
+            {showAll ? "everyone's pages" : 'your pages'} · {types.length} meeting type{types.length === 1 ? '' : 's'} · {upcoming.length} upcoming
           </div>
         </div>
+        {profile.role === 'owner' && allCount > types.length + (showAll ? 0 : 0) && (
+          <button onClick={() => setShowAll(v => !v)} className="text-xs text-ember hover:underline">
+            {showAll ? 'Just mine' : `All ${allCount} pages`}
+          </button>
+        )}
         {canWrite && (
           <button onClick={save} disabled={saving} className="ml-auto btn-glass px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50">
             {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save'}
@@ -128,6 +167,20 @@ export default function BookingsPanel({ profile }) {
             This one is turned off, so its link no longer takes bookings.
             {canWrite && <button onClick={async () => { await supabase.from('booking_types').update({ active: true }).eq('id', bt.id); load(bt.id); }}
               className="ml-2 font-bold underline">Turn it back on</button>}
+          </div>
+        )}
+
+        {bt.host_user_id !== profile.id && (
+          <div className="p-3 rounded-xl bg-amber/10 border border-amber/30 text-xs text-amber">
+            This is {people.find(x => x.id === bt.host_user_id)?.display_name
+              || people.find(x => x.id === bt.host_user_id)?.email || 'a colleague'}'s booking page.
+            It books into their calendar, not yours.
+          </div>
+        )}
+        {bt.host_user_id === profile.id && !myCalendar && (
+          <div className="p-3 rounded-xl bg-amber/10 border border-amber/30 text-xs text-amber">
+            No Google calendar is connected for you, so this page cannot see when you're busy.
+            Connect one under Account and it will start checking properly.
           </div>
         )}
 
