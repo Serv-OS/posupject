@@ -9,6 +9,7 @@ import LeadsCard from './LeadsCard.jsx';
 import InvoicesCard from './InvoicesCard.jsx';
 import ScheduleMeeting from './ScheduleMeeting.jsx';
 import { primaryLead } from '../../lib/leadStages';
+import { loadRegions, localTimeForPhone } from '../../lib/region';
 
 export default function ContactDetail({ contactId, profile, onClose, onNavigate, onCreateLead }) {
   const [contact, setContact] = useState(null);
@@ -16,10 +17,13 @@ export default function ContactDetail({ contactId, profile, onClose, onNavigate,
   const [draft, setDraft] = useState({});
   const [members, setMembers] = useState([]);
   const [leads, setLeads] = useState([]);
+  // support_regions rows for the "their time" chip — cached, [] on failure
+  const [regions, setRegions] = useState([]);
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   useEffect(() => { load(); }, [contactId]);
+  useEffect(() => { loadRegions().then(setRegions); }, []);
 
   const load = async () => {
     const [c, m, ld] = await Promise.all([
@@ -132,6 +136,10 @@ export default function ContactDetail({ contactId, profile, onClose, onNavigate,
                 <div className="space-y-3">
                   <Field label="Email" value={contact.email} />
                   <Field label="Phone" value={contact.phone} />
+                  {(() => {
+                    const lt = localTimeForPhone(contact.phone, regions);
+                    return lt ? <div className="text-[11px] text-dim">Their time: {lt.label}</div> : null;
+                  })()}
                   <Field label="Job Title" value={contact.job_title} />
                   <Field label="Source" value={contact.source} />
                   <Field label="Marketing" value={contact.marketing_opt_in ? 'Opted in' : 'Not opted in'} />

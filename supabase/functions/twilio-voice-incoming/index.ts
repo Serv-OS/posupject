@@ -1,12 +1,18 @@
 // Twilio Voice Incoming Call Handler
-// Webhook called when someone dials the support number
-// Routes to online agents via Twilio Client, or plays voicemail message
+// Webhook called when someone dials a support number — either line. The number
+// they dialled (To) picks the region: its hours in its own timezone, its voice,
+// its greeting and voicemail wording. One deployed function serves every line.
+// Outbound (browser softphone) legs pick the caller ID by the destination's
+// country prefix, so US customers see a +1 number, UK customers a +44 one.
 //
 // Required secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+// TWILIO_FROM_NUMBER remains the last-resort caller ID when no region has a number.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isOpenNow } from "../_shared/hours.ts";
+import { phoneVariants } from "../_shared/phone.ts";
+import { loadRegions, regionForTwilioNumber, effective, fromNumberFor } from "../_shared/region.ts";
 
 // Escape text for safe inclusion inside a TwiML <Say>
 const xmlEscape = (s: string) =>
@@ -30,30 +36,34 @@ serve(async (req) => {
     const from = formData.get("From") as string;
     const to = formData.get("To") as string;
     const callSid = formData.get("CallSid") as string;
-    const callStatus = formData.get("CallStatus") as string;
     const direction = formData.get("Direction") as string;
 
     console.log(`Call: from=${from}, to=${to}, direction=${direction}, SID: ${callSid}`);
+
+    const regions = await loadRegions(supabase);
 
     // OUTBOUND CALL: agent dialing from browser
     // When a Twilio Client makes an outbound call, "From" starts with "client:"
     // and "To" is the phone number they want to call
     if (from?.startsWith("client:") || direction === "outbound") {
       const dialTo = to || formData.get("To") as string;
-      const callerId = Deno.env.get("TWILIO_FROM_NUMBER") || "";
+      // The line matching where the customer is: +1 → the US number, +44 → the
+      // UK one. A +44 caller ID on a US handset is flagged or blocked by many
+      // US carriers, so this is deliverability, not cosmetics.
+      const callerId = fromNumberFor(regions, dialTo, Deno.env.get("TWILIO_FROM_NUMBER") || "");
 
       console.log(`Outbound call to ${dialTo} from ${callerId}`);
 
       let twiml = '<?xml version="1.0" encoding="UTF-8"?><Response>';
       twiml += `<Dial callerId="${callerId}">`;
-      twiml += `<Number>${dialTo}</Number>`;
+      twiml += `<Number>${xmlEscape(dialTo)}</Number>`;
       twiml += `</Dial>`;
       twiml += '</Response>';
 
       return new Response(twiml, { headers: { "Content-Type": "text/xml" } });
     }
 
-    // INBOUND CALL: customer calling the support number
+    // INBOUND CALL: customer calling one of the support numbers
 
     // Skip if this is a client-originated call that already went through outbound
     if (from?.startsWith("client:")) {
@@ -64,31 +74,22 @@ serve(async (req) => {
       );
     }
 
-    // Normalize phone number and generate all possible formats for matching
+    // Which line did they call? That decides hours, voice, and wording below.
+    const region = regionForTwilioNumber(regions, to);
+
+    // Every stored format this caller's number could match — UK and US shapes
+    // both covered (the old expansion was +44-only, so a +1 caller could never
+    // match a contact and every US call minted a fresh ticket).
     const rawFrom = from?.replace(/\s/g, "") || "";
-    const phoneVariants: string[] = [];
-    if (rawFrom) {
-      phoneVariants.push(rawFrom);
-      // +447xxx -> 07xxx and 447xxx
-      if (rawFrom.startsWith("+44")) {
-        phoneVariants.push("0" + rawFrom.slice(3));
-        phoneVariants.push(rawFrom.slice(1)); // 447xxx
-      }
-      // 07xxx -> +447xxx and 447xxx
-      if (rawFrom.startsWith("0")) {
-        phoneVariants.push("+44" + rawFrom.slice(1));
-        phoneVariants.push("44" + rawFrom.slice(1));
-      }
-      // +1xxx (US) -> just keep as is
-    }
+    const variants = phoneVariants(rawFrom);
 
     // Match caller to a contact using all phone variants
     let contactId: string | null = null;
     let companyId: string | null = null;
     let callerName = from;
 
-    if (phoneVariants.length > 0) {
-      const phoneFilter = phoneVariants.map(p => `phone.eq.${p}`).join(",");
+    if (variants.length > 0) {
+      const phoneFilter = variants.map(p => `phone.eq.${p}`).join(",");
       const { data: contacts } = await supabase
         .from("contacts")
         .select("id, first_name, last_name, phone")
@@ -131,7 +132,7 @@ serve(async (req) => {
 
     if (normalizedFrom) {
       // Search for open tickets matching any phone variant
-      const ticketPhoneFilter = phoneVariants.map(p => `customer_phone.eq.${p}`).join(",");
+      const ticketPhoneFilter = variants.map(p => `customer_phone.eq.${p}`).join(",");
       const { data: openTickets } = await supabase
         .from("tickets")
         .select("id")
@@ -142,6 +143,8 @@ serve(async (req) => {
 
       if (openTickets && openTickets.length > 0) {
         ticketId = openTickets[0].id;
+        // The line they used most recently is the one replies should go from.
+        if (to) await supabase.from("tickets").update({ service_number: to }).eq("id", ticketId);
       } else {
         // Create a new ticket
         const ticketData: any = {
@@ -150,6 +153,7 @@ serve(async (req) => {
           customer_phone: normalizedFrom,
           contact_id: contactId,
           source: "phone",
+          service_number: to || null,
         };
         if (companyId) ticketData.company_id = companyId;
 
@@ -199,20 +203,25 @@ serve(async (req) => {
           to_number: to,
           call_sid: callSid,
           status: "ringing",
+          region: region?.code || null,
         },
       });
     }
 
-    // Editable greeting + voicemail prompt (from support_settings)
-    const { data: vs } = await supabase.from("support_settings")
+    // Greeting + hours + voice: the region's own where one is set, the global
+    // settings row otherwise — a deployment with no regions behaves as before.
+    const { data: settingsRow } = await supabase.from("support_settings")
       .select("voice_greeting, voicemail_prompt, after_hours_voicemail_prompt, business_hours_enabled, business_timezone, business_hours, voice_id").eq("id", 1).single();
+    const vs = effective(region, settingsRow);
     const open = isOpenNow(vs);
     const voice = vs?.voice_id || "Polly.Joanna-Neural";
     const greeting = xmlEscape(vs?.voice_greeting || "Please hold while we connect you to an agent.");
     const vmPrompt = xmlEscape((!open && vs?.after_hours_voicemail_prompt) || vs?.voicemail_prompt || "Please leave a message after the beep and we'll get back to you.");
 
-    // Build TwiML response
+    // Build TwiML response. Downstream callbacks can't see To, so carry the
+    // region with them — their voicemail wording must match this line's.
     const FN = `${Deno.env.get("SUPABASE_URL")}/functions/v1`;
+    const regionParam = region ? `&region=${region.code}` : "";
     let twiml = '<?xml version="1.0" encoding="UTF-8"?><Response>';
 
     if (open && onlineAgents && onlineAgents.length > 0) {
@@ -220,15 +229,18 @@ serve(async (req) => {
       twiml += `<Say voice="${voice}">${greeting}</Say>`;
       twiml += `<Dial timeout="25" record="record-from-answer"`;
       twiml += ` recordingStatusCallback="${FN}/twilio-recording" recordingStatusCallbackEvent="completed"`;
-      twiml += ` action="${FN}/twilio-voice-status?ticket=${ticketId || ""}"`;
+      twiml += ` action="${FN}/twilio-voice-status?ticket=${ticketId || ""}${regionParam}"`;
       twiml += ` callerId="${to}">`;
 
       for (const agent of onlineAgents.slice(0, 3)) {
         // Ring up to 3 agents simultaneously
         twiml += `<Client>`;
         twiml += `<Identity>${agent.twilio_identity}</Identity>`;
-        twiml += `<Parameter name="callerName" value="${callerName}"/>`;
-        twiml += `<Parameter name="callerNumber" value="${from}"/>`;
+        // A contact called 'Smith & Sons' must not produce invalid XML — Twilio
+        // answers a parse error with the application-error message, killing
+        // the call for that customer every single time.
+        twiml += `<Parameter name="callerName" value="${xmlEscape(callerName)}"/>`;
+        twiml += `<Parameter name="callerNumber" value="${xmlEscape(from)}"/>`;
         twiml += `</Client>`;
       }
 
@@ -238,7 +250,7 @@ serve(async (req) => {
       twiml += `<Say voice="${voice}">${vmPrompt}</Say>`;
       twiml += `<Record maxLength="120" playBeep="true" transcribe="true"`;
       twiml += ` transcribeCallback="${FN}/twilio-voicemail?mode=transcription"`;
-      twiml += ` action="${FN}/twilio-voicemail?ticket=${ticketId || ""}" />`;
+      twiml += ` action="${FN}/twilio-voicemail?ticket=${ticketId || ""}${regionParam}" />`;
       twiml += `<Say voice="${voice}">We didn't receive a message. Goodbye.</Say>`;
     }
 

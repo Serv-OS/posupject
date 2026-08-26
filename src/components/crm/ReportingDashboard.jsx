@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { pipelineTotals, DEFAULT_STAGE_WEIGHTS } from '../../lib/trading';
-import { gbp0 } from '../../lib/money';
+import { gbp0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { oneOffValue, recurringValue, totalValue } from '../../lib/dealValue';
 
 // CEO-defined targets (see project_sales_targets memory)
@@ -196,12 +196,19 @@ export default function ReportingDashboard({ profile }) {
     const lost = deals.filter(d => d.stage === 'closed_lost').filter(inRange);
     const closed = [...won, ...lost];
 
-    const pipelineValue = pipeline.reduce((s, d) => s + totalOf(d), 0);
-    const wonValue = won.reduce((s, d) => s + totalOf(d), 0);
-    const wonOneOff = won.reduce((s, d) => s + oneOff(d), 0);
-    const wonRecurring = won.reduce((s, d) => s + recurring(d), 0);
+    // Deals carry a currency (GBP default) — every value that sums deals is
+    // partitioned per currency and rendered side-by-side, never blended.
+    const ccyOf = (d) => (d.currency === 'USD' ? 'USD' : 'GBP');
+    const pipelineValue = sumByCurrency(pipeline, totalOf, ccyOf);
+    const wonValue = sumByCurrency(won, totalOf, ccyOf);
+    const wonOneOff = sumByCurrency(won, oneOff, ccyOf);
+    const wonRecurring = sumByCurrency(won, recurring, ccyOf);
     const winRate = closed.length ? Math.round((won.length / closed.length) * 100) : 0;
-    const avgDeal = won.length ? wonValue / won.length : 0;
+    const wonCountBy = { GBP: won.filter(d => ccyOf(d) === 'GBP').length, USD: won.filter(d => ccyOf(d) === 'USD').length };
+    const avgDeal = {
+      GBP: wonCountBy.GBP ? (wonValue.GBP || 0) / wonCountBy.GBP : 0,
+      USD: wonCountBy.USD ? (wonValue.USD || 0) / wonCountBy.USD : 0,
+    };
     const daysToClose = won
       .filter(d => d.closed_at && d.created_at)
       .map(d => (new Date(d.closed_at) - new Date(d.created_at)) / 86400000);
@@ -214,8 +221,8 @@ export default function ReportingDashboard({ profile }) {
     const channelOf = (d) => leadDealIds.has(d.id) ? 'From leads' : 'Passed in / direct';
     const byChannel = {};
     closed.forEach(d => {
-      const c = byChannel[channelOf(d)] || (byChannel[channelOf(d)] = { won: 0, lost: 0, value: 0 });
-      if (d.stage === 'closed_won') { c.won += 1; c.value += totalOf(d); } else c.lost += 1;
+      const c = byChannel[channelOf(d)] || (byChannel[channelOf(d)] = { won: 0, lost: 0, value: { GBP: 0, USD: 0 } });
+      if (d.stage === 'closed_won') { c.won += 1; c.value[ccyOf(d)] += totalOf(d); } else c.lost += 1;
     });
     pipeline.forEach(d => {
       const c = byChannel[channelOf(d)] || (byChannel[channelOf(d)] = { won: 0, lost: 0, value: 0 });
@@ -227,13 +234,13 @@ export default function ReportingDashboard({ profile }) {
     for (let i = 11; i >= 0; i--) {
       const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
       months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
-        label: d.toLocaleDateString('en-GB', { month: 'short' }), count: 0, value: 0 });
+        label: d.toLocaleDateString('en-GB', { month: 'short' }), count: 0, value: { GBP: 0, USD: 0 } });
     }
     const byKey = Object.fromEntries(months.map(m => [m.key, m]));
     wonAll.forEach(d => {
       const c = closedAt(d);
       const k = `${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}`;
-      if (byKey[k]) { byKey[k].count += 1; byKey[k].value += totalOf(d); }
+      if (byKey[k]) { byKey[k].count += 1; byKey[k].value[ccyOf(d)] += totalOf(d); }
     });
 
     // Lost reasons — why deals die, ranked.
@@ -244,23 +251,23 @@ export default function ReportingDashboard({ profile }) {
     const byOwner = {};
     closed.forEach(d => {
       const n = ownerName(d.owner_id) || 'Unassigned';
-      const o = byOwner[n] || (byOwner[n] = { won: 0, lost: 0, value: 0 });
-      if (d.stage === 'closed_won') { o.won += 1; o.value += totalOf(d); } else o.lost += 1;
+      const o = byOwner[n] || (byOwner[n] = { won: 0, lost: 0, value: { GBP: 0, USD: 0 } });
+      if (d.stage === 'closed_won') { o.won += 1; o.value[ccyOf(d)] += totalOf(d); } else o.lost += 1;
     });
 
     // By source label, for the deals that carry one.
     const bySource = {};
     closed.forEach(d => {
       const src = (d.source || 'not set').trim();
-      const o = bySource[src] || (bySource[src] = { won: 0, lost: 0, value: 0 });
-      if (d.stage === 'closed_won') { o.won += 1; o.value += totalOf(d); } else o.lost += 1;
+      const o = bySource[src] || (bySource[src] = { won: 0, lost: 0, value: { GBP: 0, USD: 0 } });
+      if (d.stage === 'closed_won') { o.won += 1; o.value[ccyOf(d)] += totalOf(d); } else o.lost += 1;
     });
 
     // Pipeline by stage with value, so open coverage is visible next to closed.
     const byStage = {};
     pipeline.forEach(d => {
-      const o = byStage[d.stage] || (byStage[d.stage] = { count: 0, value: 0 });
-      o.count += 1; o.value += totalOf(d);
+      const o = byStage[d.stage] || (byStage[d.stage] = { count: 0, value: { GBP: 0, USD: 0 } });
+      o.count += 1; o.value[ccyOf(d)] += totalOf(d);
     });
 
     return {
@@ -286,9 +293,11 @@ export default function ReportingDashboard({ profile }) {
     const rows = list.map(m => {
       const wonThisMonth = deals.filter(d =>
         d.owner_id === m.id && d.stage === 'closed_won' && d.closed_at && new Date(d.closed_at).getTime() >= monthStart);
-      const arrClosed = wonThisMonth.reduce((s, d) => s + dealArr(d), 0);
-      const attainment = MONTHLY_ARR_QUOTA ? arrClosed / MONTHLY_ARR_QUOTA : 0;
-      const commission = arrClosed * COMMISSION_RATE;
+      // ARR and commission are per-currency. The quota is a £ target, so the
+      // attainment bar counts £ ARR only — USD shows beside it, no invented FX.
+      const arrClosed = sumByCurrency(wonThisMonth, dealArr);
+      const attainment = MONTHLY_ARR_QUOTA ? (arrClosed.GBP || 0) / MONTHLY_ARR_QUOTA : 0;
+      const commission = { GBP: (arrClosed.GBP || 0) * COMMISSION_RATE, USD: (arrClosed.USD || 0) * COMMISSION_RATE };
 
       const myActs = activities.filter(a => a.actor_id === m.id);
       const actsToday = myActs.filter(a => new Date(a.occurred_at).getTime() >= todayStart).length;
@@ -300,10 +309,11 @@ export default function ReportingDashboard({ profile }) {
       const demosRun = myHist.filter(h => h.to_stage === 'demo_done').length;
 
       return { id: m.id, name: ownerName(m.id), arrClosed, attainment, commission, wonCount: wonThisMonth.length, actsToday, actsWeek, onsiteWeek, demosScheduled, demosRun };
-    }).sort((a, b) => b.arrClosed - a.arrClosed);
+    }).sort((a, b) => ((b.arrClosed.GBP || 0) - (a.arrClosed.GBP || 0)) || ((b.arrClosed.USD || 0) - (a.arrClosed.USD || 0)));
 
-    const teamArr = rows.reduce((s, r) => s + r.arrClosed, 0);
-    const teamCommission = rows.reduce((s, r) => s + r.commission, 0);
+    const addSums = (a, b) => ({ GBP: (a.GBP || 0) + (b.GBP || 0), USD: (a.USD || 0) + (b.USD || 0) });
+    const teamArr = rows.reduce((s, r) => addSums(s, r.arrClosed), {});
+    const teamCommission = rows.reduce((s, r) => addSums(s, r.commission), {});
     const teamQuota = MONTHLY_ARR_QUOTA * rows.length;
     return { rows, teamArr, teamCommission, teamQuota };
   }, [deals, members, activities, stageHistory]);
@@ -490,13 +500,13 @@ export default function ReportingDashboard({ profile }) {
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                <MetricCard label="Won" value={salesMetrics.won} sub={formatCurrency(salesMetrics.wonValue)} color="text-emerald-600" />
+                <MetricCard label="Won" value={salesMetrics.won} sub={fmtByCurrency(salesMetrics.wonValue, 0)} color="text-emerald-600" />
                 <MetricCard label="Close rate" value={`${salesMetrics.winRate}%`} sub={`${salesMetrics.won} won · ${salesMetrics.lost} lost`} />
-                <MetricCard label="One-off revenue" value={formatCurrency(salesMetrics.wonOneOff)} sub={'\u00A0'}
-                  color={salesMetrics.wonOneOff > 0 ? 'text-emerald-600' : 'text-dim'} />
-                <MetricCard label="Recurring (ARR)" value={formatCurrency(salesMetrics.wonRecurring)} sub={'\u00A0'}
-                  color={salesMetrics.wonRecurring > 0 ? 'text-ember' : 'text-dim'} />
-                <MetricCard label="Avg deal" value={formatCurrency(salesMetrics.avgDeal)} sub={'\u00A0'} />
+                <MetricCard label="One-off revenue" value={fmtByCurrency(salesMetrics.wonOneOff, 0)} sub={'\u00A0'}
+                  color={(salesMetrics.wonOneOff.GBP || salesMetrics.wonOneOff.USD) ? 'text-emerald-600' : 'text-dim'} />
+                <MetricCard label="Recurring (ARR)" value={fmtByCurrency(salesMetrics.wonRecurring, 0)} sub={'\u00A0'}
+                  color={(salesMetrics.wonRecurring.GBP || salesMetrics.wonRecurring.USD) ? 'text-ember' : 'text-dim'} />
+                <MetricCard label="Avg deal" value={fmtByCurrency(salesMetrics.avgDeal, 0)} sub={'\u00A0'} />
                 {/* "0" here looked like a bug. Under a day is a real answer for
                     passed-in deals logged the day they sign — say it in words. */}
                 <MetricCard
@@ -510,14 +520,17 @@ export default function ReportingDashboard({ profile }) {
                 <div className={label + ' mb-3'}>Won by month (12 months)</div>
                 <div className="flex items-end gap-1.5">
                   {(() => {
-                    const max = Math.max(1, ...salesMetrics.months.map(m => m.value));
+                    // Bars scale by the larger single-currency figure — a visual
+                    // yardstick only, never a cross-currency sum.
+                    const magOf = (v) => Math.max(v.GBP || 0, v.USD || 0);
+                    const max = Math.max(1, ...salesMetrics.months.map(m => magOf(m.value)));
                     return salesMetrics.months.map(m => (
-                      <div key={m.key} className="flex-1 min-w-0 flex flex-col items-center justify-end" title={`${m.label}: ${m.count} won, ${formatCurrency(m.value)}`}>
-                        {m.value > 0 && <div className="text-[9px] font-mono text-emerald-600 whitespace-nowrap">{formatCurrency(m.value)}</div>}
+                      <div key={m.key} className="flex-1 min-w-0 flex flex-col items-center justify-end" title={`${m.label}: ${m.count} won, ${fmtByCurrency(m.value, 0)}`}>
+                        {magOf(m.value) > 0 && <div className="text-[9px] font-mono text-emerald-600 whitespace-nowrap">{fmtByCurrency(m.value, 0)}</div>}
                         {m.count > 0 && <div className="text-[9px] font-mono text-dim">{m.count} won</div>}
                         <div className="w-full flex items-end justify-center border-b border-bdr" style={{ height: 96 }}>
-                          <div className={`w-3/4 rounded-t ${m.value > 0 ? 'bg-emerald-500/70' : 'bg-card'}`}
-                            style={{ height: `${m.value > 0 ? Math.max(6, Math.round((m.value / max) * 92)) : 2}px` }} />
+                          <div className={`w-3/4 rounded-t ${magOf(m.value) > 0 ? 'bg-emerald-500/70' : 'bg-card'}`}
+                            style={{ height: `${magOf(m.value) > 0 ? Math.max(6, Math.round((magOf(m.value) / max) * 92)) : 2}px` }} />
                         </div>
                         <div className="text-[9px] font-mono text-dim mt-1">{m.label}</div>
                       </div>
@@ -538,7 +551,7 @@ export default function ReportingDashboard({ profile }) {
                       <div key={k} className="py-2 border-b border-bdr last:border-0">
                         <div className="flex justify-between text-xs">
                           <span className="text-paper font-medium">{k}</span>
-                          <span className="text-emerald-600 font-mono">{formatCurrency(v.value)}</span>
+                          <span className="text-emerald-600 font-mono">{fmtByCurrency(v.value, 0)}</span>
                         </div>
                         <div className="flex justify-between text-[11px] text-muted mt-0.5">
                           <span>{v.won} won · {v.lost} lost{v.open ? ` · ${v.open} open` : ''}</span>
@@ -552,12 +565,12 @@ export default function ReportingDashboard({ profile }) {
 
                 <div className="glass-card rounded-2xl p-4">
                   <div className={label + ' mb-3'}>By owner (closed in window)</div>
-                  {Object.entries(salesMetrics.byOwner).sort((a, b) => b[1].value - a[1].value).map(([k, v]) => {
+                  {Object.entries(salesMetrics.byOwner).sort((a, b) => ((b[1].value.GBP || 0) - (a[1].value.GBP || 0)) || ((b[1].value.USD || 0) - (a[1].value.USD || 0))).map(([k, v]) => {
                     const closed = v.won + v.lost;
                     return (
                       <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
                         <span className="text-paper">{k}</span>
-                        <span className="text-muted">{v.won}/{closed} won · <span className="text-emerald-600 font-mono">{formatCurrency(v.value)}</span></span>
+                        <span className="text-muted">{v.won}/{closed} won · <span className="text-emerald-600 font-mono">{fmtByCurrency(v.value, 0)}</span></span>
                       </div>
                     );
                   })}
@@ -572,7 +585,7 @@ export default function ReportingDashboard({ profile }) {
                     return (
                       <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
                         <span className="text-paper">{k}</span>
-                        <span className="text-muted font-mono">{rate}% · {formatCurrency(v.value)}</span>
+                        <span className="text-muted font-mono">{rate}% · {fmtByCurrency(v.value, 0)}</span>
                       </div>
                     );
                   })}
@@ -591,19 +604,19 @@ export default function ReportingDashboard({ profile }) {
 
               {/* Open pipeline, valued — what's coming, next to what closed */}
               <div className="glass-card rounded-2xl p-4">
-                <div className={label + ' mb-3'}>Open pipeline — {salesMetrics.pipeline} deals · {formatCurrency(salesMetrics.pipelineValue)}</div>
+                <div className={label + ' mb-3'}>Open pipeline — {salesMetrics.pipeline} deals · {fmtByCurrency(salesMetrics.pipelineValue, 0)}</div>
                 {Object.entries(salesMetrics.byStage).map(([k, v]) => (
                   <div key={k} className="flex justify-between py-1 text-xs">
                     <span className="text-paper">{k.replace(/_/g, ' ')}</span>
-                    <span className="text-muted font-mono">{v.count} · {formatCurrency(v.value)}</span>
+                    <span className="text-muted font-mono">{v.count} · {fmtByCurrency(v.value, 0)}</span>
                   </div>
                 ))}
               </div>
 
               <button onClick={() => exportCSV(
-                ['Name','Company','Stage','Channel','Source','One-off','Recurring ARR','Total','Owner','Created','Closed'],
+                ['Name','Company','Stage','Channel','Source','Currency','One-off','Recurring ARR','Total','Owner','Created','Closed'],
                 deals.map(d => [d.name, companies.find(c => c.id === d.company_id)?.name, d.stage,
-                  salesMetrics.channelOf(d), d.source,
+                  salesMetrics.channelOf(d), d.source, d.currency || 'GBP',
                   oneOffValue(d), recurringValue(d),
                   totalValue(d), ownerName(d.owner_id), d.created_at, d.closed_at]),
                 'deals-export.csv'
@@ -614,10 +627,10 @@ export default function ReportingDashboard({ profile }) {
           {tab === 'quota' && (
             <>
               <div className="grid grid-cols-4 gap-3">
-                <MetricCard label="Team ARR (this month)" value={formatCurrency(quotaMetrics.teamArr)} color="text-emerald-600" />
+                <MetricCard label="Team ARR (this month)" value={fmtByCurrency(quotaMetrics.teamArr, 0)} color="text-emerald-600" />
                 <MetricCard label="Team Quota" value={formatCurrency(quotaMetrics.teamQuota)} />
-                <MetricCard label="Attainment" value={`${quotaMetrics.teamQuota ? Math.round((quotaMetrics.teamArr / quotaMetrics.teamQuota) * 100) : 0}%`} />
-                <MetricCard label="Commission (10%)" value={formatCurrency(quotaMetrics.teamCommission)} color="text-ember" />
+                <MetricCard label="Attainment" value={`${quotaMetrics.teamQuota ? Math.round(((quotaMetrics.teamArr.GBP || 0) / quotaMetrics.teamQuota) * 100) : 0}%`} />
+                <MetricCard label="Commission (10%)" value={fmtByCurrency(quotaMetrics.teamCommission, 0)} color="text-ember" />
               </div>
 
               <div className="glass-card rounded-2xl overflow-hidden">
@@ -641,7 +654,7 @@ export default function ReportingDashboard({ profile }) {
                         <tr key={r.id} className="border-t border-bdr">
                           <td className="px-3 py-2 text-sm text-paper">{r.name}</td>
                           <td className="px-3 py-2 text-xs text-muted text-right">{r.wonCount}</td>
-                          <td className="px-3 py-2 text-sm text-emerald-600 font-mono text-right">{formatCurrency(r.arrClosed)}</td>
+                          <td className="px-3 py-2 text-sm text-emerald-600 font-mono text-right">{fmtByCurrency(r.arrClosed, 0)}</td>
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-2 bg-ink rounded-full overflow-hidden min-w-[60px]">
@@ -650,7 +663,7 @@ export default function ReportingDashboard({ profile }) {
                               <span className={`text-xs font-mono w-10 text-right ${r.attainment >= 1 ? 'text-emerald-600 font-bold' : 'text-muted'}`}>{Math.round(r.attainment * 100)}%</span>
                             </div>
                           </td>
-                          <td className="px-3 py-2 text-sm text-ember font-mono text-right">{formatCurrency(r.commission)}{r.attainment >= 1 && ' ✓'}</td>
+                          <td className="px-3 py-2 text-sm text-ember font-mono text-right">{fmtByCurrency(r.commission, 0)}{r.attainment >= 1 && ' ✓'}</td>
                         </tr>
                       ))}
                       {quotaMetrics.rows.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-dim text-sm">No sales reps with deals yet.</td></tr>}
@@ -694,8 +707,13 @@ export default function ReportingDashboard({ profile }) {
               </div>
 
               <button onClick={() => exportCSV(
-                ['Rep','Won','ARR closed','Quota','Attainment %','Commission','Activities (wk)','Demos booked (wk)','Demos run (wk)','Onsite (wk)'],
-                quotaMetrics.rows.map(r => [r.name, r.wonCount, r.arrClosed, MONTHLY_ARR_QUOTA, Math.round(r.attainment*100), Math.round(r.commission), r.actsWeek, r.demosScheduled, r.demosRun, r.onsiteWeek]),
+                ['Rep','Won','Currency','ARR closed','Quota','Attainment %','Commission','Activities (wk)','Demos booked (wk)','Demos run (wk)','Onsite (wk)'],
+                quotaMetrics.rows.flatMap(r => {
+                  const base = [r.name, r.wonCount, 'GBP', r.arrClosed.GBP || 0, MONTHLY_ARR_QUOTA, Math.round(r.attainment*100), Math.round(r.commission.GBP || 0), r.actsWeek, r.demosScheduled, r.demosRun, r.onsiteWeek];
+                  return (r.arrClosed.USD || 0) > 0
+                    ? [base, [r.name, '', 'USD', r.arrClosed.USD, '', '', Math.round(r.commission.USD || 0), '', '', '', '']]
+                    : [base];
+                }),
                 'quota-commission.csv'
               )} className="px-3 py-1.5 text-xs text-muted border border-bdr rounded hover:text-paper">Export quota CSV</button>
             </>

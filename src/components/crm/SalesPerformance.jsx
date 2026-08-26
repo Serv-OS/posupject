@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
+import { sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { TrendingUp, Phone, Mail, Users as UsersIcon, MessageSquare, FileText, Target } from 'lucide-react';
 import { LEAD_STAGES } from '../../lib/leadStages';
 
@@ -54,7 +55,7 @@ export default function SalesPerformance({ profile, onNavigate }) {
       supabase.from('profiles').select('id, display_name, email, teams, role'),
       supabase.from('crm_activities').select('id, type, actor_id, occurred_at, subject_type, subject_id, direction, channel_metadata').gte('occurred_at', fromIso).lte('occurred_at', toIso),
       supabase.from('leads').select('id, owner_id, stage, created_at, name'),
-      supabase.from('deals').select('id, owner_id, stage, created_at, closed_at, name, value, saas_arr, payments_arr'),
+      supabase.from('deals').select('id, owner_id, stage, created_at, closed_at, name, value, saas_arr, payments_arr, currency'),
       supabase.from('quotes').select('id, created_by, created_at, status'),
       supabase.from('stage_history').select('id, object_type, object_id, from_stage, to_stage, changed_by, changed_at').gte('changed_at', fromIso).lte('changed_at', toIso),
       supabase.from('support_settings').select('sales_targets').eq('id', 1).maybeSingle(),
@@ -83,7 +84,9 @@ export default function SalesPerformance({ profile, onNavigate }) {
     const leadsCreated = leads.filter(l => l.owner_id === r.id && inRange(l.created_at)).length;
     const dealsCreated = deals.filter(d => d.owner_id === r.id && inRange(d.created_at)).length;
     const dealsWon = deals.filter(d => d.owner_id === r.id && d.stage === 'closed_won' && inRange(d.closed_at));
-    const arrWon = dealsWon.reduce((s, d) => s + Number(d.saas_arr || 0) + Number(d.payments_arr || 0), 0);
+    // ARR per currency (GBP default) — quota is a £ target, so pace and the
+    // quota badge count £ ARR only; USD shows beside it, no invented FX.
+    const arrWon = sumByCurrency(dealsWon, d => Number(d.saas_arr || 0) + Number(d.payments_arr || 0));
     const quotesSent = quotes.filter(qt => qt.created_by === r.id && inRange(qt.created_at)).length;
     const total = acts.length;
     const activityGoal = Math.round(targets.activities_per_week * weeks);
@@ -93,7 +96,7 @@ export default function SalesPerformance({ profile, onNavigate }) {
       rep: r, total, byType, noShows, meetingsHeld, leadsWorked, leadsCreated, dealsCreated,
       stageMoves: myMoves.length, dealsWon: dealsWon.length, arrWon, quotesSent,
       activityGoal, meetingGoal, quotaScaled,
-      hitQuota: arrWon >= quotaScaled,
+      hitQuota: (arrWon.GBP || 0) >= quotaScaled,
     };
   }).filter(s => s.total > 0 || s.leadsCreated > 0 || s.dealsCreated > 0 || s.stageMoves > 0 || s.quotesSent > 0 || s.dealsWon > 0)
     .sort((a, b) => b.total - a.total), [reps, activities, leads, deals, quotes, history, targets, weeks, rangeDays]);
@@ -103,7 +106,7 @@ export default function SalesPerformance({ profile, onNavigate }) {
     meetings: stats.reduce((s, x) => s + (x.byType.meeting || 0), 0),
     calls: stats.reduce((s, x) => s + (x.byType.call || 0), 0),
     won: stats.reduce((s, x) => s + x.dealsWon, 0),
-    arr: stats.reduce((s, x) => s + x.arrWon, 0),
+    arr: stats.reduce((s, x) => ({ GBP: (s.GBP || 0) + (x.arrWon.GBP || 0), USD: (s.USD || 0) + (x.arrWon.USD || 0) }), {}),
   }), [stats]);
 
   const saveTargets = async (next) => {
@@ -142,7 +145,7 @@ export default function SalesPerformance({ profile, onNavigate }) {
             <Stat label="Calls" value={teamTotals.calls} />
             <Stat label="Meetings" value={teamTotals.meetings} />
             <Stat label="Deals won" value={teamTotals.won} tone="emerald" />
-            <Stat label="ARR won" value={gbp0(teamTotals.arr)} tone="emerald" />
+            <Stat label="ARR won" value={fmtByCurrency(teamTotals.arr, 0)} tone="emerald" />
           </div>
 
           {/* Targets */}
@@ -209,7 +212,7 @@ export default function SalesPerformance({ profile, onNavigate }) {
                         <td className="px-2 py-2.5 text-right tabular-nums text-muted">{s.stageMoves}</td>
                         <td className="px-2 py-2.5 text-right tabular-nums text-muted">{s.quotesSent}</td>
                         <td className="px-2 py-2.5 text-right tabular-nums font-semibold text-emerald-600">{s.dealsWon}</td>
-                        <td className="px-5 py-2.5 text-right tabular-nums font-semibold text-paper">{gbp0(s.arrWon)}</td>
+                        <td className="px-5 py-2.5 text-right tabular-nums font-semibold text-paper">{fmtByCurrency(s.arrWon, 0)}</td>
                       </tr>
                     ))}
                 </tbody>
@@ -276,18 +279,19 @@ function RepDetail({ s, activities, leads, deals, from, to, onNavigate, targets 
   const myLeads = leads.filter(l => l.owner_id === s.rep.id && !['disqualified'].includes(l.stage));
   const funnel = LEAD_STAGES.filter(st => st.key !== 'disqualified').map(st => ({ ...st, n: myLeads.filter(l => l.stage === st.key).length }));
   const openDeals = deals.filter(d => d.owner_id === s.rep.id && !['closed_won', 'closed_lost'].includes(d.stage));
-  const pipeline = openDeals.reduce((sum, d) => sum + Number(d.saas_arr || 0) + Number(d.payments_arr || 0), 0);
-  const commission = s.hitQuota ? s.arrWon * Number(targets.commission_pct || 0) / 100 : 0;
+  const pipeline = sumByCurrency(openDeals, d => Number(d.saas_arr || 0) + Number(d.payments_arr || 0));
+  const commissionPct = Number(targets.commission_pct || 0) / 100;
+  const commission = s.hitQuota ? { GBP: (s.arrWon.GBP || 0) * commissionPct, USD: (s.arrWon.USD || 0) * commissionPct } : { GBP: 0 };
   const TYPE_ICON = { call: '📞', email: '📧', sms: '💬', note: '📝', meeting: '🤝', whatsapp: '📲' };
 
   return (
     <div className="glass-card rounded-2xl overflow-hidden">
       <div className="px-5 py-3.5 border-b border-bdr flex items-center gap-3 flex-wrap">
         <h3 className="text-[13px] font-bold text-paper">{name} — detail</h3>
-        <span className="text-xs text-muted">{s.total} activities · {s.dealsWon} won · {gbp0(s.arrWon)} ARR</span>
+        <span className="text-xs text-muted">{s.total} activities · {s.dealsWon} won · {fmtByCurrency(s.arrWon, 0)} ARR</span>
         {s.hitQuota
-          ? <span className="text-xs font-semibold text-emerald-600 ml-auto">Quota hit — est. commission {gbp0(commission)}</span>
-          : <span className="text-xs text-dim ml-auto">{gbp0(s.arrWon)} / {gbp0(s.quotaScaled)} quota ({Math.round((s.arrWon / Math.max(1, s.quotaScaled)) * 100)}%)</span>}
+          ? <span className="text-xs font-semibold text-emerald-600 ml-auto">Quota hit — est. commission {fmtByCurrency(commission, 0)}</span>
+          : <span className="text-xs text-dim ml-auto">{fmtByCurrency(s.arrWon, 0)} / {gbp0(s.quotaScaled)} quota ({Math.round(((s.arrWon.GBP || 0) / Math.max(1, s.quotaScaled)) * 100)}%)</span>}
       </div>
       <div className="p-5 grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Daily activity */}
@@ -329,7 +333,7 @@ function RepDetail({ s, activities, leads, deals, from, to, onNavigate, targets 
               );
             })}
           </div>
-          <div className="mt-3 text-xs text-muted">Open deals: <b className="text-paper">{openDeals.length}</b> · Pipeline ARR: <b className="text-paper">{gbp0(pipeline)}</b></div>
+          <div className="mt-3 text-xs text-muted">Open deals: <b className="text-paper">{openDeals.length}</b> · Pipeline ARR: <b className="text-paper">{fmtByCurrency(pipeline, 0)}</b></div>
         </div>
 
         {/* Recent activity */}

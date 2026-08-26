@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { currencyForCountry } from '../../lib/region';
 import { Receipt, Repeat } from 'lucide-react';
 import { money, invStatus, INV_BADGE } from './InvoicesPanel.jsx';
 
@@ -28,12 +29,21 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
       const { data: loc } = await supabase.from('locations').select('company_id').eq('id', locationId).maybeSingle();
       if (loc?.company_id) seed.company_id = loc.company_id;
     }
+    // Pre-linked creation must seed the currency too: the builder's company
+    // onChange never fires when the company arrives already chosen, so a US
+    // company's invoice would sit in GBP with 20% VAT unless someone noticed.
+    if (seed.company_id) {
+      const { data: co } = await supabase.from('companies').select('country').eq('id', seed.company_id).maybeSingle();
+      seed.currency = currencyForCountry(co?.country);
+    }
     const { data, error } = await supabase.from('invoices').insert(seed).select('id').single();
     if (error) { alert(error.message); return; }
     onNavigate?.('invoice', data.id);
   };
 
-  const outstanding = invoices.filter(i => !['paid', 'void', 'draft'].includes(i.status)).reduce((s, i) => s + Number(i.total || 0), 0);
+  const outstanding = invoices.filter(i => !['paid', 'void', 'draft'].includes(i.status))
+    .reduce((acc, i) => { const c = i.currency || 'GBP'; acc[c] = (acc[c] || 0) + Number(i.total || 0); return acc; }, {});
+  const outstandingTotal = Object.values(outstanding).reduce((s, v) => s + v, 0);
 
   return (
     <div className="glass-card rounded-2xl overflow-hidden">
@@ -54,14 +64,14 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
               className="px-4 py-2.5 flex items-center gap-2 hover:bg-card/50 cursor-pointer">
               <span className="font-mono text-[11px] text-dim shrink-0">INV-{inv.invoice_number}</span>
               {inv.recurring_id && <Repeat size={10} className="text-uv shrink-0" />}
-              <span className="text-sm text-paper tabular-nums ml-auto shrink-0">{money(inv.total)}</span>
+              <span className="text-sm text-paper tabular-nums ml-auto shrink-0">{money(inv.total, inv.currency)}</span>
               <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${INV_BADGE[st]}`}>{st}</span>
             </div>
           );
         })}
-        {outstanding > 0 && (
+        {outstandingTotal > 0 && (
           <div className="px-4 py-2 text-[11px] text-muted flex justify-between">
-            <span>Outstanding</span><span className="font-semibold text-paper tabular-nums">{money(outstanding)}</span>
+            <span>Outstanding</span><span className="font-semibold text-paper tabular-nums">{['GBP', 'USD'].filter(c => outstanding[c]).map(c => money(outstanding[c], c)).join(' + ')}</span>
           </div>
         )}
       </div>

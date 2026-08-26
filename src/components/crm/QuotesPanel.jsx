@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { FileSignature, Plus, X } from 'lucide-react';
 import { money } from './InvoicesPanel.jsx';
+import { sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { currencyForCountry } from '../../lib/region';
 
 const fmtD = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
 
@@ -36,7 +38,7 @@ export default function QuotesPanel({ profile, onNavigate }) {
     const [q, c, ct] = await Promise.all([
       supabase.from('quotes').select('*, company:companies(name), contact:contacts(first_name, last_name), location:locations(name)')
         .order('created_at', { ascending: false }),
-      supabase.from('companies').select('id, name').order('name'),
+      supabase.from('companies').select('id, name, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
     ]);
     setQuotes(q.data || []); setCompanies(c.data || []); setContacts(ct.data || []);
@@ -48,6 +50,7 @@ export default function QuotesPanel({ profile, onNavigate }) {
     const { data, error } = await supabase.from('quotes').insert({
       status: 'draft', created_by: profile.id,
       company_id: newCompany || null, contact_id: newContact || null,
+      currency: currencyForCountry(companies.find(c => c.id === newCompany)?.country),
       valid_until: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
     }).select('id').single();
     if (error) { alert(error.message); return; }
@@ -55,13 +58,13 @@ export default function QuotesPanel({ profile, onNavigate }) {
     onNavigate?.('quote', data.id);
   };
 
-  const openCount = quotes.filter(q => ['sent', 'viewed'].includes(quoteStatus(q))).length;
-  const openValue = quotes.filter(q => ['sent', 'viewed'].includes(quoteStatus(q)))
-    .reduce((s, q) => s + Number(q.one_off_total || 0), 0);
+  const openQuotes = quotes.filter(q => ['sent', 'viewed'].includes(quoteStatus(q)));
+  const openCount = openQuotes.length;
+  const openValue = sumByCurrency(openQuotes, q => Number(q.one_off_total || 0));
   const mStart = new Date(); mStart.setDate(1); mStart.setHours(0, 0, 0, 0);
-  const wonThisMonth = quotes.filter(q => ['won', 'paid'].includes(q.status) &&
-    (q.paid_at || q.signed_at || q.updated_at) && new Date(q.paid_at || q.signed_at || q.updated_at) >= mStart)
-    .reduce((s, q) => s + Number(q.one_off_total || 0), 0);
+  const wonThisMonth = sumByCurrency(quotes.filter(q => ['won', 'paid'].includes(q.status) &&
+    (q.paid_at || q.signed_at || q.updated_at) && new Date(q.paid_at || q.signed_at || q.updated_at) >= mStart),
+    q => Number(q.one_off_total || 0));
 
   const filtered = statusFilter === 'all' ? quotes : quotes.filter(q => quoteStatus(q) === statusFilter);
 
@@ -92,11 +95,11 @@ export default function QuotesPanel({ profile, onNavigate }) {
           <div className="grid grid-cols-3 gap-3">
             <div className="glass-card rounded-2xl px-4 py-3">
               <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim">Awaiting customer</div>
-              <div className="text-lg font-bold text-paper">{openCount} <span className="text-sm font-medium text-muted">· {money(openValue)}</span></div>
+              <div className="text-lg font-bold text-paper">{openCount} <span className="text-sm font-medium text-muted">· {fmtByCurrency(openValue)}</span></div>
             </div>
             <div className="glass-card rounded-2xl px-4 py-3">
               <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim">Won this month</div>
-              <div className="text-lg font-bold text-emerald-600">{money(wonThisMonth)}</div>
+              <div className="text-lg font-bold text-emerald-600">{fmtByCurrency(wonThisMonth)}</div>
             </div>
             <div className="glass-card rounded-2xl px-4 py-3">
               <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim">Total quotes</div>
@@ -163,8 +166,8 @@ export default function QuotesPanel({ profile, onNavigate }) {
                       </td>
                       <td className="px-4 py-3 text-muted hidden md:table-cell">{fmtD(q.created_at)}</td>
                       <td className="px-4 py-3 text-muted hidden md:table-cell">{fmtD(q.valid_until)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-paper">{money(q.one_off_total)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-muted hidden lg:table-cell">{Number(q.recurring_arr) ? money(q.recurring_arr) : '—'}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-paper">{money(q.one_off_total, q.currency)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-muted hidden lg:table-cell">{Number(q.recurring_arr) ? money(q.recurring_arr, q.currency) : '—'}</td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded ${QUOTE_BADGE[st] || 'bg-slate-100 text-slate-500'}`}>{st}</span>
                       </td>

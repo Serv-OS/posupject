@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { BarChart3, ArrowUpDown } from 'lucide-react';
-import { money, invStatus } from './InvoicesPanel.jsx';
+import { invStatus } from './InvoicesPanel.jsx';
+import { fmtMoney, CURRENCIES } from '../../lib/money';
 
 // ── date helpers ────────────────────────────────────────────────────────────
 const iso = (d) => d.toISOString().slice(0, 10);
@@ -36,7 +37,7 @@ const PRESETS = [
 ];
 
 export default function ReportsPanel({ profile, onNavigate }) {
-  const isGBP = money(0).includes('£');
+  const [cur, setCur] = useState('GBP');   // currency lens — every figure below is per-currency, never mixed
   const [invoices, setInvoices] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [out, setOut] = useState([]);          // money-out rows (paid bills + expenses)
@@ -55,32 +56,30 @@ export default function ReportsPanel({ profile, onNavigate }) {
     setLoading(true);
     const [inv, co] = await Promise.all([
       supabase.from('invoices')
-        .select('id, invoice_number, total, amount_paid, status, paid_at, due_date, issue_date, created_at, company_id, location_id, company:companies(name), location:locations(name)')
+        .select('id, invoice_number, total, amount_paid, currency, status, paid_at, due_date, issue_date, created_at, company_id, location_id, company:companies(name), location:locations(name)')
         .order('issue_date', { ascending: false }),
       supabase.from('companies').select('id, name').order('name'),
     ]);
     setInvoices(inv.data || []);
     setCompanies(co.data || []);
-    // Money-out (bills + expenses) only exists on the £ finance module. Query
+    // Money-out (bills + expenses) only exists on the finance module. Query
     // guarded — the table simply won't exist on the construction CRMs.
-    if (isGBP) {
-      const rows = []; let exists = false;
-      for (const t of ['bills', 'expenses']) {
-        const r = await supabase.from(t).select('total, amount_paid, status, paid_at, company_id').eq('status', 'paid');
-        if (!r.error) { exists = true; if (r.data) rows.push(...r.data); }
-      }
-      setOut(rows); setHasOut(exists);
-      const b = await supabase.from('bills').select('*, supplier:inv_suppliers(name), company:companies(name)');
-      if (!b.error) setBills(b.data || []);
-      const ec = await supabase.from('expense_categories').select('id, label');
-      if (!ec.error) setBillCats(ec.data || []);
+    const rows = []; let exists = false;
+    for (const t of ['bills', 'expenses']) {
+      const r = await supabase.from(t).select('total, amount_paid, currency, status, paid_at, company_id').eq('status', 'paid');
+      if (!r.error) { exists = true; if (r.data) rows.push(...r.data); }
     }
+    setOut(rows); setHasOut(exists);
+    const b = await supabase.from('bills').select('*, supplier:inv_suppliers(name), company:companies(name)');
+    if (!b.error) setBills(b.data || []);
+    const ec = await supabase.from('expense_categories').select('id, label');
+    if (!ec.error) setBillCats(ec.data || []);
     setLoading(false);
   })(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const live = useMemo(() => invoices.filter(i => !['draft', 'void'].includes(i.status)), [invoices]);
+  const live = useMemo(() => invoices.filter(i => !['draft', 'void'].includes(i.status) && (i.currency || 'GBP') === cur), [invoices, cur]);
   const scoped = useMemo(() => live.filter(i => !companyId || i.company_id === companyId), [live, companyId]);
-  const outScoped = useMemo(() => out.filter(o => !companyId || o.company_id === companyId), [out, companyId]);
+  const outScoped = useMemo(() => out.filter(o => (o.currency || 'GBP') === cur).filter(o => !companyId || o.company_id === companyId), [out, cur, companyId]);
 
   // ── period + point-in-time roll-ups ──
   const invoicedPeriod = scoped.filter(i => inRange(acctDate(i), from, to)).reduce((s, i) => s + billed(i), 0);
@@ -161,8 +160,14 @@ export default function ReportsPanel({ profile, onNavigate }) {
           <div className="text-xl font-bold text-paper">Reports</div>
           <div className="text-xs text-muted">{view === 'out' ? 'Bills — what you owe, have paid, and to whom' : "Invoicing & cash flow — what you're taking, have taken, and who owes"}</div>
         </div>
+        <div className="ml-auto flex items-center gap-1">
+          {CURRENCIES.map(c => (
+            <button key={c} onClick={() => setCur(c)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition ${cur === c ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>{c === 'USD' ? '$ USD' : '£ GBP'}</button>
+          ))}
+        </div>
         {hasOut && (
-          <div className="ml-auto flex items-center gap-1">
+          <div className="flex items-center gap-1">
             <button onClick={() => setView('in')}
               className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition ${view === 'in' ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Money in</button>
             <button onClick={() => setView('out')}
@@ -193,20 +198,20 @@ export default function ReportsPanel({ profile, onNavigate }) {
       </div>
 
       {loading ? <div className="p-10 text-center text-dim text-sm">Loading…</div> : view === 'out' ? (
-        <BillsOutReport bills={bills} cats={billCats} from={from} to={to} companyId={companyId} />
+        <BillsOutReport bills={bills} cats={billCats} from={from} to={to} companyId={companyId} cur={cur} />
       ) : (
       <div className="px-6 py-4 space-y-4">
         {/* KPI row */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Stat label="Invoiced (period)" value={money(invoicedPeriod)} tone="accent" sub={`${from} → ${to}`} />
-          <Stat label="Collected (period)" value={money(collectedPeriod)} tone="good" sub="Payments received" />
-          <Stat label="Outstanding (now)" value={money(outstandingNow)} sub="Sent, not yet paid" />
-          <Stat label="Overdue (now)" value={money(overdueNow)} tone="bad" sub="Past due date" />
+          <Stat label="Invoiced (period)" value={fmtMoney(invoicedPeriod, cur)} tone="accent" sub={`${from} → ${to}`} />
+          <Stat label="Collected (period)" value={fmtMoney(collectedPeriod, cur)} tone="good" sub="Payments received" />
+          <Stat label="Outstanding (now)" value={fmtMoney(outstandingNow, cur)} sub="Sent, not yet paid" />
+          <Stat label="Overdue (now)" value={fmtMoney(overdueNow, cur)} tone="bad" sub="Past due date" />
         </div>
         {hasOut && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Stat label="Money out (period)" value={money(outPeriod)} tone="bad" sub="Bills + expenses paid" />
-            <Stat label="Net cash flow (period)" value={money(collectedPeriod - outPeriod)} tone={collectedPeriod - outPeriod >= 0 ? 'good' : 'bad'} sub="Collected − paid out" />
+            <Stat label="Money out (period)" value={fmtMoney(outPeriod, cur)} tone="bad" sub="Bills + expenses paid" />
+            <Stat label="Net cash flow (period)" value={fmtMoney(collectedPeriod - outPeriod, cur)} tone={collectedPeriod - outPeriod >= 0 ? 'good' : 'bad'} sub="Collected − paid out" />
           </div>
         )}
 
@@ -222,7 +227,7 @@ export default function ReportsPanel({ profile, onNavigate }) {
           </div>
           <div className="flex items-end gap-2 h-40 overflow-x-auto">
             {series.map(m => (
-              <div key={m.key} className="flex-1 min-w-[26px] flex flex-col items-center gap-1" title={`${monthLabel(m.key)}\nInvoiced ${money(m.invoiced)}\nCollected ${money(m.collected)}${hasOut ? `\nPaid out ${money(m.out)}` : ''}`}>
+              <div key={m.key} className="flex-1 min-w-[26px] flex flex-col items-center gap-1" title={`${monthLabel(m.key)}\nInvoiced ${fmtMoney(m.invoiced, cur)}\nCollected ${fmtMoney(m.collected, cur)}${hasOut ? `\nPaid out ${fmtMoney(m.out, cur)}` : ''}`}>
                 <div className="w-full flex items-end justify-center gap-0.5 h-full">
                   <div className="w-1/3 rounded-t bg-ember/70" style={{ height: `${(m.invoiced / seriesMax) * 100}%`, minHeight: m.invoiced ? 2 : 0 }} />
                   <div className="w-1/3 rounded-t bg-emerald-500" style={{ height: `${(m.collected / seriesMax) * 100}%`, minHeight: m.collected ? 2 : 0 }} />
@@ -254,10 +259,10 @@ export default function ReportsPanel({ profile, onNavigate }) {
                   <tr key={r.id} onClick={() => r.id !== '—' && onNavigate?.('company', r.id)}
                     className="border-b border-bdr/60 hover:bg-card/50 cursor-pointer">
                     <td className="px-3 py-2 text-paper font-medium">{r.name}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{money(r.invoiced)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{money(r.collected)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{money(r.outstanding)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${r.overdue > 0 ? 'text-red-600 font-semibold' : 'text-dim'}`}>{money(r.overdue)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(r.invoiced, cur)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{fmtMoney(r.collected, cur)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(r.outstanding, cur)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${r.overdue > 0 ? 'text-red-600 font-semibold' : 'text-dim'}`}>{fmtMoney(r.overdue, cur)}</td>
                   </tr>
                 ))}
                 {byCompany.length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-dim text-sm italic">No activity in range.</td></tr>}
@@ -277,7 +282,7 @@ export default function ReportsPanel({ profile, onNavigate }) {
                 <div className="flex-1 h-3.5 rounded bg-card overflow-hidden">
                   <div className={`h-full rounded ${lbl === 'Not due' ? 'bg-ember/50' : lbl === '90+' ? 'bg-red-500' : 'bg-amber-400'}`} style={{ width: `${(amt / agedMax) * 100}%` }} />
                 </div>
-                <div className="w-24 text-right text-sm tabular-nums text-paper shrink-0">{money(amt)}</div>
+                <div className="w-24 text-right text-sm tabular-nums text-paper shrink-0">{fmtMoney(amt, cur)}</div>
               </div>
             ))}
           </div>
@@ -290,13 +295,13 @@ export default function ReportsPanel({ profile, onNavigate }) {
 
 
 // ── Money out: the bills report — billed vs paid, aging, suppliers, categories ──
-function BillsOutReport({ bills, cats, from, to, companyId }) {
+function BillsOutReport({ bills, cats, from, to, companyId, cur }) {
   const acct = (b) => (b.issue_date || b.created_at || '').slice(0, 10);
   const owedB = (b) => Math.max(0, Number(b.total || 0) - Number(b.amount_paid || 0));
   const paidAmt = (b) => Number(b.amount_paid ?? b.total ?? 0);
   const today = iso(new Date());
 
-  const live = bills.filter(b => b.status !== 'void').filter(b => !companyId || b.company_id === companyId);
+  const live = bills.filter(b => b.status !== 'void' && (b.currency || 'GBP') === cur).filter(b => !companyId || b.company_id === companyId);
   const unpaid = live.filter(b => b.status !== 'paid' && owedB(b) > 0);
   const billName = (b) => b.supplier?.name || b.company?.name || b.description || 'Untitled bill';
 
@@ -353,8 +358,8 @@ function BillsOutReport({ bills, cats, from, to, companyId }) {
   const upcoming = unpaid.filter(b => b.due_date).sort((a, b) => (a.due_date < b.due_date ? -1 : 1)).slice(0, 12);
 
   const exportBills = () => {
-    const rows = live.map(b => [billName(b), b.status, b.issue_date, b.due_date, b.total, b.amount_paid, owedB(b), b.paid_at]);
-    const csv = [['Bill', 'Status', 'Issued', 'Due', 'Total', 'Paid', 'Outstanding', 'Paid at'].join(','),
+    const rows = live.map(b => [billName(b), b.status, b.currency || 'GBP', b.issue_date, b.due_date, b.total, b.amount_paid, owedB(b), b.paid_at]);
+    const csv = [['Bill', 'Status', 'Currency', 'Issued', 'Due', 'Total', 'Paid', 'Outstanding', 'Paid at'].join(','),
       ...rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'bills-report.csv'; a.click();
@@ -363,10 +368,10 @@ function BillsOutReport({ bills, cats, from, to, companyId }) {
   return (
     <div className="px-6 py-4 space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Stat label="Billed (period)" value={money(billedPeriod)} tone="accent" sub={`${from} → ${to}`} />
-        <Stat label="Paid (period)" value={money(paidPeriod)} tone="good" sub="Payments made" />
-        <Stat label="To pay (now)" value={money(toPayNow)} sub={`${unpaid.length} unpaid bill${unpaid.length === 1 ? '' : 's'}`} />
-        <Stat label="Overdue (now)" value={money(overdueNow)} tone="bad" sub="Past due date" />
+        <Stat label="Billed (period)" value={fmtMoney(billedPeriod, cur)} tone="accent" sub={`${from} → ${to}`} />
+        <Stat label="Paid (period)" value={fmtMoney(paidPeriod, cur)} tone="good" sub="Payments made" />
+        <Stat label="To pay (now)" value={fmtMoney(toPayNow, cur)} sub={`${unpaid.length} unpaid bill${unpaid.length === 1 ? '' : 's'}`} />
+        <Stat label="Overdue (now)" value={fmtMoney(overdueNow, cur)} tone="bad" sub="Past due date" />
       </div>
 
       <div className="glass-card rounded-2xl p-5">
@@ -379,7 +384,7 @@ function BillsOutReport({ bills, cats, from, to, companyId }) {
         </div>
         <div className="flex items-end gap-2 h-40 overflow-x-auto">
           {series.map(m => (
-            <div key={m.key} className="flex-1 min-w-[26px] flex flex-col items-center gap-1" title={`${monthLabel(m.key)}\nBilled ${money(m.billed)}\nPaid ${money(m.paid)}`}>
+            <div key={m.key} className="flex-1 min-w-[26px] flex flex-col items-center gap-1" title={`${monthLabel(m.key)}\nBilled ${fmtMoney(m.billed, cur)}\nPaid ${fmtMoney(m.paid, cur)}`}>
               <div className="w-full flex items-end justify-center gap-0.5 h-full">
                 <div className="w-1/2 rounded-t bg-ember/70" style={{ height: `${(m.billed / seriesMax) * 100}%`, minHeight: m.billed ? 2 : 0 }} />
                 <div className="w-1/2 rounded-t bg-red-400/80" style={{ height: `${(m.paid / seriesMax) * 100}%`, minHeight: m.paid ? 2 : 0 }} />
@@ -410,10 +415,10 @@ function BillsOutReport({ bills, cats, from, to, companyId }) {
               {bySup.map(r => (
                 <tr key={r.name} className="border-b border-bdr/60">
                   <td className="px-3 py-2 text-paper font-medium">{r.name}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{money(r.billed)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{money(r.paid)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{money(r.outstanding)}</td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${r.overdue > 0 ? 'text-red-600 font-semibold' : 'text-dim'}`}>{money(r.overdue)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(r.billed, cur)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{fmtMoney(r.paid, cur)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(r.outstanding, cur)}</td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${r.overdue > 0 ? 'text-red-600 font-semibold' : 'text-dim'}`}>{fmtMoney(r.overdue, cur)}</td>
                 </tr>
               ))}
               {bySup.length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-dim text-sm italic">No bills in range.</td></tr>}
@@ -433,7 +438,7 @@ function BillsOutReport({ bills, cats, from, to, companyId }) {
                 <div className="flex-1 h-3.5 rounded bg-card overflow-hidden">
                   <div className="h-full rounded bg-ember/60" style={{ width: `${(amt / catMax) * 100}%` }} />
                 </div>
-                <div className="w-24 text-right text-sm tabular-nums text-paper shrink-0">{money(amt)}</div>
+                <div className="w-24 text-right text-sm tabular-nums text-paper shrink-0">{fmtMoney(amt, cur)}</div>
               </div>
             ))}
             {byCat.length === 0 && <div className="text-dim text-sm italic">No spend in range.</div>}
@@ -449,7 +454,7 @@ function BillsOutReport({ bills, cats, from, to, companyId }) {
                 <div className="flex-1 h-3.5 rounded bg-card overflow-hidden">
                   <div className={`h-full rounded ${lbl === 'Not due' ? 'bg-ember/50' : lbl === '90+' ? 'bg-red-500' : 'bg-amber-400'}`} style={{ width: `${(amt / agedMax) * 100}%` }} />
                 </div>
-                <div className="w-24 text-right text-sm tabular-nums text-paper shrink-0">{money(amt)}</div>
+                <div className="w-24 text-right text-sm tabular-nums text-paper shrink-0">{fmtMoney(amt, cur)}</div>
               </div>
             ))}
           </div>
@@ -467,7 +472,7 @@ function BillsOutReport({ bills, cats, from, to, companyId }) {
               <div key={b.id} className="flex items-center gap-3 px-3 py-2 border-b border-bdr/60 last:border-b-0 text-sm">
                 <span className="flex-1 text-paper truncate">{billName(b)}</span>
                 <span className={`text-xs w-24 ${late ? 'text-red-600 font-semibold' : 'text-muted'}`}>{b.due_date}</span>
-                <span className="w-24 text-right tabular-nums text-paper">{money(owedB(b))}</span>
+                <span className="w-24 text-right tabular-nums text-paper">{fmtMoney(owedB(b), cur)}</span>
               </div>
             );
           })}

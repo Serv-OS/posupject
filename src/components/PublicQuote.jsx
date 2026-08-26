@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { LogoLockup } from './ServOSLogo.jsx';
+import { fmtMoney, fmtMoney0, taxLabelFor } from '../lib/money';
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-const money = (v) => `£${Number(v || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const money0 = (v) => `£${Number(v || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
+const money = (v, c = 'GBP') => fmtMoney(v, c);
+const money0 = (v, c = 'GBP') => fmtMoney0(v, c);
 const pct = (v) => v == null ? '—' : `${Number(v).toFixed(2)}%`;
 const CAT = { hardware: 'Hardware', services: 'Services', saas: 'SaaS plan', payments: 'Payments' };
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
@@ -68,6 +69,7 @@ export default function PublicQuote({ token }) {
   if (error && !data) return wrap(<div className="text-center text-slate-600 text-sm py-16">{error}</div>);
 
   const q = data.quote;
+  const cur = q.currency || 'GBP'; // old signed quotes carry no currency -> GBP
   const seller = data.seller || {};
   const accent = seller.accent || '#E8743C';
   const accepted = paid || done || ['signed', 'paid', 'won'].includes(q.status);
@@ -132,9 +134,9 @@ export default function PublicQuote({ token }) {
                   <div className="text-[10px] text-slate-400 mt-0.5">{CAT[it.category]}{it.billing_type === 'monthly' ? ' · billed monthly' : it.billing_type === 'annual' ? ' · billed annually' : ''}</div>
                 </td>
                 <td className="py-2.5 text-center text-slate-600">{it.qty}</td>
-                <td className="py-2.5 text-right text-slate-600">{money(it.unit_price)}</td>
+                <td className="py-2.5 text-right text-slate-600">{money(it.unit_price, cur)}</td>
                 <td className="py-2.5 text-right text-slate-500">{it.discount > 0 ? `${it.discount}%` : '—'}</td>
-                <td className="py-2.5 text-right font-mono text-slate-800">{money(it.line_total)}{it.billing_type === 'monthly' ? '/mo' : it.category === 'payments' ? '/yr' : ''}</td>
+                <td className="py-2.5 text-right font-mono text-slate-800">{money(it.line_total, cur)}{it.billing_type === 'monthly' ? '/mo' : it.category === 'payments' ? '/yr' : ''}</td>
               </tr>
             ))}
           </tbody>
@@ -144,10 +146,10 @@ export default function PublicQuote({ token }) {
       {/* Totals */}
       <div className="px-6 sm:px-8 py-4 bg-slate-50 border-y border-slate-200">
         <div className="ml-auto max-w-xs space-y-1">
-          <Row k="One-off subtotal" v={money(q.one_off_subtotal)} />
-          <Row k="VAT" v={money(q.tax_amount)} />
-          <Row k="Due on acceptance" v={money(q.one_off_total)} bold accent={accent} />
-          {q.recurring_arr > 0 && <Row k="Ongoing (per year)" v={money(q.recurring_arr)} sub />}
+          <Row k="One-off subtotal" v={money(q.one_off_subtotal, cur)} />
+          <Row k={taxLabelFor(cur)} v={money(q.tax_amount, cur)} />
+          <Row k="Due on acceptance" v={money(q.one_off_total, cur)} bold accent={accent} />
+          {q.recurring_arr > 0 && <Row k="Ongoing (per year)" v={money(q.recurring_arr, cur)} sub />}
         </div>
         {q.go_live_date && <div className="text-xs text-slate-500 mt-3">Planned go-live: <strong>{fmtDate(q.go_live_date)}</strong></div>}
       </div>
@@ -169,7 +171,7 @@ export default function PublicQuote({ token }) {
                 <tr key={i} className="border-b border-slate-100">
                   <td className="py-2 text-slate-700">{r.label}{r.channel ? <span className="text-slate-400 text-xs"> · {r.channel}</span> : ''}</td>
                   <td className="py-2 text-right text-slate-800 font-medium">{pct(r.rate)}</td>
-                  <td className="py-2 text-right text-slate-800 font-medium">{r.txn != null ? `${r.txn}p` : '—'}</td>
+                  <td className="py-2 text-right text-slate-800 font-medium">{r.txn != null ? `${r.txn}${cur === 'USD' ? '¢' : 'p'}` : '—'}</td>
                 </tr>
               ))}
             </tbody>

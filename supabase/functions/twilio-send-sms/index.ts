@@ -5,6 +5,8 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { toE164 } from "../_shared/phone.ts";
+import { loadRegions, fromNumberFor } from "../_shared/region.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -54,9 +56,20 @@ serve(async (req) => {
 
     const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID")!;
     const authToken = Deno.env.get("TWILIO_AUTH_TOKEN")!;
-    const fromNumber = Deno.env.get("TWILIO_FROM_NUMBER");
+
+    // Twilio wants E.164; the UI passes whatever was typed on the ticket.
+    const toClean = toE164(to) || to.trim();
+
+    // Which line to send from, in order of authority:
+    //  1. the line this conversation already lives on (stamped by the inbound
+    //     webhooks) — replies must come from the number the customer texted
+    //  2. the region matching the customer's country prefix
+    //  3. the env secret, so an unconfigured deployment behaves as it always has
+    const regions = await loadRegions(supabase);
+    const { data: t0 } = await supabase.from("tickets").select("service_number").eq("id", ticket_id).maybeSingle();
+    const fromNumber = t0?.service_number || fromNumberFor(regions, toClean, Deno.env.get("TWILIO_FROM_NUMBER") || "");
     if (!fromNumber) {
-      return new Response(JSON.stringify({ error: "TWILIO_FROM_NUMBER is not configured for this instance." }), {
+      return new Response(JSON.stringify({ error: "No sending number is configured. Add one in Settings → Regions." }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -72,7 +85,7 @@ serve(async (req) => {
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
-        To: to,
+        To: toClean,
         From: fromNumber,
         Body: body,
       }),
@@ -101,7 +114,7 @@ serve(async (req) => {
       thread_id: ticket_id,
       is_internal: false,
       channel_metadata: {
-        to_number: to,
+        to_number: toClean,
         from_number: fromNumber,
         twilio_sid: sendResult.sid,
         segments: sendResult.num_segments,

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Device } from '@twilio/voice-sdk';
 import { supabase } from '../lib/supabase';
+import { toE164, loadRegions } from '../lib/region';
 
 export default function PhoneBar({ profile }) {
   const [status, setStatus] = useState('offline'); // offline, connecting, online, ringing, on-call
@@ -12,6 +13,7 @@ export default function PhoneBar({ profile }) {
   const [dialNumber, setDialNumber] = useState('');
   const [showDialer, setShowDialer] = useState(false);
   const [ourNumber, setOurNumber] = useState(null);
+  const [usNumber, setUsNumber] = useState(null);
   const timerRef = useRef(null);
   const deviceRef = useRef(null);
   const pendingCallRef = useRef(null);
@@ -20,6 +22,8 @@ export default function PhoneBar({ profile }) {
   useEffect(() => {
     supabase.from('support_settings').select('twilio_number').eq('id', 1).maybeSingle()
       .then(({ data }) => setOurNumber(data?.twilio_number || null));
+    // Show the US line alongside the UK one once a US number is provisioned
+    loadRegions().then(rs => setUsNumber(rs.find(r => r.code === 'US')?.twilio_number || null));
   }, []);
 
   // Go online: get token and connect Twilio Device
@@ -351,10 +355,16 @@ export default function PhoneBar({ profile }) {
           <input
             value={dialNumber}
             onChange={e => setDialNumber(e.target.value)}
-            placeholder="+447..."
+            placeholder="+44… or +1…"
             className="px-3 py-1 text-sm bg-card border border-bdr rounded-xl text-paper placeholder-dim focus:outline-none focus:border-ember w-40"
           />
-          <button onClick={() => { if (dialNumber.trim()) makeCall(dialNumber.trim()); }}
+          <button onClick={() => {
+              if (!dialNumber.trim()) return;
+              // Normalise free-typed input (07…, 10-digit US, etc.) before it hits Twilio
+              const e164 = toE164(dialNumber.trim());
+              if (!e164) { alert('Could not read that number. Use +44… or +1… format.'); return; }
+              makeCall(e164);
+            }}
             disabled={!dialNumber.trim()}
             className="px-3 py-1 text-xs font-semibold rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 transition">
             Call
@@ -364,8 +374,12 @@ export default function PhoneBar({ profile }) {
         </div>
       )}
 
-      {/* Spacer + phone number */}
-      {ourNumber && <div className="ml-auto text-[10px] text-dim font-mono hidden md:block">{ourNumber}</div>}
+      {/* Spacer + phone number(s) — both lines once the US number exists */}
+      {ourNumber && (
+        <div className="ml-auto text-[10px] text-dim font-mono hidden md:block">
+          {usNumber ? `UK ${ourNumber} · US ${usNumber}` : ourNumber}
+        </div>
+      )}
     </div>
   );
 }

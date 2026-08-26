@@ -22,6 +22,36 @@ export const gbp = (n, dp = 2) =>
   '£' + (Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
 export const gbp0 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 });
 export const gbp2 = (n) => gbp(n, 2);
+
+// Currency-aware formatting for the dual-region build. Documents now carry a
+// currency column ('GBP' | 'USD'); anything rendering one should format with
+// fmtMoney(value, doc.currency) rather than the bare-£ helpers above, which
+// stay for GBP-only surfaces (UK VAT, Finance module).
+export const CURRENCIES = ['GBP', 'USD'];
+export const currencySymbol = (c) => (c === 'USD' ? '$' : '£');
+export const currencyLocale = (c) => (c === 'USD' ? 'en-US' : 'en-GB');
+export const taxLabelFor = (c) => (c === 'USD' ? 'Sales tax' : 'VAT');
+export const defaultTaxRateFor = (c) => (c === 'USD' ? 0 : 20);
+export const fmtMoney = (n, currency = 'GBP', dp = 2) =>
+  currencySymbol(currency) + (Number(n) || 0).toLocaleString(currencyLocale(currency), { minimumFractionDigits: dp, maximumFractionDigits: dp });
+export const fmtMoney0 = (n, currency = 'GBP') =>
+  currencySymbol(currency) + (Number(n) || 0).toLocaleString(currencyLocale(currency), { maximumFractionDigits: 0 });
+
+// Sum rows into { GBP: n, USD: n } — only currencies that actually appear.
+// Blind reduce across mixed currencies is how reports lie; use this instead.
+export const sumByCurrency = (rows, value, currencyOf = (r) => r.currency || 'GBP') => {
+  const out = {};
+  for (const r of rows || []) {
+    const c = currencyOf(r) || 'GBP';
+    out[c] = (out[c] || 0) + (Number(value(r)) || 0);
+  }
+  return out;
+};
+// Render a per-currency sum as '£1,200.00 + $300.00' (or a lone figure).
+export const fmtByCurrency = (sums, dp = 2) => {
+  const parts = CURRENCIES.filter((c) => sums[c]).map((c) => fmtMoney(sums[c], c, dp));
+  return parts.length ? parts.join(' + ') : fmtMoney(0, 'GBP', dp);
+};
 export const pct = (n, dp = 2) => (n == null || n === '' ? '—' : `${Number(n).toFixed(dp)}%`);
 
 // Net of a single line: qty × unit_price × (1 − discount%). Rounded to 2dp.

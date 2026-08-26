@@ -4,6 +4,8 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { phoneVariants } from "../_shared/phone.ts";
+import { loadRegions, regionByCode, effective } from "../_shared/region.ts";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -69,10 +71,13 @@ serve(async (req) => {
       const from = formData.get("From") as string;
       if (from) {
         // Update existing ticket to note the missed call
+        // Match on every stored shape of the number, not the exact string —
+        // this branch had no variants at all, so it missed for UK and US alike.
+        const variants = phoneVariants(from);
         const { data: tickets } = await supabase
           .from("tickets")
           .select("id")
-          .eq("customer_phone", from.replace(/\s/g, ""))
+          .or(variants.map((p) => `customer_phone.eq.${p}`).join(","))
           .not("stage", "in", '("closed")')
           .limit(1);
 
@@ -94,8 +99,13 @@ serve(async (req) => {
     // If the dial wasn't answered, offer voicemail (recorded + transcribed).
     if (status === "no-answer" || status === "busy" || status === "failed") {
       const FN = `${Deno.env.get("SUPABASE_URL")}/functions/v1`;
-      const ticketId = new URL(req.url).searchParams.get("ticket") || "";
-      const { data: vs } = await supabase.from("support_settings").select("voicemail_prompt, voice_id").eq("id", 1).single();
+      const params = new URL(req.url).searchParams;
+      const ticketId = params.get("ticket") || "";
+      // The dial handler stamped which line this call came in on; keep the
+      // voicemail in that line's voice and wording.
+      const regionCode = params.get("region");
+      const { data: settingsRow } = await supabase.from("support_settings").select("voicemail_prompt, voice_id").eq("id", 1).single();
+      const vs = effective(regionByCode(await loadRegions(supabase), regionCode), settingsRow);
       const voice = vs?.voice_id || "Polly.Joanna-Neural";
       const vmPrompt = (vs?.voicemail_prompt || "Sorry, we couldn't reach an agent. Please leave a message after the beep.")
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
@@ -104,7 +114,7 @@ serve(async (req) => {
         `<Say voice="${voice}">${vmPrompt}</Say>` +
         `<Record maxLength="120" playBeep="true" transcribe="true"` +
         ` transcribeCallback="${FN}/twilio-voicemail?mode=transcription"` +
-        ` action="${FN}/twilio-voicemail?ticket=${ticketId}" />` +
+        ` action="${FN}/twilio-voicemail?ticket=${ticketId}${regionCode ? `&region=${regionCode}` : ""}" />` +
         `<Say voice="${voice}">We didn't receive a message. Goodbye.</Say>` +
         `</Response>`,
         { headers: { "Content-Type": "text/xml" } }

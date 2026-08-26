@@ -42,7 +42,7 @@ serve(async (req) => {
       return json({
         quote: {
           number: quote.quote_number, status: quote.status, valid_until: quote.valid_until, go_live_date: quote.go_live_date,
-          payment_terms: quote.payment_terms, deposit_percent: quote.deposit_percent,
+          payment_terms: quote.payment_terms, deposit_percent: quote.deposit_percent, currency: quote.currency || "GBP",
           one_off_subtotal: quote.one_off_subtotal, tax_amount: quote.tax_amount, one_off_total: quote.one_off_total,
           recurring_arr: quote.recurring_arr, terms: quote.terms || s.quote_terms || "",
           signed: !!quote.signed_at, signed_by_name: quote.signed_by_name, created_at: quote.created_at, expired,

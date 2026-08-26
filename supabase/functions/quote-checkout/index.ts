@@ -43,7 +43,7 @@ serve(async (req) => {
       mode: "payment",
       line_items: [{
         quantity: 1,
-        price_data: { currency: "gbp", unit_amount: Math.round(amount * 100), product_data: { name: label } },
+        price_data: { currency: (quote.currency || "GBP").toLowerCase(), unit_amount: Math.round(amount * 100), product_data: { name: label } },
       }],
       success_url: `${base}/q/${token}?paid=1`,
       cancel_url: `${base}/q/${token}`,

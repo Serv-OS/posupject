@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { currencyForCountry } from '../../lib/region';
+import { defaultTaxRateFor } from '../../lib/money';
 import { DealTradingCard } from './TradingCard.jsx';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import TimerButton from './TimerButton.jsx';
@@ -64,9 +66,17 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
       .limit(1);
     const locationId = locAssoc && locAssoc.length ? (locAssoc[0].from_type === 'location' ? locAssoc[0].from_id : locAssoc[0].to_id) : null;
     const validUntil = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    // The deal's company decides the quote's currency and its tax default —
+    // a hardcoded 20 here put UK VAT on every US quote raised from a deal.
+    let currency = 'GBP';
+    if (deal.company_id) {
+      const { data: co } = await supabase.from('companies').select('country').eq('id', deal.company_id).maybeSingle();
+      currency = currencyForCountry(co?.country);
+    }
     const { data, error } = await supabase.from('quotes').insert({
       deal_id: dealId, company_id: deal.company_id || null, contact_id: contactId, location_id: locationId,
-      tax_rate: 20, payment_terms: 'pay_now', valid_until: validUntil, created_by: profile.id,
+      currency, tax_rate: defaultTaxRateFor(currency),
+      payment_terms: 'pay_now', valid_until: validUntil, created_by: profile.id,
     }).select().single();
     if (error) { alert('Could not create quote: ' + error.message); return; }
     onNavigate?.('quote', data.id);

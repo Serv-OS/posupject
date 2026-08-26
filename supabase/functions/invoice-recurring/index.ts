@@ -6,8 +6,24 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { invoiceEmailHtml, sendInvoiceEmail, money } from "../_shared/invoiceEmail.ts";
+import { invoiceEmailHtml, sendInvoiceEmail, moneyFor, taxLabelFor, dateLocaleFor } from "../_shared/invoiceEmail.ts";
 import { buildInvoicePdfBytes } from "../_shared/invoicePdf.ts";
+
+// "Today" in a named timezone. The cron fires at 06:00 UTC, which is still
+// YESTERDAY evening on the US west coast — a USD schedule dated by UTC would
+// issue and advance a day early. GBP schedules keep London's calendar.
+function todayIn(tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { "Content-Type": "application/json" } });
 
@@ -38,7 +54,12 @@ serve(async (req) => {
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   try {
-    const todayIso = new Date().toISOString().slice(0, 10);
+    // Latest calendar wins for the DUE query (a schedule is picked up when it
+    // is due anywhere we trade); each schedule then dates its invoice in its
+    // own region's day below.
+    const todayLondon = todayIn("Europe/London");
+    const todayPacific = todayIn("America/Los_Angeles");
+    const todayIso = todayLondon > todayPacific ? todayLondon : todayPacific;
     const { data: due } = await supabase.from("recurring_invoices")
       .select("*").eq("active", true).lte("next_run", todayIso);
 
@@ -51,11 +72,23 @@ serve(async (req) => {
           s + (Number(l.qty) || 1) * (Number(l.unit_price) || 0) * (Number(l.tax_rate ?? sched.tax_rate) || 0) / 100, 0);
         const total = subtotal + taxAmount;
 
-        const dueDate = new Date(Date.now() + (Number(sched.due_days) || 14) * 86400000).toISOString().slice(0, 10);
+        const currency = sched.currency || "GBP";
+        const schedToday = currency === "USD" ? todayPacific : todayLondon;
+        // The due query used the LATER calendar, which over-fetches by up to a
+        // day for USD schedules (06:00 UTC is still yesterday evening on the
+        // west coast). Each schedule only bills once its own region reaches
+        // the date — otherwise every USD invoice would be issued and dated a
+        // day early, forever.
+        if (sched.next_run > schedToday) {
+          results.push({ schedule: sched.id, skipped: `not yet ${sched.next_run} in ${currency === "USD" ? "US" : "UK"} time` });
+          continue;
+        }
+        const dueDate = addDaysIso(schedToday, Number(sched.due_days) || 14);
 
         const { data: inv, error: invErr } = await supabase.from("invoices").insert({
           company_id: sched.company_id, location_id: sched.location_id, contact_id: sched.contact_id,
-          recurring_id: sched.id, status: "draft", issue_date: todayIso, due_date: dueDate,
+          currency,
+          recurring_id: sched.id, status: "draft", issue_date: schedToday, due_date: dueDate,
           recurring_period: sched.next_run,   // unique per schedule — the DB rejects a repeat
           tax_rate: sched.tax_rate, subtotal, tax_amount: taxAmount, total,
           terms: sched.terms, notes: sched.notes, email_to: sched.email_to,
@@ -109,7 +142,12 @@ serve(async (req) => {
               totals: { subtotal, tax: taxAmount, total },
               seller: { name: (seller as any)?.business_name, email: (seller as any)?.business_email, phone: (seller as any)?.business_phone, accent: (seller as any)?.quote_accent, logo_url: (seller as any)?.logo_url },
               billTo: { companyName: (company as any)?.name || "", contactName, contactEmail: recipient, locationName: (location as any)?.name || "" },
-              fmt: money,
+              fmt: moneyFor(currency),
+              // The emailed PDF used the builder's defaults ('Tax', en-US)
+              // while the in-app PDF of the same invoice said 'VAT' — now both
+              // follow the invoice's currency.
+              taxLabel: taxLabelFor(currency),
+              dateLocale: dateLocaleFor(currency),
             });
 
             await sendInvoiceEmail(supabase, recipient, subject, html, { filename: `INV-${inv.invoice_number}.pdf`, bytes: pdfBytes });

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
+import { fmtMoney, taxLabelFor } from '../lib/money';
 
 // Public hosted invoice page (/i/<token>). Branded from support_settings,
 // customer pays by card via Stripe Checkout.
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-const money = (v) => `£${Number(v || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (v, currency = 'GBP') => fmtMoney(v, currency);
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
 
 export default function PublicInvoice({ token }) {
@@ -45,6 +46,8 @@ export default function PublicInvoice({ token }) {
   const { invoice: inv, seller, company, contact, location, items } = data;
   const accent = seller.accent || '#15C26A';
   const isPaid = inv.status === 'paid' || justPaid;
+  const currency = inv.currency || 'GBP';
+  const taxLabel = taxLabelFor(currency);
 
   return (
     <Page>
@@ -92,7 +95,7 @@ export default function PublicInvoice({ token }) {
                 <th className="text-left py-2 font-bold">Item</th>
                 <th className="text-right py-2 font-bold w-14">Qty</th>
                 <th className="text-right py-2 font-bold w-24">Price</th>
-                <th className="text-right py-2 font-bold w-14">VAT</th>
+                <th className="text-right py-2 font-bold w-14">{taxLabel}</th>
                 <th className="text-right py-2 font-bold w-24">Amount</th>
               </tr>
             </thead>
@@ -104,9 +107,9 @@ export default function PublicInvoice({ token }) {
                     {it.description && <div className="text-xs text-slate-500">{it.description}</div>}
                   </td>
                   <td className="py-2.5 text-right text-slate-600 tabular-nums">{Number(it.qty)}</td>
-                  <td className="py-2.5 text-right text-slate-600 tabular-nums">{money(it.unit_price)}</td>
+                  <td className="py-2.5 text-right text-slate-600 tabular-nums">{money(it.unit_price, currency)}</td>
                   <td className="py-2.5 text-right text-slate-600 tabular-nums">{Number(it.tax_rate ?? 0)}%</td>
-                  <td className="py-2.5 text-right text-slate-800 font-medium tabular-nums">{money(Number(it.qty) * Number(it.unit_price))}</td>
+                  <td className="py-2.5 text-right text-slate-800 font-medium tabular-nums">{money(Number(it.qty) * Number(it.unit_price), currency)}</td>
                 </tr>
               ))}
             </tbody>
@@ -115,9 +118,9 @@ export default function PublicInvoice({ token }) {
           {/* Totals */}
           <div className="flex justify-end mt-4">
             <div className="w-60 space-y-1.5 text-sm">
-              <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="tabular-nums">{money(inv.subtotal)}</span></div>
-              <div className="flex justify-between text-slate-500"><span>VAT</span><span className="tabular-nums">{money(inv.tax_amount)}</span></div>
-              <div className="flex justify-between text-base font-bold text-slate-900 pt-1.5 border-t border-slate-200"><span>Total due</span><span className="tabular-nums">{money(inv.total)}</span></div>
+              <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="tabular-nums">{money(inv.subtotal, currency)}</span></div>
+              <div className="flex justify-between text-slate-500"><span>{taxLabel}</span><span className="tabular-nums">{money(inv.tax_amount, currency)}</span></div>
+              <div className="flex justify-between text-base font-bold text-slate-900 pt-1.5 border-t border-slate-200"><span>Total due</span><span className="tabular-nums">{money(inv.total, currency)}</span></div>
             </div>
           </div>
         </div>
@@ -133,7 +136,7 @@ export default function PublicInvoice({ token }) {
               <button onClick={pay} disabled={paying}
                 className="w-full py-3.5 rounded-xl text-white font-bold text-base transition hover:opacity-90 disabled:opacity-50"
                 style={{ background: accent }}>
-                {paying ? 'Redirecting…' : `Pay ${money(inv.total)} by card`}
+                {paying ? 'Redirecting…' : `Pay ${money(inv.total, currency)} by card`}
               </button>
               {error && <div className="text-sm text-red-600 text-center mt-2">{error}</div>}
               <div className="text-[11px] text-slate-400 text-center mt-2">Secure card payment powered by Stripe</div>

@@ -7,6 +7,7 @@ import SlaBadge from './SlaBadge.jsx';
 import { computeSla, fmtMinutes } from '../../lib/sla';
 import AttachmentsCard from './AttachmentsCard.jsx';
 import TimerButton from './TimerButton.jsx';
+import { loadRegions, localTimeForPhone } from '../../lib/region';
 
 const STAGES = ['new','in_progress','waiting_on_customer','escalated','resolved','closed'];
 const STAGE_LABELS = { new:'New', in_progress:'In Progress', waiting_on_customer:'Waiting on Customer', escalated:'Escalated', resolved:'Resolved', closed:'Closed' };
@@ -16,7 +17,7 @@ const STAGE_STYLES = {
   resolved:'bg-emerald-100 text-emerald-700 border border-emerald-200', closed:'bg-slate-100 text-slate-600 border border-slate-200',
 };
 
-// Generate UK/intl phone format variants so we can match a contact regardless of how the number is stored
+// Generate UK/US/intl phone format variants so we can match a contact regardless of how the number is stored
 function phoneVariants(phone) {
   if (!phone) return [];
   const p = phone.replace(/\s/g, '');
@@ -24,6 +25,18 @@ function phoneVariants(phone) {
   if (p.startsWith('+44')) { out.push('0' + p.slice(3)); out.push(p.slice(1)); }
   if (p.startsWith('0')) { out.push('+44' + p.slice(1)); out.push('44' + p.slice(1)); }
   if (p.startsWith('44')) { out.push('+' + p); out.push('0' + p.slice(2)); }
+  // US expansions, mirroring regionOfPhone: +1XXXXXXXXXX ↔ bare 10-digit ↔ formatted.
+  // NANP area codes never start 0/1; a bare 10-digit starting 7 is a UK mobile.
+  const d = p.replace(/\D/g, '');
+  const usTen = (p.startsWith('+1') && d.length === 11) ? d.slice(1)
+    : (!p.startsWith('+') && !p.startsWith('0') && d.length === 10 && /[2-9]/.test(d[0]) && !d.startsWith('7')) ? d
+    : null;
+  if (usTen) {
+    out.push(usTen, '1' + usTen, '+1' + usTen);
+    out.push(`(${usTen.slice(0, 3)}) ${usTen.slice(3, 6)}-${usTen.slice(6)}`);
+    out.push(`(${usTen.slice(0, 3)})${usTen.slice(3, 6)}-${usTen.slice(6)}`); // space-stripped, as the matcher compares
+    out.push(`${usTen.slice(0, 3)}-${usTen.slice(3, 6)}-${usTen.slice(6)}`);
+  }
   return out;
 }
 
@@ -51,10 +64,13 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
   // else — so the reply box gets the whole height instead of a nested scroll
   // buried under the side cards.
   const [tab, setTab] = useState('chat');
+  // support_regions rows for the "their time" chip — cached, [] on failure
+  const [regions, setRegions] = useState([]);
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   useEffect(() => { load(); }, [ticketId]);
+  useEffect(() => { loadRegions().then(setRegions); }, []);
 
   const load = async () => {
     const [t, m, c, h, prj, allLoc, ct] = await Promise.all([
@@ -356,6 +372,10 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                         <CallButton number={ticket.customer_phone} />
                       </div>
                     )}
+                    {(() => {
+                      const lt = localTimeForPhone(ticket.customer_phone, regions);
+                      return lt ? <div className="text-[11px] text-dim">Their time: {lt.label}</div> : null;
+                    })()}
                     {ticket.customer_email && (
                       <div className="flex items-center gap-2 text-sm">
                         <span className="text-base">{'\u{1F4E7}'}</span>

@@ -6,6 +6,8 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { phoneVariants } from "../_shared/phone.ts";
+import { loadRegions, regionByCode, effective } from "../_shared/region.ts";
 
 const xml = (body: string) =>
   new Response(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`, {
@@ -63,9 +65,7 @@ serve(async (req) => {
     const normFrom = (from || "").replace(/\s/g, "");
 
     if (!ticketId && normFrom) {
-      const variants = [normFrom];
-      if (normFrom.startsWith("+44")) { variants.push("0" + normFrom.slice(3)); variants.push(normFrom.slice(1)); }
-      if (normFrom.startsWith("0")) { variants.push("+44" + normFrom.slice(1)); variants.push("44" + normFrom.slice(1)); }
+      const variants = phoneVariants(normFrom);
       const filter = variants.map(p => `customer_phone.eq.${p}`).join(",");
       const { data: t } = await supabase.from("tickets").select("id").or(filter).not("stage", "in", '("closed")').order("updated_at", { ascending: false }).limit(1);
       if (t && t.length) ticketId = t[0].id;
@@ -74,7 +74,10 @@ serve(async (req) => {
     // Look up contact for naming
     let callerName = from;
     if (normFrom) {
-      const { data: c } = await supabase.from("contacts").select("id, first_name, last_name").eq("phone", normFrom).limit(1);
+      // Exact-only matching here meant a caller stored as 07576... never got
+      // their name on the voicemail; use the same variants as everywhere else.
+      const cFilter = phoneVariants(normFrom).map((p) => `phone.eq.${p}`).join(",");
+      const { data: c } = await supabase.from("contacts").select("id, first_name, last_name").or(cFilter).limit(1);
       if (c && c.length) { contactId = c[0].id; callerName = [c[0].first_name, c[0].last_name].filter(Boolean).join(" ") || from; }
     }
 
@@ -120,7 +123,8 @@ serve(async (req) => {
       });
     }
 
-    const { data: vsV } = await supabase.from("support_settings").select("voice_id").eq("id", 1).single();
+    const { data: vsRow } = await supabase.from("support_settings").select("voice_id").eq("id", 1).single();
+    const vsV = effective(regionByCode(await loadRegions(supabase), url.searchParams.get("region")), vsRow);
     const voice = vsV?.voice_id || "Polly.Joanna-Neural";
     return xml(`<Say voice="${voice}">Thank you. We've received your message and will get back to you shortly. Goodbye.</Say><Hangup/>`);
   } catch (e) {

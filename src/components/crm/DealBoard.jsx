@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
+import { sumByCurrency, fmtMoney0 } from '../../lib/money';
 import { handleClosedWon } from '../../lib/dealHelpers';
 
 const STAGES = [
@@ -150,16 +151,22 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
   };
 
   const stageValue = (stageKey) => {
-    return dealsByStage[stageKey]?.reduce((sum, d) => sum + (d.value || 0), 0) || 0;
+    return sumByCurrency(dealsByStage[stageKey] || [], d => d.value || 0);
   };
 
-  const formatCurrency = (v) => v ? `£${v.toLocaleString('en-GB', { minimumFractionDigits: 0 })}` : '';
+  // Never one blended figure: a $30k + £10k board is '£10,000 + $30,000'.
+  const formatCurrency = (sums) => {
+    if (sums == null) return '';
+    if (typeof sums === 'number') return sums ? fmtMoney0(sums, 'GBP') : '';
+    const parts = ['GBP', 'USD'].filter(c => sums[c]).map(c => fmtMoney0(sums[c], c));
+    return parts.join(' + ');
+  };
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const fld = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
 
-  const pipelineTotal = deals.filter(d => !['closed_won','closed_lost'].includes(d.stage)).reduce((s, d) => s + (d.value || 0), 0);
-  const wonTotal = deals.filter(d => d.stage === 'closed_won').reduce((s, d) => s + (d.value || 0), 0);
+  const pipelineTotal = sumByCurrency(deals.filter(d => !['closed_won','closed_lost'].includes(d.stage)), d => d.value || 0);
+  const wonTotal = sumByCurrency(deals.filter(d => d.stage === 'closed_won'), d => d.value || 0);
 
   return (
     <div className="h-full flex flex-col">
@@ -312,7 +319,7 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
                       {STAGES.find(s => s.key === d.stage)?.label || d.stage}
                     </span>
                   </td>
-                  <td className="px-3 py-3 text-xs text-ember font-mono text-right">{formatCurrency(d.value)}</td>
+                  <td className="px-3 py-3 text-xs text-ember font-mono text-right">{d.value ? fmtMoney0(d.value, d.currency) : ''}</td>
                   <td className="px-3 py-3 text-xs text-muted">{ownerName(d.owner_id)}</td>
                   <td className="px-3 py-3 text-xs text-dim">{new Date(d.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'short' })}</td>
                 </tr>

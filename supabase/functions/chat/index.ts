@@ -106,7 +106,7 @@ serve(async (req) => {
   );
 
   try {
-    const { site_key, session_id, message, visitor, context } = (await req.json()) || {};
+    const { site_key, session_id, message, visitor, context, action, after } = (await req.json()) || {};
     // `context` is what the embedding page SAYS it is: a till sends its venue,
     // terminal and version so an agent does not have to open with "which site
     // are you?". It is client supplied, so it is a CLAIM, never an identity.
@@ -136,6 +136,32 @@ serve(async (req) => {
       return json({ error: "This domain isn't allowed to use this chat." }, 403);
     }
 
+    // ── Live poll ───────────────────────────────────────────────────────────
+    // Once escalated, the widget polls for the team's replies (a poll, not a
+    // socket, on purpose: suspended WebViews drop sockets silently — every
+    // surface needs the poll fallback anyway, so it IS the mechanism).
+    //   after == null  → the full transcript, so a reloaded tab rebuilds itself
+    //   after == ISO   → only bot/agent messages since then
+    if (action === "poll") {
+      if (!session_id) return json({ error: "Missing session_id" }, 422);
+      // Scoped to the presented site: a session id from one site must not be
+      // readable with another site's (public) key.
+      const { data: ps } = await supabase.from("chat_sessions")
+        .select("id, status, site_id").eq("id", session_id).eq("site_id", site.id).maybeSingle();
+      if (!ps) return json({ error: "Unknown session" }, 404);
+      let q = supabase.from("chat_messages")
+        .select("role, content, created_at").eq("session_id", session_id)
+        .order("created_at", { ascending: true }).limit(200);
+      if (after) q = q.gt("created_at", after).neq("role", "visitor");
+      const { data: msgs } = await q;
+      // The cursor is the last DELIVERED row, never the wall clock: a clock
+      // cursor stamped after the select loses any message inserted between the
+      // select and the stamp — an agent reply vanishing forever.
+      const rows = msgs || [];
+      const cursor = rows.length ? rows[rows.length - 1].created_at : (after || null);
+      return json({ status: ps.status, messages: rows, ts: cursor });
+    }
+
     const { data: pbRow } = await supabase.from("chat_playbook").select("*").eq("id", 1).maybeSingle();
     const pb = (pbRow || {}) as Playbook;
     if (pb.enabled === false) return json({ error: "Chat is turned off." }, 503);
@@ -143,7 +169,7 @@ serve(async (req) => {
     // ── Session ─────────────────────────────────────────────────────────────
     let session: any = null;
     if (session_id) {
-      const { data } = await supabase.from("chat_sessions").select("*").eq("id", session_id).maybeSingle();
+      const { data } = await supabase.from("chat_sessions").select("*").eq("id", session_id).eq("site_id", site.id).maybeSingle();
       // A closed conversation has been handed to the team and is finished. If a
       // stale tab still holds its id, start a new conversation rather than
       // appending to a thread someone is already working — or, as it did before
@@ -166,6 +192,12 @@ serve(async (req) => {
       }
     }
     if (session.status === "closed") return json({ error: "This chat has ended." }, 410);
+    if (session.status === "escalated" && !session.ticket_id) {
+      // The ticket behind this conversation is gone; the bot must not quietly
+      // rejoin a thread the customer was told is with the team.
+      await supabase.from("chat_sessions").update({ status: "closed", last_at: new Date().toISOString() }).eq("id", session.id);
+      return json({ error: "This chat has ended." }, 410);
+    }
     if (!message || !String(message).trim()) return json({ error: "Empty message" }, 422);
 
     const text = String(message).trim().slice(0, 2000);
@@ -193,6 +225,15 @@ serve(async (req) => {
     };
 
     if (session.ticket_id) await mirror(session.ticket_id, "visitor", text);
+
+    // Escalated + ticketed = the team owns this thread now. The visitor's
+    // message is stored and mirrored above; the bot stays out of it, and the
+    // widget's poll delivers whatever the team says back.
+    if (session.status === "escalated" && session.ticket_id) {
+      await supabase.from("chat_sessions").update({ last_at: new Date().toISOString() }).eq("id", session.id);
+      // No ts: only poll responses may move the widget's cursor.
+      return json({ session_id: session.id, live: true });
+    }
 
     const say = async (reply: string) => {
       await supabase.from("chat_messages").insert({ session_id: session.id, role: "bot", content: reply });
@@ -345,26 +386,30 @@ serve(async (req) => {
         }
       }
 
-      const withNumber = ticket?.ticket_number ? `${reply} (Reference #${ticket.ticket_number}.)` : reply;
+      const withNumber = ticket?.ticket_number
+        ? `${reply} (Reference #${ticket.ticket_number}.) You can keep typing here — the team will reply in this chat.`
+        : reply;
       await supabase.from("chat_messages").insert({
         session_id: session.id, role: "bot", content: withNumber, escalated: true,
       });
       if (ticket) await mirror(ticket.id, "bot", withNumber);
-      // Handed to a human: this conversation is done. It closes rather than
-      // sitting "escalated" forever, and the widget is told so it can start a
-      // fresh session next time instead of appending to a thread the team has
-      // already picked up. A ticket that could NOT be raised is the exception —
-      // that stays open, because the customer still needs someone.
-      const handedOver = !!ticket;
+      // Handed to a human — and the conversation stays OPEN. The first version
+      // closed it here, which raised the ticket and then hung up on the
+      // customer: the team had no way to answer in the chat. Now the session
+      // sits 'escalated', the widget polls for the team's replies, and it
+      // closes when a person ends it (End chat, or resolving the ticket — a DB
+      // trigger covers that).
       await supabase.from("chat_sessions").update({
-        status: handedOver ? "closed" : "escalated",
+        status: "escalated",
         ticket_id: ticket?.id || null,
         pending_reason: null, last_at: new Date().toISOString(),
       }).eq("id", session.id);
+      session.status = "escalated";
+      session.ticket_id = ticket?.id || null;
       return json({
         session_id: session.id, reply: withNumber, escalated: true,
+        live: !!ticket,
         ticket_number: ticket?.ticket_number || null,
-        conversation_ended: handedOver,
       });
     };
 

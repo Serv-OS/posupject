@@ -36,7 +36,7 @@ serve(async (req) => {
       mode: "payment",
       line_items: [{
         quantity: 1,
-        price_data: { currency: "gbp", unit_amount: Math.round(amount * 100), product_data: { name: `Invoice INV-${inv.invoice_number}` } },
+        price_data: { currency: (inv.currency || "GBP").toLowerCase(), unit_amount: Math.round(amount * 100), product_data: { name: `Invoice INV-${inv.invoice_number}` } },
       }],
       success_url: `${base}/i/${token}?paid=1`,
       cancel_url: `${base}/i/${token}`,

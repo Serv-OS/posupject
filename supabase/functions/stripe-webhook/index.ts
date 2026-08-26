@@ -6,7 +6,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=deno";
-import { invoiceEmailHtml, sendInvoiceEmail } from "../_shared/invoiceEmail.ts";
+import { invoiceEmailHtml, sendInvoiceEmail, moneyFor } from "../_shared/invoiceEmail.ts";
 import { ensureInvoiceForQuote, quoteContactEmail } from "../_shared/quoteInvoice.ts";
 
 // Quote paid -> find the invoice raised at signing (or create it now) and mark
@@ -24,7 +24,7 @@ async function createPaidInvoiceForQuote(supabase: any, quoteId: string, paidAmo
     const patch = fullPayment || alreadyPaid + paidAmount >= Number(inv.total || 0) - 0.01
       ? { status: "paid", paid_at: now, amount_paid: alreadyPaid + paidAmount }
       : { amount_paid: alreadyPaid + paidAmount,
-          notes: `${inv.notes ? inv.notes + "\n" : ""}Deposit of £${paidAmount.toFixed(2)} received ${now.slice(0, 10)}. Balance to follow.` };
+          notes: `${inv.notes ? inv.notes + "\n" : ""}Deposit of ${moneyFor(q.currency)(paidAmount)} received ${now.slice(0, 10)}. Balance to follow.` };
     await supabase.from("invoices").update(patch).eq("id", inv.id);
     inv = { ...inv, ...patch };
   } else {
@@ -32,6 +32,7 @@ async function createPaidInvoiceForQuote(supabase: any, quoteId: string, paidAmo
     const today = now.slice(0, 10);
     const { data: created, error } = await supabase.from("invoices").insert({
       quote_id: q.id, company_id: q.company_id, location_id: q.location_id, contact_id: q.contact_id,
+      currency: q.currency || "GBP",
       status: "paid", issue_date: today, due_date: today,
       subtotal: paidAmount, tax_amount: 0, total: paidAmount,
       paid_at: now, amount_paid: paidAmount,
@@ -78,8 +79,37 @@ serve(async (req) => {
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as any;
+    // A $500 session must never mark a £500 document paid. The checkout
+    // functions now set the session currency FROM the document, so a mismatch
+    // means something is genuinely wrong — record nothing automatically and
+    // shout, so the money is reconciled by a person, not a guess.
+    const sessionCurrency = String(session.currency || "gbp").toUpperCase();
+    let mismatch = false;
+    const currencyMatches = async (table: string, id: string) => {
+      const { data } = await supabase.from(table).select("currency, notes, stripe_payment_intent").eq("id", id).maybeSingle();
+      const docCurrency = (data?.currency || "GBP").toUpperCase();
+      if (docCurrency !== sessionCurrency) {
+        // The card HAS been charged. Recording nothing and acking 200 would
+        // bury a captured payment in unread logs — leave a durable trace on
+        // the document (idempotent on the session id) without touching its
+        // status or amounts, then fail the webhook so Stripe retries and its
+        // failed-webhook alerting stays red until a person reconciles.
+        console.error(`stripe-webhook: CURRENCY MISMATCH on ${table} ${id}: session ${sessionCurrency} vs document ${docCurrency} — not auto-reconciling`);
+        mismatch = true;
+        const already = String(data?.notes || "").includes(session.id);
+        if (!already) {
+          const note = `⚠ PAYMENT NEEDS MANUAL RECONCILING: Stripe took ${((session.amount_total || 0) / 100).toFixed(2)} ${sessionCurrency} (session ${session.id}, intent ${session.payment_intent || "?"}) but this document is in ${docCurrency}. Status left untouched.`;
+          await supabase.from(table).update({
+            notes: `${data?.notes ? data.notes + "\n" : ""}${note}`,
+            ...(table === "quotes" ? { stripe_payment_intent: session.payment_intent || null } : {}),
+          }).eq("id", id);
+        }
+        return false;
+      }
+      return true;
+    };
     const quoteId = session.metadata?.quote_id;
-    if (quoteId) {
+    if (quoteId && await currencyMatches("quotes", quoteId)) {
       await supabase.from("quotes").update({
         status: "paid",
         paid_at: new Date().toISOString(),
@@ -97,7 +127,7 @@ serve(async (req) => {
     }
     // Invoice payments (one-off + recurring)
     const invoiceId = session.metadata?.invoice_id;
-    if (invoiceId) {
+    if (invoiceId && await currencyMatches("invoices", invoiceId)) {
       await supabase.from("invoices").update({
         status: "paid",
         paid_at: new Date().toISOString(),
@@ -106,5 +136,8 @@ serve(async (req) => {
     }
   }
 
+  // A mismatch is a failure: Stripe keeps retrying and flags the endpoint,
+  // which is exactly the alarm a mis-currencied captured payment deserves.
+  if (mismatch) return new Response("currency mismatch — manual reconciliation required", { status: 500 });
   return new Response(JSON.stringify({ received: true }), { headers: { "Content-Type": "application/json" } });
 });

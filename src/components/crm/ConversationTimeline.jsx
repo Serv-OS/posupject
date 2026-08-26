@@ -23,7 +23,9 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [members, setMembers] = useState([]);
   // Default channel: match the ticket's inbound channel, or 'note'
   const ticketChannel = ticket?.channel || null;
-  const [channel, setChannel] = useState(ticketChannel || 'note');
+  // Chat tickets start on 'note' until the live-session query confirms the
+  // visitor's widget is still open — then the effect below promotes the tab.
+  const [channel, setChannel] = useState(ticketChannel === 'chat' ? 'note' : (ticketChannel || 'note'));
   const [body, setBody] = useState('');
   const [subject, setSubject] = useState('');
   const [toEmail, setToEmail] = useState(ticket?.customer_email || '');
@@ -36,6 +38,10 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const [askStatus, setAskStatus] = useState(false);
   const [editTo, setEditTo] = useState(false);   // phones: reveal the To field
   const [templates, setTemplates] = useState([]);
+  // The live website-chat session behind this ticket (status 'escalated').
+  // Non-null = the visitor's widget is still open and polling: the Chat tab
+  // appears and replies land in their panel within seconds.
+  const [chatSession, setChatSession] = useState(undefined);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
@@ -121,6 +127,13 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   }, [body, channel]);
 
   useEffect(() => {
+    if (chatSession === undefined) return; // not looked up yet
+    if (chatSession && ticketChannel === 'chat' && channel === 'note' && !body.trim()) setChannel('chat');
+    if (!chatSession && channel === 'chat') setChannel('note');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatSession]);
+
+  useEffect(() => {
     load();
     // Live conversation: reload when any message lands on this record. Realtime
     // is primary; a slow poll is a fallback so replies still surface if the
@@ -144,7 +157,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   }, [activities, active]);
 
   const load = async () => {
-    const [a, m, tpl] = await Promise.all([
+    const [a, m, tpl, cs] = await Promise.all([
       supabase.from('crm_activities')
         .select('*')
         .eq('subject_type', subjectType)
@@ -152,10 +165,18 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
         .order('occurred_at', { ascending: true }),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('templates').select('*').order('name'),
+      subjectType === 'ticket'
+        ? supabase.from('chat_sessions').select('id, status').eq('ticket_id', subjectId).eq('status', 'escalated').maybeSingle()
+        : Promise.resolve({ data: null }),
     ]);
     setActivities(a.data || []);
     setMembers(m.data || []);
     setTemplates(tpl.data || []);
+    setChatSession(prev => {
+      const next = cs.data || null;
+      if (prev && next && prev.id === next.id && prev.status === next.status) return prev;
+      return next;
+    });
   };
 
   // Insert a template into the composer, filling placeholders
@@ -307,6 +328,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
   const save = async (nextStage) => {
     if (channel === 'note' && !body.trim()) return;
     if (channel === 'call' && !body.trim()) return;
+    if (channel === 'chat' && (!body.trim() || !chatSession)) return;
     if (channel === 'email' && (!body.trim() || !toEmail.trim())) return;
     if (channel === 'sms' && (!body.trim() || !toPhone.trim())) return;
     setSending(true);
@@ -388,6 +410,36 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
         setSending(false);
         return;
       }
+    }
+
+    // Live chat: one insert feeds the visitor's widget (chat_messages, which
+    // its poll reads) and one mirrors the reply onto the ticket thread.
+    if (channel === 'chat' && subjectType === 'ticket' && chatSession) {
+      const text = body.trim();
+      // Status-guarded touch first: if another agent resolved the ticket (or
+      // ended the chat) seconds ago, this returns no row and the message is
+      // NOT sent into a conversation the customer has already seen close.
+      const { data: liveRow } = await supabase.from('chat_sessions')
+        .update({ last_at: new Date().toISOString() })
+        .eq('id', chatSession.id).eq('status', 'escalated').select('id');
+      if (!liveRow?.length) {
+        alert('This chat has ended — the message was not sent. Use SMS or email instead.');
+        setChatSession(null); setChannel('note'); setSending(false); load();
+        return;
+      }
+      const { error: cmErr } = await supabase.from('chat_messages')
+        .insert({ session_id: chatSession.id, role: 'agent', content: text });
+      if (cmErr) { alert('Chat send failed: ' + cmErr.message); setSending(false); return; }
+      await supabase.from('crm_activities').insert({
+        type: 'chat', body: text, subject_type: 'ticket', subject_id: subjectId,
+        direction: 'outbound', actor_id: profile.id, is_internal: false,
+        channel_metadata: { source: 'website_chat', session_id: chatSession.id, author: profile.display_name || 'Agent' },
+      });
+      await applyStage(nextStage);
+      setBody('');
+      setSending(false);
+      load();
+      return;
     }
 
     // For notes, calls: create activity directly
@@ -625,7 +677,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
             </div>
           )}
           <div className="flex gap-1 mb-2 lg:mb-3">
-            {CHANNEL_TABS.map(t => (
+            {(chatSession ? [{ key: 'chat', label: 'Chat', icon: '\u{1F4AD}' }, ...CHANNEL_TABS] : CHANNEL_TABS).map(t => (
               <button key={t.key} onClick={() => {
                 setChannel(t.key);
                 // Auto-fill customer contact from ticket
@@ -653,6 +705,22 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                 </button>
                 <input ref={attachRef} type="file" accept="image/*,.pdf" multiple className="hidden" onChange={onPickAttach} />
               </>
+            )}
+            {channel === 'chat' && chatSession && (
+              <button onClick={async () => {
+                if (!confirm('End this chat? The customer\u2019s chat window will show the conversation as closed.')) return;
+                await supabase.from('chat_sessions').update({ status: 'closed', last_at: new Date().toISOString() }).eq('id', chatSession.id);
+                await supabase.from('crm_activities').insert({
+                  type: 'note', body: 'Chat ended by ' + (profile.display_name || 'agent') + '.',
+                  subject_type: 'ticket', subject_id: subjectId, actor_id: profile.id, is_internal: true, channel_metadata: {},
+                });
+                setChatSession(null);
+                setChannel('note');
+                load();
+              }}
+                className="flex items-center gap-1 px-2 lg:px-3 py-1.5 text-[11px] lg:text-xs font-semibold rounded-xl bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition">
+                {'\u2715'} <span className="hidden sm:inline">End chat</span>
+              </button>
             )}
             {subjectType === 'ticket' && channel !== 'call' && (
               <button onClick={generateDraft} disabled={aiLoading} title="AI reply"
@@ -759,6 +827,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                 channel === 'note' ? 'Add a note... type @ to mention a team member'
                 : channel === 'email' ? 'Email body...'
                 : channel === 'sms' ? `SMS message... (${body.length}/160 chars)`
+                : channel === 'chat' ? 'Reply in the customer\u2019s chat window...'
                 : 'Call notes...'
               }
             />

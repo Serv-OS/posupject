@@ -20,6 +20,7 @@ export async function ensureInvoiceForQuote(supabase: any, q: any): Promise<any 
   const { data: inv, error } = await supabase.from("invoices").insert({
     quote_id: q.id, company_id: q.company_id, location_id: q.location_id, contact_id: q.contact_id,
     status: "sent", issue_date: today, due_date: due,
+    currency: q.currency || "GBP",
     subtotal: q.one_off_subtotal, tax_amount: q.tax_amount, total: q.one_off_total,
     notes: `Generated automatically from signed quote Q-${q.quote_number}.`,
     created_by: q.created_by,

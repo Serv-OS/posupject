@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { TEAM_OPTIONS, TEAM_LABELS } from '../UsersPanel.jsx';
 import AiSettingsCard from './AiSettingsCard.jsx';
 import BrandingCard from './BrandingCard.jsx';
+import { clearRegionCache, toE164 } from '../../lib/region';
 
 import { getGoogleClientId } from '../../lib/googleClientId';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -20,6 +21,7 @@ export default function SettingsPanel({ profile }) {
   const [stripeKey, setStripeKey] = useState('');
   const [stripeBusy, setStripeBusy] = useState(false);
   const [chatTest, setChatTest] = useState(null);
+  const [regions, setRegions] = useState([]);
 
   const sendChatTest = async () => {
     setChatTest('sending');
@@ -54,15 +56,17 @@ export default function SettingsPanel({ profile }) {
 
   const load = async () => {
     setLoading(true);
-    const [gc, ss, profs, sla] = await Promise.all([
+    const [gc, ss, profs, sla, rg] = await Promise.all([
       supabase.from('gmail_connections').select('*').order('created_at', { ascending: false }),
       supabase.from('support_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('profiles').select('teams'),
       supabase.from('sla_policies').select('*').order('priority'),
+      supabase.from('support_regions').select('*').order('code'),
     ]);
     setConnections(gc.data || []);
     setSettings(ss.data || { auto_assign_enabled: true, assign_team: 'support', prefer_online: true });
     setSlaPolicies(sla.data || []);
+    setRegions(rg.data || []);
     // Count members per team for the helper text
     const counts = {};
     (profs.data || []).forEach(p => (p.teams || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
@@ -108,6 +112,42 @@ export default function SettingsPanel({ profile }) {
       chat_notify_enabled: next.chat_notify_enabled ?? false,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'id' });
+
+    // Write-through: hours, timezone and the line number are ALSO the UK
+    // region's (phone/SMS routing reads support_regions, this card is the
+    // familiar editor). One direction only — the Regions card edits its own
+    // row directly — so the two can't fight.
+    const mirrored = {};
+    if ('business_hours_enabled' in patch) mirrored.business_hours_enabled = next.business_hours_enabled ?? false;
+    if ('business_hours' in patch) mirrored.business_hours = next.business_hours ?? null;
+    if ('business_timezone' in patch) mirrored.business_timezone = next.business_timezone ?? 'Europe/London';
+    if ('twilio_number' in patch) mirrored.twilio_number = toE164(next.twilio_number || '', 'GB') || (next.twilio_number || '').replace(/\s+/g, '') || null;
+    if (Object.keys(mirrored).length) {
+      await supabase.from('support_regions').update({ ...mirrored, updated_at: new Date().toISOString() }).eq('code', 'UK');
+      setRegions(prev => prev.map(r => r.code === 'UK' ? { ...r, ...mirrored } : r));
+      clearRegionCache();
+    }
+  };
+
+  // Regions save straight to their own support_regions row — never through
+  // saveSettings — so a region edit can't clobber the global settings (and vice versa).
+  const saveRegion = async (code, patch) => {
+    if ('twilio_number' in patch) {
+      const raw = (patch.twilio_number || '').trim();
+      // E.164 or nothing: '(650) 555-0123' would never match the webhook's To
+      // and Twilio refuses it as a From. toE164 knows the region's country, so
+      // national formats are welcome — they just get canonicalised.
+      const e164 = raw ? toE164(raw, code === 'US' ? 'US' : 'GB') : null;
+      if (raw && !e164) {
+        alert('Could not read that as a phone number. Use the full international format, e.g. ' + (code === 'US' ? '+16505550123' : '+447576562085') + '.');
+        setRegions(prev => [...prev]); // repaint the old value
+        return;
+      }
+      patch = { ...patch, twilio_number: e164 };
+    }
+    setRegions(prev => prev.map(r => r.code === code ? { ...r, ...patch } : r));
+    await supabase.from('support_regions').update({ ...patch, updated_at: new Date().toISOString() }).eq('code', code);
+    clearRegionCache();
   };
 
   const uploadLogo = async (e, field = 'logo_url') => {
@@ -530,6 +570,208 @@ export default function SettingsPanel({ profile }) {
                       onBlur={e => saveSettings({ after_hours_voicemail_prompt: e.target.value })}
                       placeholder="Played to callers when you're closed, before the beep. Falls back to the normal voicemail prompt if blank." />
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Regions (UK & US) — per-region phone line, hours, voice wording & seller identity */}
+          {isOwner && regions.length > 0 && (
+            <div className="glass-card rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-bdr flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-lg">{'\u{1F30D}'}</div>
+                <div className="flex-1">
+                  <div className="text-base font-bold text-paper">Regions (UK &amp; US)</div>
+                  <div className="text-xs text-muted">Per-region phone line, hours, voice wording and seller identity</div>
+                </div>
+              </div>
+              <div className="p-5 space-y-5">
+                {regions.map(r => {
+                  const upd = (patch) => setRegions(prev => prev.map(x => x.code === r.code ? { ...x, ...patch } : x));
+                  return (
+                    <div key={r.code} className="glass-inner rounded-xl p-4 space-y-4">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-bold text-paper">{r.label || r.code}</div>
+                          <div className="text-xs text-muted">Currency and tax are fixed for this region</div>
+                        </div>
+                        <span className="px-2 py-0.5 text-[9px] font-bold uppercase rounded bg-emerald-100 text-emerald-700 border border-emerald-200">{r.currency}</span>
+                        <span className="px-2 py-0.5 text-[9px] font-bold uppercase rounded bg-blue-100 text-blue-700 border border-blue-200">{r.tax_label}</span>
+                        <button type="button" onClick={() => saveRegion(r.code, { active: !r.active })}
+                          className="flex items-center gap-2 shrink-0">
+                          <span className="text-xs font-semibold text-paper">{r.active ? 'Active' : 'Off'}</span>
+                          <div className={`relative w-10 h-6 rounded-full transition shrink-0 ${r.active ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                            <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${r.active ? 'left-[18px]' : 'left-0.5'}`} />
+                          </div>
+                        </button>
+                      </div>
+
+                      {/* Phone line */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Twilio number</label>
+                          <input className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember font-mono"
+                            value={r.twilio_number || ''}
+                            onChange={e => upd({ twilio_number: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { twilio_number: e.target.value })}
+                            placeholder={r.code === 'US' ? '+1…' : '+44…'} />
+                          <div className="text-[11px] text-dim mt-1">The Twilio number for this region. Point its Voice and Messaging webhooks at the same URLs as the UK number.</div>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Phone (display)</label>
+                          <input className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember"
+                            value={r.business_phone || ''}
+                            onChange={e => upd({ business_phone: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { business_phone: e.target.value || null })}
+                            placeholder={r.code === 'US' ? '+1 (650) 555-0123' : '+44 7576 562085'} />
+                        </div>
+                      </div>
+
+                      {/* Hours */}
+                      <div className="pt-3 border-t border-bdr">
+                        <button type="button"
+                          onClick={() => saveRegion(r.code, { business_hours_enabled: !r.business_hours_enabled })}
+                          className="w-full flex items-center gap-3 p-3 glass-inner rounded-xl text-left">
+                          <div className="flex-1">
+                            <div className="text-sm font-medium text-paper">Business hours for this region</div>
+                            <div className="text-xs text-muted">Out-of-hours calls to this number go to voicemail</div>
+                          </div>
+                          <div className={`relative w-10 h-6 rounded-full transition shrink-0 ${r.business_hours_enabled ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                            <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${r.business_hours_enabled ? 'left-[18px]' : 'left-0.5'}`} />
+                          </div>
+                        </button>
+                        <div className={`mt-3 ${r.business_hours_enabled ? '' : 'opacity-50 pointer-events-none'}`}>
+                          <label className="text-[11px] font-semibold text-muted block mb-1">Timezone</label>
+                          <select value={r.business_timezone || (r.code === 'US' ? 'America/New_York' : 'Europe/London')}
+                            onChange={e => saveRegion(r.code, { business_timezone: e.target.value })}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember mb-3">
+                            {[...new Set([r.business_timezone, 'America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York', 'Europe/London', 'Europe/Dublin', 'UTC'])].filter(Boolean).map(tz => <option key={tz} value={tz}>{tz}</option>)}
+                          </select>
+                          <div className="space-y-1.5">
+                            {['mon','tue','wed','thu','fri','sat','sun'].map(d => {
+                              const bh = r.business_hours || {};
+                              const day = bh[d] || {};
+                              const updDay = (patch) => saveRegion(r.code, { business_hours: { ...bh, [d]: { ...day, ...patch } } });
+                              return (
+                                <div key={d} className="flex items-center gap-2 text-sm">
+                                  <span className="w-9 uppercase text-[11px] font-mono text-muted">{d}</span>
+                                  <label className="flex items-center gap-1.5 text-xs text-muted w-16">
+                                    <input type="checkbox" checked={!day.closed}
+                                      onChange={e => updDay({ closed: !e.target.checked })} />
+                                    {day.closed ? 'Closed' : 'Open'}
+                                  </label>
+                                  <input type="time" disabled={day.closed} value={day.open || '09:00'}
+                                    onChange={e => updDay({ open: e.target.value })}
+                                    className="px-2 py-1 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember disabled:opacity-40" />
+                                  <span className="text-muted">–</span>
+                                  <input type="time" disabled={day.closed} value={day.close || '17:00'}
+                                    onChange={e => updDay({ close: e.target.value })}
+                                    className="px-2 py-1 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember disabled:opacity-40" />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Voice & wording */}
+                      <div className="pt-3 border-t border-bdr space-y-2">
+                        <div>
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Voice (how greetings &amp; voicemail sound)</label>
+                          <select value={r.voice_id || (r.code === 'US' ? 'Polly.Joanna-Neural' : 'Polly.Amy-Neural')}
+                            onChange={e => saveRegion(r.code, { voice_id: e.target.value })}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember">
+                            <option value="Polly.Amy-Neural">Amy — British, female (natural)</option>
+                            <option value="Polly.Emma-Neural">Emma — British, female (warm)</option>
+                            <option value="Polly.Brian-Neural">Brian — British, male</option>
+                            <option value="Polly.Joanna-Neural">Joanna — US, female</option>
+                            <option value="Polly.Danielle-Neural">Danielle — US, female (natural)</option>
+                            <option value="Polly.Matthew-Neural">Matthew — US, male</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Greeting (while connecting to an agent)</label>
+                          <textarea rows={2}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none"
+                            value={r.voice_greeting || ''}
+                            onChange={e => upd({ voice_greeting: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { voice_greeting: e.target.value || null })}
+                            placeholder="Falls back to the global setting when empty" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Voicemail message (before the beep)</label>
+                          <textarea rows={2}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none"
+                            value={r.voicemail_prompt || ''}
+                            onChange={e => upd({ voicemail_prompt: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { voicemail_prompt: e.target.value || null })}
+                            placeholder="Falls back to the global setting when empty" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Out-of-hours voicemail greeting</label>
+                          <textarea rows={2}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none"
+                            value={r.after_hours_voicemail_prompt || ''}
+                            onChange={e => upd({ after_hours_voicemail_prompt: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { after_hours_voicemail_prompt: e.target.value || null })}
+                            placeholder="Falls back to the global setting when empty" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">SMS auto-reply</label>
+                          <textarea rows={2}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none"
+                            value={r.auto_reply_sms_message || ''}
+                            onChange={e => upd({ auto_reply_sms_message: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { auto_reply_sms_message: e.target.value || null })}
+                            placeholder="Falls back to the global setting when empty" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Out-of-hours SMS auto-reply</label>
+                          <textarea rows={2}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember resize-none"
+                            value={r.after_hours_sms_message || ''}
+                            onChange={e => upd({ after_hours_sms_message: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { after_hours_sms_message: e.target.value || null })}
+                            placeholder="Falls back to the global setting when empty" />
+                        </div>
+                      </div>
+
+                      {/* Seller identity for documents */}
+                      <div className="pt-3 border-t border-bdr">
+                        <div className="text-[11px] font-semibold text-muted mb-2">Seller identity on documents (quotes &amp; invoices for this region)</div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Business name</label>
+                            <input className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember"
+                              value={r.business_name || ''}
+                              onChange={e => upd({ business_name: e.target.value })}
+                              onBlur={e => saveRegion(r.code, { business_name: e.target.value || null })}
+                              placeholder="Falls back to the global setting" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Email</label>
+                            <input className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember"
+                              value={r.business_email || ''}
+                              onChange={e => upd({ business_email: e.target.value })}
+                              onBlur={e => saveRegion(r.code, { business_email: e.target.value || null })}
+                              placeholder="Falls back to the global setting" />
+                          </div>
+                        </div>
+                        <div className="mt-2">
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Address</label>
+                          <textarea rows={2}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper resize-none focus:outline-none focus:border-ember placeholder-dim"
+                            value={r.business_address || ''}
+                            onChange={e => upd({ business_address: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { business_address: e.target.value || null })}
+                            placeholder="Falls back to the global setting" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="text-[11px] text-dim leading-relaxed pt-1 border-t border-bdr">
+                  Currency and tax label are fixed per region. Wording and identity fields fall back to the global settings above when empty. Region rows save independently of the other settings on this page.
                 </div>
               </div>
             </div>

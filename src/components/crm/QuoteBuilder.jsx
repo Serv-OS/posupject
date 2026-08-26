@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
+import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 
 // Build the customer-safe card-processing breakdown frozen onto the quote.
 // Excludes buy rate & margin — customer only sees current vs our effective rate + saving.
@@ -37,7 +38,6 @@ const STATUS_STYLES = {
 };
 
 const lineTotal = (it) => (Number(it.qty) || 0) * (Number(it.unit_price) || 0) * (1 - (Number(it.discount) || 0) / 100);
-const money = (v) => `£${Number(v || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) {
   const [quote, setQuote] = useState(null);
@@ -53,6 +53,14 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
+  // Quote currency drives every figure, label and tax default on this screen.
+  const cur = quote?.currency || 'GBP';
+  const money = (v) => fmtMoney(v, cur);
+  // Draft only: a sent quote may already have a Stripe checkout out in the
+  // wild, and flipping its currency behind that session is how a $ payment
+  // meets a £ document.
+  const curLocked = !quote || quote.status !== 'draft';
+
   useEffect(() => { load(); }, [quoteId]);
 
   const load = async () => {
@@ -65,7 +73,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     setItems((li.data || []).map(x => ({ ...x })));
     setProducts(pr.data || []);
     if (q.data?.company_id) {
-      supabase.from('companies').select('id, name').eq('id', q.data.company_id).single().then(r => setCompany(r.data));
+      supabase.from('companies').select('id, name, country').eq('id', q.data.company_id).single().then(r => setCompany(r.data));
       supabase.from('locations').select('id, name, company_id').eq('company_id', q.data.company_id).order('name').then(r => setLocations(r.data || []));
       loadProc(q.data.company_id);
     } else {
@@ -86,10 +94,10 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const setQ = (k, v) => setQuote(prev => ({ ...prev, [k]: v }));
   const updateItem = (idx, patch) => setItems(items.map((it, i) => i === idx ? { ...it, ...patch } : it));
   const removeItem = (idx) => setItems(items.filter((_, i) => i !== idx));
-  const addCustom = () => setItems([...items, { product_id: null, name: '', description: '', category: 'hardware', billing_type: 'one_off', qty: 1, unit_price: 0, discount: 0, tax_rate: 20 }]);
+  const addCustom = () => setItems([...items, { product_id: null, name: '', description: '', category: 'hardware', billing_type: 'one_off', qty: 1, unit_price: 0, discount: 0, tax_rate: defaultTaxRateFor(cur) }]);
   const addProduct = (p) => setItems([...items, {
     product_id: p.id, name: p.name, description: p.description || '', category: p.category,
-    billing_type: p.billing_type, qty: 1, unit_price: p.default_price, discount: 0, tax_rate: 20,
+    billing_type: p.billing_type, qty: 1, unit_price: p.default_price, discount: 0, tax_rate: defaultTaxRateFor(cur),
   }]);
 
   const totals = useMemo(() => {
@@ -111,6 +119,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
       payment_terms: quote.payment_terms, deposit_percent: Number(quote.deposit_percent) || 0,
       tax_rate: Number(quote.tax_rate) || 0, terms: quote.terms || null, notes: quote.notes || null,
       status: quote.status, location_id: quote.location_id || null,
+      currency: cur,
       processing_account_id: quote.processing_account_id || null,
       card_processing: cardSnapshot(procAccounts.find(a => a.id === quote.processing_account_id)),
       one_off_subtotal: totals.oneOff, tax_amount: totals.tax, one_off_total: totals.oneOffTotal,
@@ -209,9 +218,9 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                         <select className={cell + ' w-full text-xs'} value={it.billing_type} onChange={e => updateItem(idx, { billing_type: e.target.value })}>
                           <option value="one_off">One-off</option><option value="monthly">Monthly</option><option value="annual">Annual</option><option value="usage">Usage</option></select></div>
                       <div><span className="text-[9px] text-dim block">Qty</span><input type="number" className={cell + ' w-full'} value={it.qty} onChange={e => updateItem(idx, { qty: e.target.value })} /></div>
-                      <div><span className="text-[9px] text-dim block">Unit £</span><input type="number" className={cell + ' w-full'} value={it.unit_price} onChange={e => updateItem(idx, { unit_price: e.target.value })} /></div>
+                      <div><span className="text-[9px] text-dim block">Unit {currencySymbol(cur)}</span><input type="number" className={cell + ' w-full'} value={it.unit_price} onChange={e => updateItem(idx, { unit_price: e.target.value })} /></div>
                       <div><span className="text-[9px] text-dim block">Disc %</span><input type="number" className={cell + ' w-full'} value={it.discount} onChange={e => updateItem(idx, { discount: e.target.value })} /></div>
-                      <div><span className="text-[9px] text-dim block">Tax %</span><input type="number" className={cell + ' w-full'} value={it.tax_rate ?? 20} onChange={e => updateItem(idx, { tax_rate: e.target.value })} disabled={it.category === 'saas' || it.category === 'payments'} /></div>
+                      <div><span className="text-[9px] text-dim block">Tax %</span><input type="number" className={cell + ' w-full'} value={it.tax_rate ?? defaultTaxRateFor(cur)} onChange={e => updateItem(idx, { tax_rate: e.target.value })} disabled={it.category === 'saas' || it.category === 'payments'} /></div>
                     </div>
                     <div className="text-right text-xs text-muted">Line total: <span className="text-paper font-mono font-semibold">{money(lineTotal(it))}</span>{it.billing_type === 'monthly' ? '/mo' : it.category === 'payments' ? '/yr' : ''}</div>
                   </div>
@@ -231,7 +240,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
             <div className="glass-card rounded-2xl p-4">
               <div className="text-sm font-bold text-paper mb-3">Totals</div>
               <Row k="One-off subtotal" v={money(totals.oneOff)} />
-              <Row k="VAT (per line)" v={money(totals.tax)} />
+              <Row k={`${taxLabelFor(cur)} (per line)`} v={money(totals.tax)} />
               <Row k="One-off total" v={money(totals.oneOffTotal)} bold />
               <div className="border-t border-bdr my-2" />
               <Row k="SaaS (ARR)" v={money(totals.saasArr)} sub />
@@ -245,6 +254,16 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={label}>Status</label><select className={input} value={quote.status} onChange={e => setQ('status', e.target.value)}>
                   {['draft','sent','viewed','signed','paid','won','declined','expired','void'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>
+                <div><label className={label}>Currency</label><select className={input} value={cur} onChange={e => {
+                  const next = e.target.value;
+                  if (next !== cur) {
+                    const oldDef = defaultTaxRateFor(cur), newDef = defaultTaxRateFor(next);
+                    // Lines still on the old DEFAULT rate follow the new default.
+                    setItems(p => p.map(it => Number(it.tax_rate ?? oldDef) === oldDef ? { ...it, tax_rate: newDef } : it));
+                    setQ('currency', next);
+                  }
+                }} disabled={curLocked}>
+                  <option value="GBP">GBP £</option><option value="USD">USD $</option></select></div>
                 <div className="col-span-2"><label className={label}>Location (install site)</label>
                   <select className={input} value={quote.location_id || ''} onChange={e => setQ('location_id', e.target.value || null)}>
                     <option value="">— None —</option>

@@ -165,6 +165,9 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
                 <div><label className={label}>Address</label><input className={input} value={draft.address || ''} onChange={e => set('address', e.target.value)} /></div>
                 <div><label className={label}>City</label><input className={input} value={draft.city || ''} onChange={e => set('city', e.target.value)} /></div>
                 <div><label className={label}>Postcode</label><input className={input} value={draft.postcode || ''} onChange={e => set('postcode', e.target.value)} /></div>
+                {/* Drives invoice/quote currency defaults (GB→GBP, US→USD) */}
+                <div><label className={label}>Country</label><select className={input} value={draft.country || 'GB'} onChange={e => set('country', e.target.value)}>
+                  <option value="GB">United Kingdom</option><option value="US">United States</option></select></div>
                 <div><label className={label}>Employees</label><input className={input} type="number" value={draft.employee_count || ''} onChange={e => set('employee_count', e.target.value ? parseInt(e.target.value) : null)} /></div>
                 <div><label className={label}>Source</label><input className={input} value={draft.source || ''} onChange={e => set('source', e.target.value)} /></div>
                 <div><label className={label}>Owner</label><select className={input} value={draft.owner_id || ''} onChange={e => set('owner_id', e.target.value || null)}>
@@ -190,6 +193,7 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
                   <Field label="Website" value={company.website} link />
                   <Field label="Industry" value={company.industry} />
                   <Field label="Address" value={[company.address, company.city, company.postcode].filter(Boolean).join(', ')} />
+                  <Field label="Country" value={String(company.country || 'GB').toUpperCase() === 'US' ? 'United States' : 'United Kingdom'} />
                   <Field label="Employees" value={company.employee_count} />
                   <Field label="Source" value={company.source} />
                   <Field label="Owner" value={ownerName(company.owner_id)} />

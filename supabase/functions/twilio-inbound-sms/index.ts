@@ -6,6 +6,9 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isOpenNow } from "../_shared/hours.ts";
+import { phoneVariants } from "../_shared/phone.ts";
+import { loadRegions, regionForTwilioNumber, effective } from "../_shared/region.ts";
 
 serve(async (req) => {
   // Twilio sends webhooks as POST with form-urlencoded body
@@ -46,23 +49,17 @@ serve(async (req) => {
       return twimlResponse(""); // Already processed, return empty TwiML
     }
 
-    // Generate all phone variants for matching
-    const phoneVariants: string[] = [normalizedFrom];
-    if (normalizedFrom.startsWith("+44")) {
-      phoneVariants.push("0" + normalizedFrom.slice(3));
-      phoneVariants.push(normalizedFrom.slice(1));
-    }
-    if (normalizedFrom.startsWith("0")) {
-      phoneVariants.push("+44" + normalizedFrom.slice(1));
-      phoneVariants.push("44" + normalizedFrom.slice(1));
-    }
+    // Every stored shape of this number — UK and US formats both covered.
+    const variants = phoneVariants(normalizedFrom);
+    // Which of our lines was texted; that region owns the auto-reply wording.
+    const region = regionForTwilioNumber(await loadRegions(supabase), to);
 
     // Try to match sender to a contact by phone number
     let contactId: string | null = null;
     let companyId: string | null = null;
     let contactName = normalizedFrom;
 
-    const phoneFilter = phoneVariants.map(p => `phone.eq.${p}`).join(",");
+    const phoneFilter = variants.map(p => `phone.eq.${p}`).join(",");
     const { data: contacts } = await supabase
       .from("contacts")
       .select("id, first_name, last_name, phone")
@@ -95,7 +92,7 @@ serve(async (req) => {
     const { data: openTickets } = await supabase
       .from("tickets")
       .select("id, stage")
-      .eq("customer_phone", normalizedFrom)
+      .or(variants.map((p) => `customer_phone.eq.${p}`).join(","))
       .eq("channel", "sms")
       .not("stage", "in", '("closed")')
       .order("updated_at", { ascending: false })
@@ -103,6 +100,9 @@ serve(async (req) => {
 
     if (openTickets && openTickets.length > 0) {
       ticketId = openTickets[0].id;
+      // Replies must leave from the line the customer texted, and the latest
+      // line they used wins.
+      if (to) await supabase.from("tickets").update({ service_number: to }).eq("id", ticketId);
 
       // Reopen if resolved
       if (openTickets[0].stage === "resolved") {
@@ -123,6 +123,7 @@ serve(async (req) => {
         customer_phone: normalizedFrom,
         contact_id: contactId,
         source: "sms",
+        service_number: to || null,
       };
       if (companyId) ticketData.company_id = companyId;
 
@@ -177,12 +178,18 @@ serve(async (req) => {
       });
     }
 
-    // Auto-reply on first contact only (avoid replying to every message)
+    // Auto-reply on first contact only (avoid replying to every message).
+    // The TwiML response goes out from the number that was texted, so this
+    // path is dual-number correct by construction — only the WORDING and the
+    // out-of-hours check are per region.
     if (isNewTicket) {
-      const { data: vs } = await supabase.from("support_settings")
-        .select("auto_reply_sms_enabled, auto_reply_sms_message").eq("id", 1).single();
-      if (vs?.auto_reply_sms_enabled && vs?.auto_reply_sms_message) {
-        const reply = vs.auto_reply_sms_message
+      const { data: settingsRow } = await supabase.from("support_settings")
+        .select("auto_reply_sms_enabled, auto_reply_sms_message, business_hours_enabled, business_timezone, business_hours").eq("id", 1).single();
+      const vs = effective(region, settingsRow);
+      const afterHours = !isOpenNow(vs) && vs?.after_hours_sms_message;
+      const template = afterHours ? vs.after_hours_sms_message : vs?.auto_reply_sms_message;
+      if (settingsRow?.auto_reply_sms_enabled && template) {
+        const reply = template
           .replace(/\{\{\s*contact_name\s*\}\}/g, contactName || "there")
           .replace(/\{\{\s*ticket_number\s*\}\}/g, ticketNumber ? `#${ticketNumber}` : "")
           .trim();

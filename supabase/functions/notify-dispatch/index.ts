@@ -8,6 +8,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendInvoiceEmail } from "../_shared/invoiceEmail.ts";
+// US formats now count: the old e164 returned null for anything that was not
+// +44-shaped, so a US staffer's mobile silently got "no mobile number on
+// profile" and never a text.
+import { toE164 as e164 } from "../_shared/phone.ts";
+import { loadRegions, fromNumberFor } from "../_shared/region.ts";
 
 const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), { status: s, headers: { "Content-Type": "application/json" } });
@@ -19,19 +24,16 @@ const TYPE_PREF: Record<string, string> = {
   // 'system' (e.g. new support ticket) always delivers — vital for support
 };
 
-function e164(raw: string): string | null {
-  let n = (raw || "").replace(/[\s()-]/g, "");
-  if (!n) return null;
-  if (n.startsWith("+")) return n;
-  if (n.startsWith("07")) return "+44" + n.slice(1);
-  if (n.startsWith("447")) return "+" + n;
-  if (n.startsWith("0044")) return "+" + n.slice(2);
-  return null;
-}
-
-function inQuietHours(start: string | null, end: string | null): boolean {
+// Quiet hours in the RECIPIENT'S timezone. This was hardcoded Europe/London,
+// which muted a US agent's working afternoon and pinged them at 2am.
+function inQuietHours(start: string | null, end: string | null, tz?: string | null): boolean {
   if (!start || !end) return false;
-  const now = new Date().toLocaleTimeString("en-GB", { hour12: false, timeZone: "Europe/London" }).slice(0, 5);
+  let now: string;
+  try {
+    now = new Date().toLocaleTimeString("en-GB", { hour12: false, timeZone: tz || "Europe/London" }).slice(0, 5);
+  } catch {
+    now = new Date().toLocaleTimeString("en-GB", { hour12: false, timeZone: "Europe/London" }).slice(0, 5);
+  }
   return start < end ? (now >= start && now < end) : (now >= start || now < end);
 }
 
@@ -186,7 +188,7 @@ serve(async (req) => {
     const openLabel = n.entity_type ? `Open ${String(n.entity_type).replace(/_/g, " ")}` : "Open CRM";
 
     const { data: p } = await supabase.from("profiles")
-      .select("email, phone, mobile, display_name").eq("id", n.recipient_id).maybeSingle();
+      .select("email, phone, mobile, display_name, timezone").eq("id", n.recipient_id).maybeSingle();
     if (!p) return json({ skipped: "no profile" });
 
     const { data: prefs } = await supabase.from("notification_preferences")
@@ -195,7 +197,7 @@ serve(async (req) => {
     const smsOn = prefs ? !!prefs.sms_enabled : false;      // default: sms off
     const typePref = TYPE_PREF[n.type];
     if (typePref && prefs && prefs[typePref] === false) return json({ skipped: "type disabled" });
-    const quiet = inQuietHours(prefs?.quiet_hours_start || null, prefs?.quiet_hours_end || null);
+    const quiet = inQuietHours(prefs?.quiet_hours_start || null, prefs?.quiet_hours_end || null, p.timezone);
 
     const updates: Record<string, string> = {};
     const results: Record<string, string> = {};
@@ -220,7 +222,9 @@ serve(async (req) => {
       const to = e164(p.mobile || p.phone || "");
       const sid = Deno.env.get("TWILIO_ACCOUNT_SID");
       const tok = Deno.env.get("TWILIO_AUTH_TOKEN");
-      const from = Deno.env.get("TWILIO_FROM_NUMBER");
+      // Text staff from the line of their own country — a UK number reaching a
+      // US handset is often carrier-flagged before it ever buzzes.
+      const from = fromNumberFor(await loadRegions(supabase), to, Deno.env.get("TWILIO_FROM_NUMBER") || "");
       if (to && sid && tok && from) {
         try {
           const body = `${n.title || "CRM notification"}${n.body ? " — " + n.body : ""}`.slice(0, 150);

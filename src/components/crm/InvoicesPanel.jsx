@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Receipt, Plus, Repeat, X, Trash2 } from 'lucide-react';
+import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor } from '../../lib/money';
 
-export const money = (v) => `£${Number(v || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Currency-aware and back-compatible: money(v) keeps meaning GBP for every
+// existing caller, money(v, inv.currency) renders the document's own currency.
+export const money = (v, currency = 'GBP') => fmtMoney(v, currency);
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
 
 // Effective display status: sent/viewed past due = overdue
@@ -58,13 +61,15 @@ export default function InvoicesPanel({ profile, onNavigate }) {
 
   const custName = (x) => x.location?.name || x.company?.name || x.label || '—';
 
+  // Never sum £ and $ into one figure — each currency keeps its own total.
   const open = invoices.filter(i => ['sent', 'viewed'].includes(i.status));
-  const outstanding = open.reduce((s, i) => s + Number(i.total || 0), 0);
+  const outstanding = sumByCurrency(open, i => i.total);
   const overdueList = invoices.filter(i => invStatus(i) === 'overdue');
-  const overdueSum = overdueList.reduce((s, i) => s + Number(i.total || 0), 0);
+  const overdueSum = sumByCurrency(overdueList, i => i.total);
   const mStart = new Date(); mStart.setDate(1);
-  const paidThisMonth = invoices.filter(i => i.status === 'paid' && i.paid_at && new Date(i.paid_at) >= mStart)
-    .reduce((s, i) => s + Number(i.amount_paid ?? i.total ?? 0), 0);
+  const paidThisMonth = sumByCurrency(
+    invoices.filter(i => i.status === 'paid' && i.paid_at && new Date(i.paid_at) >= mStart),
+    i => i.amount_paid ?? i.total ?? 0);
 
   const matchesTab = (inv) => {
     const st = invStatus(inv);
@@ -116,9 +121,9 @@ export default function InvoicesPanel({ profile, onNavigate }) {
 
           {/* Headline */}
           <div className="grid grid-cols-3 gap-4">
-            <Stat label="Outstanding" value={money(outstanding)} sub={`${open.length} open invoice${open.length !== 1 ? 's' : ''}`} />
-            <Stat label="Overdue" value={money(overdueSum)} sub={`${overdueList.length} overdue`} tone={overdueList.length ? 'red' : null} />
-            <Stat label="Paid this month" value={money(paidThisMonth)} tone="emerald" />
+            <Stat label="Outstanding" value={fmtByCurrency(outstanding)} sub={`${open.length} open invoice${open.length !== 1 ? 's' : ''}`} />
+            <Stat label="Overdue" value={fmtByCurrency(overdueSum)} sub={`${overdueList.length} overdue`} tone={overdueList.length ? 'red' : null} />
+            <Stat label="Paid this month" value={fmtByCurrency(paidThisMonth)} tone="emerald" />
           </div>
 
           {tab === 'invoices' ? (
@@ -163,7 +168,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                           {inv.recurring_id && <div className="text-[10px] text-uv flex items-center gap-1"><Repeat size={10} /> recurring</div>}
                         </div>
                         <div className="text-xs text-muted shrink-0 w-24 text-right">Due {fmtD(inv.due_date)}</div>
-                        <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{money(inv.total)}</div>
+                        <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{money(inv.total, inv.currency)}</div>
                         <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg shrink-0 w-20 text-center ${INV_BADGE[st]}`}>{st}</span>
                       </div>
                     );
@@ -189,7 +194,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                           <div className="text-[11px] text-muted">{custName(s)} · {s.frequency} on day {s.day_of_month}{s.auto_send ? ' · auto-send' : ' · draft only'}</div>
                         </div>
                         <div className="text-xs text-muted shrink-0">Next: {fmtD(s.next_run)}</div>
-                        <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{money(amount)}</div>
+                        <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{money(amount, s.currency)}</div>
                       </div>
                     );
                   })}
@@ -228,7 +233,8 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
     label: s.label || '', company_id: s.company_id || '', location_id: s.location_id || '', contact_id: s.contact_id || '',
     email_to: s.email_to || '', frequency: s.frequency || 'monthly', day_of_month: s.day_of_month ?? 1,
     next_run: s.next_run || new Date().toISOString().slice(0, 10), due_days: s.due_days ?? 14,
-    tax_rate: s.tax_rate ?? 20, terms: s.terms || '', notes: s.notes || '',
+    currency: s.currency || 'GBP',
+    tax_rate: s.tax_rate ?? (s.currency === 'USD' ? 0 : 20), terms: s.terms || '', notes: s.notes || '',
     auto_send: s.auto_send ?? true, active: s.active ?? true,
   });
   const [lines, setLines] = useState(Array.isArray(s.lines) && s.lines.length ? s.lines : [{ name: '', description: '', qty: 1, unit_price: 0 }]);
@@ -248,6 +254,7 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
       contact_id: f.contact_id || null, email_to: f.email_to.trim() || null,
       frequency: f.frequency, day_of_month: Math.min(28, Math.max(1, Number(f.day_of_month) || 1)),
       next_run: f.next_run, due_days: Number(f.due_days) || 14, tax_rate: Number(f.tax_rate) || 0,
+      currency: f.currency || 'GBP',
       lines: cleanLines.map(l => ({ name: l.name.trim(), description: (l.description || '').trim() || null, qty: Number(l.qty) || 1, unit_price: Number(l.unit_price) || 0 })),
       terms: f.terms.trim() || null, notes: f.notes.trim() || null,
       auto_send: f.auto_send, active: f.active, created_by: s.created_by || profile.id,
@@ -313,7 +320,7 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
                       });
                     }}>
                     <option value="">+ From products…</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name} — £{Number(p.default_price).toLocaleString('en-GB')}</option>)}
+                    {products.map(p => <option key={p.id} value={p.id}>{p.name} — {money(p.default_price, f.currency)}</option>)}
                   </select>
                 )}
                 <button onClick={() => setLines(p => [...p, { name: '', description: '', qty: 1, unit_price: 0 }])}
@@ -330,15 +337,19 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
                 <div className="grid grid-cols-2 gap-2">
                   <div><span className="text-[9px] text-muted block mb-0.5">Qty</span>
                     <input type="number" className={input} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} placeholder="1" /></div>
-                  <div><span className="text-[9px] text-muted block mb-0.5">Unit £ (ex VAT)</span>
+                  <div><span className="text-[9px] text-muted block mb-0.5">Unit {currencySymbol(f.currency)} (ex {taxLabelFor(f.currency)})</span>
                     <input type="number" className={input} value={l.unit_price} onChange={e => setLine(i, 'unit_price', e.target.value)} placeholder="0.00" /></div>
                 </div>
-                <div className="text-right text-xs text-muted">Line total: <span className="text-paper font-mono font-semibold">{money((Number(l.qty) || 0) * (Number(l.unit_price) || 0))}</span></div>
+                <div className="text-right text-xs text-muted">Line total: <span className="text-paper font-mono font-semibold">{money((Number(l.qty) || 0) * (Number(l.unit_price) || 0), f.currency)}</span></div>
               </div>
             ))}
             <div className="flex justify-end gap-4 text-sm pt-1">
-              <span className="text-muted">VAT <input className={input + ' !w-16 !py-1 inline-block text-right ml-1'} value={f.tax_rate} onChange={e => set('tax_rate', e.target.value)} />%</span>
-              <span className="font-bold text-paper tabular-nums">Total {money(total)}</span>
+              <span className="text-muted">
+                <select className={input + ' !w-20 !py-1 inline-block mr-2'} value={f.currency} onChange={e => set('currency', e.target.value)}>
+                  <option value="GBP">GBP £</option><option value="USD">USD $</option>
+                </select>
+                {taxLabelFor(f.currency)} <input className={input + ' !w-16 !py-1 inline-block text-right ml-1'} value={f.tax_rate} onChange={e => set('tax_rate', e.target.value)} />%</span>
+              <span className="font-bold text-paper tabular-nums">Total {money(total, f.currency)}</span>
             </div>
           </div>
 

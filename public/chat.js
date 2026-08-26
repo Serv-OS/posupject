@@ -173,6 +173,54 @@
   }
 
   var busy = false;
+  // ── Live mode ─────────────────────────────────────────────────────────────
+  // After hand-over the session stays open: the visitor and the support team
+  // talk through this same panel. The widget polls (sockets die silently in
+  // suspended WebViews; a poll is the reliable transport on every surface).
+  var live = false, pollTimer = null, lastTs = null;
+
+  function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+  function startPoll() {
+    if (pollTimer || !sessionId) return;
+    poll();
+    pollTimer = setInterval(poll, 4000);
+  }
+  function endLive() {
+    stopPoll();
+    live = false;
+    add('The support team has closed this conversation. Start a new chat any time.', 'bot');
+    ended = true;
+    sessionId = null;
+    try { sessionStorage.removeItem(SKEY); } catch (e) {}
+  }
+  function poll() {
+    if (!sessionId) { stopPoll(); return; }
+    var rebuild = !lastTs; // first poll of a reopened tab replays the transcript
+    fetch(cfg.api, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site_key: cfg.siteKey, session_id: sessionId, action: 'poll', after: lastTs || undefined }),
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (b) {
+        if (!b) return;
+        if (b.ts) lastTs = b.ts;
+        var msgs2 = b.messages || [];
+        // A rebuild is authoritative: replace what's on screen, don't append a
+        // second copy of a transcript that's already rendered (reopened popup).
+        if (rebuild && msgs2.length) msgs.innerHTML = '';
+        for (var i = 0; i < msgs2.length; i++) {
+          var m = msgs2[i];
+          if (m.role === 'visitor') { if (rebuild) add(m.content, 'me'); }
+          else add(m.content, 'bot');
+        }
+        if (b.status === 'closed') endLive();
+        else if (b.status === 'escalated') live = true;
+        else stopPoll(); // still a bot conversation — nothing to poll for
+      })
+      .catch(function () { /* transient network blip — next tick retries */ });
+  }
+
   function post(message) {
     if (busy) return;
     busy = true; sendBtn.disabled = true; showErr('');
@@ -194,18 +242,15 @@
       .then(function (res) {
         typing(false);
         if (!res.ok) { showErr(res.b && res.b.error ? res.b.error : 'Something went wrong.'); return; }
-        if (res.b.conversation_ended) {
-          // Passed to the team: forget this session so anything they say next
-          // starts a new conversation rather than being added to a thread
-          // someone is already working.
-          sessionId = null;
-          ended = true;
-          try { sessionStorage.removeItem(SKEY); } catch (e) {}
-        } else if (res.b.session_id) {
+        if (res.b.session_id) {
           sessionId = res.b.session_id;
+          ended = false; // typing again after a closed chat starts a real new one
           try { sessionStorage.setItem(SKEY, sessionId); } catch (e) {}
         }
         if (res.b.reply) add(res.b.reply, 'bot', res.b.escalated);
+        // A ticket was raised and the conversation is now with the team: keep
+        // the thread open and start listening for their replies.
+        if (res.b.live) { live = true; startPoll(); }
       })
       .catch(function () { typing(false); showErr("Can't reach support right now — please try again."); })
       .then(function () { busy = false; sendBtn.disabled = false; });
@@ -236,6 +281,9 @@
   // moment the widget is opened or shown again.
   var ended = false;
   function resetThread() {
+    stopPoll();
+    live = false;
+    lastTs = null;
     ended = false;
     started = false;
     sessionId = null;
@@ -249,21 +297,22 @@
 
   function openPanel() {
     if (ended) resetThread();
+    if (sessionId && started) startPoll(); // back to a live thread — resume listening
     panel.classList.add('open');
     wrap.classList.add('open');
     if (!started) {
       started = true;
       // Only ask the server to open a conversation when there isn't one. With a
-      // session already in hand (reopened panel, page refresh) a message-less
-      // post is rejected as empty, which surfaced as a red error to the user.
-      if (sessionId) add('Hi again — carry on where you left off, or tell me what you need.', 'bot');
+      // session already in hand (reopened panel, page refresh) the poll replays
+      // the whole transcript — and if the team has taken over, keeps listening.
+      if (sessionId) startPoll();
       else post(null);
     }
     setTimeout(function () { ta.focus(); }, 60);
   }
   // .wrap carries the open state too, because the bubble sits BEFORE the panel
   // in the DOM and CSS cannot look backwards at a sibling.
-  function closePanel() { panel.classList.remove('open'); wrap.classList.remove('open'); }
+  function closePanel() { panel.classList.remove('open'); wrap.classList.remove('open'); stopPoll(); }
   bubble.addEventListener('click', function () {
     panel.classList.contains('open') ? closePanel() : openPanel();
   });

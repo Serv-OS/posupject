@@ -9,7 +9,7 @@ const PERSONAL_SCOPES = 'openid email https://www.googleapis.com/auth/gmail.modi
 // My Account: a user sets their own contact details + notification preferences.
 // Email notifications go to profile.email; SMS notifications go to profile.mobile.
 export default function AccountPanel({ profile, onSaved }) {
-  const [form, setForm] = useState({ display_name: '', phone: '', mobile: '' });
+  const [form, setForm] = useState({ display_name: '', phone: '', mobile: '', timezone: '' });
   const [teams, setTeams] = useState([]);
   const [prefs, setPrefs] = useState({
     email_enabled: true,
@@ -77,7 +77,7 @@ export default function AccountPanel({ profile, onSaved }) {
   const load = async () => {
     setLoading(true);
     const [p, np, gi] = await Promise.all([
-      supabase.from('profiles').select('display_name, phone, mobile, email, teams').eq('id', profile.id).single(),
+      supabase.from('profiles').select('display_name, phone, mobile, email, teams, timezone').eq('id', profile.id).single(),
       supabase.from('notification_preferences').select('*').eq('profile_id', profile.id).maybeSingle(),
       supabase.from('user_integrations').select('email, scope').eq('profile_id', profile.id).maybeSingle(),
     ]);
@@ -95,6 +95,7 @@ export default function AccountPanel({ profile, onSaved }) {
         display_name: p.data.display_name || '',
         phone: p.data.phone || '',
         mobile: p.data.mobile || '',
+        timezone: p.data.timezone || '',
       });
       setTeams(p.data.teams || []);
     }
@@ -132,6 +133,7 @@ export default function AccountPanel({ profile, onSaved }) {
       display_name: form.display_name.trim() || null,
       phone: normalizePhone(form.phone) || null,
       mobile: mobile || null,
+      timezone: form.timezone || null,
     }).eq('id', profile.id);
 
     if (pErr) { setError('Could not save profile: ' + pErr.message); setSaving(false); return; }
@@ -336,7 +338,20 @@ export default function AccountPanel({ profile, onSaved }) {
                     <input type="time" className={input + ' w-32'} value={prefs.quiet_hours_end}
                       onChange={e => setPrefs({ ...prefs, quiet_hours_end: e.target.value })} />
                   </div>
+                  <div>
+                    <span className="text-[10px] text-dim block mb-1">Timezone</span>
+                    <select className={input + ' w-56'} value={form.timezone}
+                      onChange={e => setForm({ ...form, timezone: e.target.value })}>
+                      <option value="">Default (UK)</option>
+                      <option value="Europe/London">Europe/London</option>
+                      <option value="America/Los_Angeles">America/Los_Angeles</option>
+                      <option value="America/Denver">America/Denver</option>
+                      <option value="America/Chicago">America/Chicago</option>
+                      <option value="America/New_York">America/New_York</option>
+                    </select>
+                  </div>
                 </div>
+                <div className="text-[11px] text-dim mt-2">Quiet hours use this timezone.</div>
               </div>
             </div>
           </div>
