@@ -28,6 +28,17 @@
     accent: script.getAttribute('data-accent') || '#15C26A',
     api: script.getAttribute('data-api') || API,
     open: script.getAttribute('data-open') === 'true',
+    // Where this chat is embedded, as JSON. A POS till sends its venue, terminal
+    // and app version so support does not have to open with "which site are you?".
+    // Optional and best effort: bad JSON is ignored rather than breaking the widget.
+    context: (function () {
+      var raw = script.getAttribute('data-context');
+      if (!raw) return null;
+      try {
+        var parsed = JSON.parse(raw);
+        return (parsed && typeof parsed === 'object') ? parsed : null;
+      } catch (e) { console.warn('[servos-chat] data-context is not valid JSON, ignoring'); return null; }
+    })(),
   };
 
   if (!cfg.siteKey) { console.error('[servos-chat] missing data-site-key'); return; }
@@ -169,7 +180,15 @@
     return fetch(cfg.api, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ site_key: cfg.siteKey, session_id: sessionId, message: message || undefined }),
+      body: JSON.stringify({
+        site_key: cfg.siteKey,
+        session_id: sessionId,
+        message: message || undefined,
+        // Only useful on the very first call, which is where the session row is
+        // created. Sent every time regardless: it is small, and it means a session
+        // that starts before the host page has resolved its venue still gets one.
+        context: cfg.context || undefined,
+      }),
     })
       .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
       .then(function (res) {

@@ -106,7 +106,25 @@ serve(async (req) => {
   );
 
   try {
-    const { site_key, session_id, message, visitor } = (await req.json()) || {};
+    const { site_key, session_id, message, visitor, context } = (await req.json()) || {};
+    // `context` is what the embedding page SAYS it is: a till sends its venue,
+    // terminal and version so an agent does not have to open with "which site
+    // are you?". It is client supplied, so it is a CLAIM, never an identity.
+    // Nothing is authorised from it, it is stored and displayed as reported, and
+    // it is size capped so a hostile embed cannot use it as free storage.
+    const safeContext = (() => {
+      if (!context || typeof context !== "object" || Array.isArray(context)) return null;
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(context)) {
+        if (typeof k !== "string" || k.length > 40) continue;
+        if (v == null) continue;
+        const s = String(v);
+        if (!s) continue;
+        out[k] = s.slice(0, 200);
+        if (Object.keys(out).length >= 12) break;
+      }
+      return Object.keys(out).length ? out : null;
+    })();
     if (!site_key) return json({ error: "Missing site_key" }, 422);
 
     const { data: site } = await supabase.from("chat_sites")
@@ -135,6 +153,7 @@ serve(async (req) => {
         origin: origin || null,
         visitor_name: visitor?.name || null,
         visitor_email: visitor?.email || null,
+        context: safeContext,
       }).select().single();
       session = data;
       if (!message) {
@@ -191,9 +210,18 @@ serve(async (req) => {
           ? await supabase.from("locations").select("name").eq("id", session.location_id).maybeSingle()
           : { data: null };
 
+        // What the till told us about itself, if anything. Labelled "reported by"
+        // on purpose: it is unverified, so an agent must not read it as proof of
+        // who they are talking to. It still saves the opening question.
+        const ctx = (session.context && typeof session.context === "object") ? session.context : null;
+        const ctxLine = ctx
+          ? `Reported by the device: ${Object.entries(ctx).map(([k, v]) => `${k}: ${v}`).join(" · ")}`
+          : null;
+
         const header = [
           `Raised from the website chat — ${reason}.`,
           loc?.name ? `Venue: ${loc.name}` : "Venue: not identified.",
+          ...(ctxLine ? [ctxLine] : []),
           haveContact()
             ? `Contact: ${[session.visitor_name, session.visitor_email, session.visitor_phone].filter(Boolean).join(" · ")}`
             : "No contact details were given.",
