@@ -323,6 +323,26 @@ serve(async (req) => {
     }
     const { data: allLocs } = await supabase.from("locations").select("id, name").order("name").limit(1000);
 
+    // The embedding device already told us where it is, so the bot should never
+    // open with "which venue are you at?". session.location_id is the trusted
+    // link and still wins; this is the fallback for an embed that reports a name.
+    // Matching it against the real list turns a claim into a known venue and
+    // unlocks the modules and hardware detail below.
+    const ctxObj = (session.context && typeof session.context === "object")
+      ? session.context as Record<string, unknown> : null;
+    const reportedVenue = ctxObj ? String(ctxObj.Venue || "").trim() : "";
+    const reportedVenueId = ctxObj ? String(ctxObj.VenueId || "").trim() : "";
+
+    // Match on the POS id, NEVER on the name. The POS calls a site "Leeds" while
+    // this CRM holds three Leeds venues under different brands, so a name match
+    // would confidently pick the wrong customer. An unmapped venue falls through
+    // and the bot asks, which is the correct behaviour when we genuinely cannot tell.
+    if (!location && reportedVenueId) {
+      const { data } = await supabase.from("locations")
+        .select("id, name, city").eq("pos_location_id", reportedVenueId).maybeSingle();
+      if (data) location = data;
+    }
+
     const names = (pb.persona_names || []).filter(Boolean);
     const persona = names.length ? names[Math.floor(Math.random() * names.length)] : null;
 
@@ -342,7 +362,12 @@ serve(async (req) => {
         (live.length ? ` Live modules there: ${live.join(", ")}.` : "") + kitLine;
     } else if (pb.ask_location) {
       venueBlock =
-        `You do NOT know which venue the customer is at. Ask before troubleshooting.\n` +
+        (reportedVenue
+          // Reported but not on file: a spelling drift, or a site we do not hold.
+          // Confirm it rather than asking from scratch, which reads as not listening.
+          ? `Their device says they are at "${reportedVenue}", which does not match a venue on file. ` +
+            `Confirm that with them in passing rather than asking as if you know nothing.\n`
+          : `You do NOT know which venue the customer is at. Ask before troubleshooting.\n`) +
         `Only match what they actually say to this list. Never infer a venue from ordinary words in their problem ` +
         `("something is broken" is NOT the venue "Broke 'n Bone"). If it isn't clearly one of these, ask again.\n` +
         (allLocs || []).map((l: any) => `- ${l.name}`).join("\n");
@@ -378,6 +403,22 @@ serve(async (req) => {
       : `KNOWN FIXES: nothing on file matches this yet. Ask diagnostic questions if that would help ` +
         `narrow it down, but do NOT invent a fix — signal needs_human once you understand the problem.`;
 
+    // Everything else the device reported: terminal, who is signed in, app version,
+    // whether they are on a till or in the Back Office. Saves asking, and means a
+    // version-specific answer is possible. Flagged as reported, because a browser
+    // can claim anything and the bot must not treat it as proof of identity.
+    const deviceBlock = (() => {
+      const ctx = (session.context && typeof session.context === "object")
+        ? session.context as Record<string, unknown> : null;
+      if (!ctx) return "";
+      const bits = Object.entries(ctx)
+        .filter(([k]) => k !== "Venue" && k !== "VenueId")  // ids are plumbing, not conversation
+        .map(([k, v]) => `${k}: ${v}`);
+      if (!bits.length) return "";
+      return `Their device reports: ${bits.join(", ")}. Use this instead of asking, ` +
+        `but treat it as what the device says rather than proof of who they are.\n`;
+    })();
+
     const contactBlock = haveContact()
       ? "You already have their contact details."
       : "You do NOT have their contact details. Only ask for them when a person needs to take over.";
@@ -396,7 +437,7 @@ serve(async (req) => {
       `WHO YOU ARE\n${identity}\n\n` +
       `TONE: ${pb.tone}. Short sentences, warm, natural. Never bullet-point essays. ` +
       `Never claim to be human — if asked outright whether you're a bot, say so plainly and offer a colleague.\n\n` +
-      `WHAT YOU KNOW\n${venueBlock}\n${contactBlock}\n\n` +
+      `WHAT YOU KNOW\n${venueBlock}\n${deviceBlock}${contactBlock}\n\n` +
       `${knowledgeBlock}\n\n` +
       `WHO YOU ARE TALKING TO\n` +
       `Restaurant and cafe staff mid-shift — not IT people. They are busy, often with a queue. ` +
