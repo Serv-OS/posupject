@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { LocationTradingCard } from './TradingCard.jsx';
 import TimerButton from './TimerButton.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
+import PosLinkCard from './PosLinkCard.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 import CallButton from '../CallButton.jsx';
@@ -228,6 +229,9 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
               </Card>
 
               <LocationTradingCard location={location} canWrite={canWrite} onSaved={load} />
+
+              <PosLinkCard locationId={locationId} value={location.pos_location_id} profile={profile}
+                onSaved={(v) => setLocation(l => ({ ...l, pos_location_id: v }))} />
 
               <Card title="Key Dates">
                 <div className="space-y-3">
