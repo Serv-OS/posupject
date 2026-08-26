@@ -199,6 +199,7 @@
           // starts a new conversation rather than being added to a thread
           // someone is already working.
           sessionId = null;
+          ended = true;
           try { sessionStorage.removeItem(SKEY); } catch (e) {}
         } else if (res.b.session_id) {
           sessionId = res.b.session_id;
@@ -228,7 +229,26 @@
   });
 
   var started = false;
+  // A handed-over conversation is finished. Nothing here unloads on close: the
+  // till keeps the widget mounted and just hides it, so without an explicit
+  // reset the customer reopens support and finds the thread the team has
+  // already picked up, with no obvious way to start a new one. Wipe it the
+  // moment the widget is opened or shown again.
+  var ended = false;
+  function resetThread() {
+    ended = false;
+    started = false;
+    sessionId = null;
+    try { sessionStorage.removeItem(SKEY); } catch (e) {}
+    msgs.innerHTML = '';
+    ta.value = '';
+    ta.style.height = 'auto';
+    busy = false;
+    sendBtn.disabled = false;
+  }
+
   function openPanel() {
+    if (ended) resetThread();
     panel.classList.add('open');
     wrap.classList.add('open');
     if (!started) {
@@ -250,4 +270,26 @@
   $('.x').addEventListener('click', closePanel);
 
   if (inline || cfg.open) openPanel();
+
+  // Embedded in the till the widget is never unmounted, only hidden, so
+  // "they opened support again" reaches us as the element coming back into
+  // view — there is no open/close event to listen for.
+  if (typeof IntersectionObserver === 'function') {
+    try {
+      new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i].isIntersecting && ended) {
+            resetThread();
+            if (inline || cfg.open) openPanel();
+          }
+        }
+      }).observe(host);
+    } catch (e) { /* older webviews: the open handler still resets */ }
+  }
+
+  // A handle for hosts that know better than we do when a fresh chat is wanted.
+  try {
+    window.servosChat = window.servosChat || {};
+    window.servosChat.reset = function () { resetThread(); if (inline || cfg.open) openPanel(); };
+  } catch (e) { /* sandboxed */ }
 })();

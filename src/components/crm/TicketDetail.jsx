@@ -38,6 +38,10 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
   const [projects, setProjects] = useState([]);
   const [contactContext, setContactContext] = useState({ companies: [], locations: [] });
   const [matchedContact, setMatchedContact] = useState(null);
+  // Venues linked to this ticket directly. The chat bot attaches the site the
+  // customer was calling from, which is usually the only venue anyone cares
+  // about, and it is not reachable through the company.
+  const [linkedLocations, setLinkedLocations] = useState([]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
   const [creatingContact, setCreatingContact] = useState(false);
@@ -88,10 +92,14 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
     setMatchedContact(matched);
 
     // Auto-pull company/location from linked contacts
-    const [contactAssocs] = await Promise.all([
+    const [contactAssocs, locAssocs] = await Promise.all([
       supabase.from('associations').select('*')
         .or(`and(from_type.eq.ticket,from_id.eq.${ticketId},to_type.eq.contact),and(to_type.eq.ticket,to_id.eq.${ticketId},from_type.eq.contact)`),
+      supabase.from('associations').select('*')
+        .or(`and(from_type.eq.ticket,from_id.eq.${ticketId},to_type.eq.location),and(to_type.eq.ticket,to_id.eq.${ticketId},from_type.eq.location)`),
     ]);
+    const linkedLocIds = (locAssocs.data || []).map(a => (a.from_type === 'location' ? a.from_id : a.to_id));
+    setLinkedLocations((allLoc.data || []).filter(l => linkedLocIds.includes(l.id)));
     const contactIds = (contactAssocs.data || []).map(a => a.from_type === 'contact' ? a.from_id : a.to_id);
     if (contactIds.length > 0) {
       // Get associations for those contacts to find their companies and locations
@@ -196,7 +204,15 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
   if (!ticket) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading...</div>;
 
   const ownerName = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email.split('@')[0]) : 'Unassigned'; };
-  const companyLocations = ticket.company_id ? locations.filter(l => l.company_id === ticket.company_id) : [];
+  // The venue named on the ticket comes first and is flagged, then the rest of
+  // that company's sites for context. Before this the card listed the company's
+  // venues and nothing else, so a ticket raised from a specific till showed
+  // "Locations (0)" while its venue sat linked and unread.
+  const companyLocations = [
+    ...linkedLocations,
+    ...(ticket.company_id ? locations.filter(l => l.company_id === ticket.company_id && !linkedLocations.some(x => x.id === l.id)) : []),
+  ];
+  const affectedIds = new Set(linkedLocations.map(l => l.id));
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
@@ -486,7 +502,12 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                     {companyLocations.map(l => (
                       <div key={l.id} onClick={() => onNavigate?.('location', l.id)}
                         className="p-3 glass-inner rounded-xl cursor-pointer">
-                        <div className="text-sm font-medium text-paper">{l.name}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-sm font-medium text-paper">{l.name}</div>
+                          {affectedIds.has(l.id) && (
+                            <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-ember/15 text-ember border border-ember/25 shrink-0">This ticket</span>
+                          )}
+                        </div>
                         <div className="text-xs text-muted">{[l.venue_type, l.city].filter(Boolean).join(' / ')}</div>
                       </div>
                     ))}

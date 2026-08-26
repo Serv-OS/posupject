@@ -555,7 +555,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="text-sm">{TYPE_ICON[a.type]}</span>
                       <span className="text-xs font-medium text-paper">
-                        {isAgent ? getName(a.actor_id) : (a.channel_metadata?.from || a.channel_metadata?.from_number || 'Customer')}
+                        {isAgent ? getName(a.actor_id) : (a.channel_metadata?.from || a.channel_metadata?.from_number || a.channel_metadata?.author || 'Customer')}
                       </span>
                       <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
                         isOutbound ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'

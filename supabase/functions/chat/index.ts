@@ -174,8 +174,8 @@ serve(async (req) => {
     const { data: history } = await supabase.from("chat_messages")
       .select("role, content, created_at").eq("session_id", session.id).order("created_at", { ascending: true });
 
-    const mirror = (ticketId: string, role: string, content: string, at?: string) =>
-      supabase.from("crm_activities").insert({
+    const mirror = async (ticketId: string, role: string, content: string, at?: string) => {
+      const { error } = await supabase.from("crm_activities").insert({
         type: "chat",
         direction: role === "visitor" ? "inbound" : "outbound",
         body: content,
@@ -186,6 +186,11 @@ serve(async (req) => {
         channel_metadata: { source: "website_chat", session_id: session.id, author: role === "visitor" ? "Customer" : "Assistant" },
         occurred_at: at || new Date().toISOString(),
       });
+      // Silence here cost us a whole conversation: type 'chat' was not in the
+      // crm_activities CHECK, every row bounced, and the ticket opened with
+      // "0 messages" while the chat looked perfectly normal to the customer.
+      if (error) console.error("chat: mirror to ticket failed:", error.message);
+    };
 
     if (session.ticket_id) await mirror(session.ticket_id, "visitor", text);
 
@@ -211,7 +216,7 @@ serve(async (req) => {
         const said = (history || []).filter((m) => m.role === "visitor").map((m) => m.content.trim());
         const meaty = said.find((s) => s.length > 12 && !/^(hi|hey|hello|thanks|ok|yes|no)\b/i.test(s));
         const { data: loc } = session.location_id
-          ? await supabase.from("locations").select("name").eq("id", session.location_id).maybeSingle()
+          ? await supabase.from("locations").select("name, company_id").eq("id", session.location_id).maybeSingle()
           : { data: null };
 
         // What the till told us about itself, if anything. Labelled "reported by"
@@ -222,13 +227,73 @@ serve(async (req) => {
           ? `Reported by the device: ${Object.entries(ctx).map(([k, v]) => `${k}: ${v}`).join(" · ")}`
           : null;
 
+        // The venue IS the customer, so carry its account onto the ticket. A
+        // ticket with no company_id shows "Locations (0)" on screen even when
+        // the affected venue is associated, because that card lists the
+        // company's venues — the link existed, nothing was reading it.
+        const companyId = (loc as { company_id?: string } | null)?.company_id || null;
+
+        // Who to call back. Match before creating, so a regular caller does not
+        // collect a duplicate contact record every time they open the chat. A
+        // name on its own is NOT a contact: we never invent a person we have no
+        // way of reaching. When the chat gave us nothing but the venue is known,
+        // fall back to that account's contact only when it is unambiguous, and
+        // say so on the ticket so nobody reads it as confirmed.
+        let contactId: string | null = session.contact_id || null;
+        let contactNote = "";
+        let contactIsNew = false;
+        const cEmail = String(session.visitor_email || "").trim();
+        const cPhone = String(session.visitor_phone || "").trim();
+
+        if (!contactId && (cEmail || cPhone)) {
+          const { data: hit } = cEmail
+            ? await supabase.from("contacts").select("id").ilike("email", cEmail).limit(1).maybeSingle()
+            : await supabase.from("contacts").select("id").eq("phone", cPhone).limit(1).maybeSingle();
+          if (hit) contactId = hit.id;
+          else {
+            const parts = String(session.visitor_name || "").trim().split(/\s+/).filter(Boolean);
+            const { data: made, error: cErr } = await supabase.from("contacts").insert({
+              first_name: parts[0] || (cEmail ? cEmail.split("@")[0] : "Chat"),
+              last_name: parts.slice(1).join(" ") || null,
+              email: cEmail || null,
+              phone: cPhone || null,
+              source: "chat",
+            }).select("id").maybeSingle();
+            if (cErr) console.error("chat: contact create failed:", cErr.message);
+            if (made) { contactId = made.id; contactIsNew = true; contactNote = "Contact created from this chat."; }
+          }
+        }
+
+        if (!contactId && companyId) {
+          const { data: links } = await supabase.from("associations").select("from_type, from_id, to_type, to_id")
+            .or(`and(from_type.eq.contact,to_type.eq.company,to_id.eq.${companyId}),and(from_type.eq.company,from_id.eq.${companyId},to_type.eq.contact)`);
+          const ids = [...new Set((links || []).map((a: Record<string, string>) => a.from_type === "contact" ? a.from_id : a.to_id))];
+          if (ids.length) {
+            const { data: people } = await supabase.from("contacts").select("id, first_name, last_name").in("id", ids);
+            const ctxAny = (session.context && typeof session.context === "object") ? session.context as Record<string, unknown> : {};
+            const wanted = String(session.visitor_name || ctxAny["Signed in"] || "").trim().toLowerCase();
+            const named = wanted
+              ? (people || []).filter((x: { first_name?: string; last_name?: string }) =>
+                  `${x.first_name || ""} ${x.last_name || ""}`.trim().toLowerCase() === wanted ||
+                  String(x.first_name || "").toLowerCase() === wanted)
+              : [];
+            const pick = named.length === 1 ? named[0] : (people || []).length === 1 ? (people || [])[0] : null;
+            if (pick) {
+              contactId = (pick as { id: string }).id;
+              contactNote = "Contact taken from the venue's account — it was not confirmed in the chat.";
+            }
+          }
+        }
+        if (contactId) session.contact_id = contactId;  // so the mirrored thread carries it too
+
         const header = [
           `Raised from the website chat — ${reason}.`,
           loc?.name ? `Venue: ${loc.name}` : "Venue: not identified.",
           ...(ctxLine ? [ctxLine] : []),
           haveContact()
             ? `Contact: ${[session.visitor_name, session.visitor_email, session.visitor_phone].filter(Boolean).join(" · ")}`
-            : "No contact details were given.",
+            : "No contact details were given in the chat.",
+          ...(contactNote ? [contactNote] : []),
           "The full conversation is in the thread below.",
         ].join("\n");
 
@@ -239,7 +304,8 @@ serve(async (req) => {
           source: "chat",
           customer_email: session.visitor_email || null,
           customer_phone: session.visitor_phone || null,
-          contact_id: session.contact_id,
+          contact_id: contactId,
+          company_id: companyId,
         }).select("id, ticket_number").maybeSingle();
 
         // The whole safety net is "it raises a ticket" — never fail quietly.
@@ -258,6 +324,22 @@ serve(async (req) => {
               from_type: "ticket", from_id: ticket.id,
               to_type: "location", to_id: session.location_id, label: "affected_location",
             });
+          }
+          // The Contacts card reads associations, not tickets.contact_id, so
+          // both are set or the ticket looks unattached.
+          if (contactId) {
+            await supabase.from("associations").insert({
+              from_type: "ticket", from_id: ticket.id,
+              to_type: "contact", to_id: contactId, label: "primary_contact",
+            });
+            // A contact we just invented belongs on the account too, otherwise
+            // it exists nowhere anyone would look for it.
+            if (contactIsNew && companyId) {
+              await supabase.from("associations").insert({
+                from_type: "contact", from_id: contactId,
+                to_type: "company", to_id: companyId, label: "primary_contact",
+              });
+            }
           }
           for (const m of (history || [])) await mirror(ticket.id, m.role, m.content, m.created_at);
         }
