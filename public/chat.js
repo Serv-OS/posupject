@@ -194,7 +194,13 @@
       .then(function (res) {
         typing(false);
         if (!res.ok) { showErr(res.b && res.b.error ? res.b.error : 'Something went wrong.'); return; }
-        if (res.b.session_id) {
+        if (res.b.conversation_ended) {
+          // Passed to the team: forget this session so anything they say next
+          // starts a new conversation rather than being added to a thread
+          // someone is already working.
+          sessionId = null;
+          try { sessionStorage.removeItem(SKEY); } catch (e) {}
+        } else if (res.b.session_id) {
           sessionId = res.b.session_id;
           try { sessionStorage.setItem(SKEY, sessionId); } catch (e) {}
         }

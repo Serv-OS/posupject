@@ -144,7 +144,11 @@ serve(async (req) => {
     let session: any = null;
     if (session_id) {
       const { data } = await supabase.from("chat_sessions").select("*").eq("id", session_id).maybeSingle();
-      session = data;
+      // A closed conversation has been handed to the team and is finished. If a
+      // stale tab still holds its id, start a new conversation rather than
+      // appending to a thread someone is already working — or, as it did before
+      // this, answering with nothing at all.
+      session = data && data.status === "closed" ? null : data;
     }
     if (!session) {
       const { data } = await supabase.from("chat_sessions").insert({
@@ -264,11 +268,22 @@ serve(async (req) => {
         session_id: session.id, role: "bot", content: withNumber, escalated: true,
       });
       if (ticket) await mirror(ticket.id, "bot", withNumber);
+      // Handed to a human: this conversation is done. It closes rather than
+      // sitting "escalated" forever, and the widget is told so it can start a
+      // fresh session next time instead of appending to a thread the team has
+      // already picked up. A ticket that could NOT be raised is the exception —
+      // that stays open, because the customer still needs someone.
+      const handedOver = !!ticket;
       await supabase.from("chat_sessions").update({
-        status: "escalated", ticket_id: ticket?.id || null,
+        status: handedOver ? "closed" : "escalated",
+        ticket_id: ticket?.id || null,
         pending_reason: null, last_at: new Date().toISOString(),
       }).eq("id", session.id);
-      return json({ session_id: session.id, reply: withNumber, escalated: true, ticket_number: ticket?.ticket_number || null });
+      return json({
+        session_id: session.id, reply: withNumber, escalated: true,
+        ticket_number: ticket?.ticket_number || null,
+        conversation_ended: handedOver,
+      });
     };
 
     // Rule 2: never raise a ticket nobody can reply to. Ask once — if they still
