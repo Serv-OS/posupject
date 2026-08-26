@@ -351,6 +351,17 @@ serve(async (req) => {
       if (data) location = data;
     }
 
+    // Persist the link the moment the code resolves. Without this the session is
+    // only tied to a venue further down, where the MODEL has to name the venue in
+    // a signal and the code re-finds it BY NAME. That works until it does not:
+    // it depends on the model echoing the name exactly, and name matching across
+    // these two systems is precisely what the venue code exists to avoid. The
+    // code is deterministic, so link on it, before the model has said anything.
+    if (location && !session.location_id) {
+      await supabase.from("chat_sessions").update({ location_id: location.id }).eq("id", session.id);
+      session.location_id = location.id;
+    }
+
     const names = (pb.persona_names || []).filter(Boolean);
     const persona = names.length ? names[Math.floor(Math.random() * names.length)] : null;
 
