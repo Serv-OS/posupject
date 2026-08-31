@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { fmtDuration } from '../../lib/timer';
-import { Clock, Trash2, Plus, Users, Building2 } from 'lucide-react';
+import { Clock, Trash2, Plus, Users, Building2, MapPin } from 'lucide-react';
 
 const SUBJECT_LABEL = { ticket: 'Ticket', task: 'Task', project: 'Project', company: 'Company', location: 'Location', deal: 'Deal', lead: 'Lead', contact: 'Contact', onboarding: 'Onboarding' };
 
@@ -22,6 +22,7 @@ export default function TimePanel({ profile, onNavigate }) {
   const [entries, setEntries] = useState([]);
   const [members, setMembers] = useState([]);
   const [companies, setCompanies] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [staffFilter, setStaffFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -34,19 +35,21 @@ export default function TimePanel({ profile, onNavigate }) {
   const load = useCallback(async () => {
     setLoading(true);
     let q = supabase.from('time_entries')
-      .select('*, profile:profiles(display_name, email), company:companies(name)')
+      .select('*, profile:profiles(display_name, email), company:companies(name), location:locations(name, city)')
       .not('ended_at', 'is', null)
       .order('started_at', { ascending: false });
     if (range.from) q = q.gte('started_at', `${range.from}T00:00:00`);
     if (range.to) q = q.lte('started_at', `${range.to}T23:59:59`);
-    const [e, m, c] = await Promise.all([
+    const [e, m, c, l] = await Promise.all([
       q,
       supabase.from('profiles').select('id, display_name, email'),
       supabase.from('companies').select('id, name').order('name'),
+      supabase.from('locations').select('id, name, company_id, city').order('name'),
     ]);
     setEntries(e.data || []);
     setMembers(m.data || []);
     setCompanies(c.data || []);
+    setLocations(l.data || []);
     setLoading(false);
   }, [range]);
 
@@ -57,6 +60,8 @@ export default function TimePanel({ profile, onNavigate }) {
   // Aggregations
   const byStaff = {};
   const byCompany = {};
+  const byLocation = {};
+  let unassigned = 0;
   let total = 0;
   for (const e of filtered) {
     const sec = e.duration_seconds || 0;
@@ -65,9 +70,17 @@ export default function TimePanel({ profile, onNavigate }) {
     byStaff[sName] = (byStaff[sName] || 0) + sec;
     const cName = e.company?.name || 'No customer';
     byCompany[cName] = (byCompany[cName] || 0) + sec;
+    // Unattributed time is shown, not hidden — a site breakdown that silently
+    // accounts for less than the total above it is worse than none.
+    if (e.location?.name) byLocation[e.location.name] = (byLocation[e.location.name] || 0) + sec;
+    else unassigned += sec;
   }
   const staffRows = Object.entries(byStaff).sort((a, b) => b[1] - a[1]);
   const companyRows = Object.entries(byCompany).sort((a, b) => b[1] - a[1]);
+  const locationRows = [
+    ...Object.entries(byLocation).sort((a, b) => b[1] - a[1]),
+    ...(unassigned > 0 ? [['No site recorded', unassigned]] : []),
+  ];
 
   const addManual = async () => {
     const hours = parseFloat(form.hours);
@@ -167,6 +180,7 @@ export default function TimePanel({ profile, onNavigate }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <ReportTable icon={<Users size={15} />} title="Hours by staff member" rows={staffRows} total={total} hrs={hrs} />
             <ReportTable icon={<Building2 size={15} />} title="Hours by customer" rows={companyRows} total={total} hrs={hrs} />
+            <ReportTable icon={<MapPin size={15} />} title="Hours by site" rows={locationRows} total={total} hrs={hrs} />
           </div>
 
           {/* Timesheet */}

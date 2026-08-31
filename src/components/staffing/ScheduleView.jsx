@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ChevronLeft, ChevronRight, Users, LayoutGrid, Send, Plus, Trash2, X } from 'lucide-react';
 import { isoDate, mondayOf, weekDays, DOW_SHORT, fmtRange, shiftHours, timeOffOnDate, isAssignable } from '../../lib/staffing';
+import ClockCard from './ClockCard.jsx';
 
 export default function ScheduleView({ profile }) {
   const [monday, setMonday] = useState(() => mondayOf(new Date()));
@@ -66,6 +67,10 @@ export default function ScheduleView({ profile }) {
 
   return (
     <div className="h-full flex flex-col">
+      <div className="px-4 lg:px-6 pt-4">
+        <ClockCard profile={profile} />
+      </div>
+
       {/* Toolbar */}
       <div className="px-6 py-4 border-b border-bdr flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-1">
@@ -189,7 +194,11 @@ function StaffRow({ p, days, todayIso, shiftsFor, areaById, timeOff, canWrite, s
         </div>
         <div className="min-w-0">
           <div className="text-sm text-paper truncate">{p.display_name || p.email?.split('@')[0]}</div>
-          <div className="text-[10px] text-dim">{weekHours}h / {target}h</div>
+          {/* Readable while you build: green on target, amber under, red over. */}
+          <div className="text-[11px] font-semibold tabular-nums"
+            style={{ color: !target ? 'var(--c-dim)' : weekHours > target ? '#dc2626' : weekHours < target ? '#b45309' : '#059669' }}>
+            {Math.round(weekHours * 10) / 10}h{target ? ` / ${target}h` : ''}
+          </div>
         </div>
       </div>
       {days.map((d, i) => {

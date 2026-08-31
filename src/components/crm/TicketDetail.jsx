@@ -173,6 +173,7 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
       subject: draft.subject, description: draft.description || null, stage: draft.stage,
       priority: draft.priority, ticket_type: draft.ticket_type, source: draft.source || null,
       notes: draft.notes || null, owner_id: draft.owner_id || null, company_id: draft.company_id,
+      location_id: draft.location_id || null,
       channel: draft.channel || null, customer_email: draft.customer_email || null,
       customer_phone: draft.customer_phone || null, contact_id: draft.contact_id || null,
     };
@@ -335,8 +336,18 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                     <option value="support">Support</option><option value="bug">Bug</option><option value="feature_request">Feature Request</option><option value="billing">Billing</option><option value="other">Other</option></select></div>
                   <div><label className={label}>Owner</label><select className={input} value={draft.owner_id || ''} onChange={e => set('owner_id', e.target.value || null)}>
                     <option value="">Unassigned</option>{members.map(m => <option key={m.id} value={m.id}>{m.display_name || m.email}</option>)}</select></div>
-                  <div><label className={label}>Company</label><select className={input} value={draft.company_id} onChange={e => set('company_id', e.target.value)}>
+                  <div><label className={label}>Company</label><select className={input} value={draft.company_id}
+                    onChange={e => {
+                      const cid = e.target.value;
+                      const theirs = locations.filter(l => l.company_id === cid);
+                      // One site is not a guess; several is, so make them pick.
+                      setDraft(d => ({ ...d, company_id: cid, location_id: theirs.length === 1 ? theirs[0].id : null }));
+                    }}>
                     {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                  <div><label className={label}>Site</label><select className={input} value={draft.location_id || ''} onChange={e => set('location_id', e.target.value || null)}>
+                    <option value="">Not site specific</option>
+                    {locations.filter(l => !draft.company_id || l.company_id === draft.company_id)
+                      .map(l => <option key={l.id} value={l.id}>{l.name}{l.city ? ` — ${l.city}` : ''}</option>)}</select></div>
                   <div><label className={label}>Channel</label><select className={input} value={draft.channel || ''} onChange={e => set('channel', e.target.value || null)}>
                     <option value="">Not set</option><option value="email">Email</option><option value="sms">SMS</option><option value="whatsapp">WhatsApp</option><option value="phone">Phone</option><option value="web">Web</option></select></div>
                   <div><label className={label}>Customer email</label><input className={input} value={draft.customer_email || ''} onChange={e => set('customer_email', e.target.value)} placeholder="customer@example.com" /></div>

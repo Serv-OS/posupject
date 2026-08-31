@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import TeamActivity from './TeamActivity.jsx';
 
 const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
@@ -22,7 +23,8 @@ export default function UsersPanel({ profile }) {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole]   = useState('editor');
   const [error, setError] = useState('');
-  const [pwTarget, setPwTarget] = useState(null); // { id?, email, name, invite? } to set a password for
+  const [pwTarget, setPwTarget] = useState(null);
+  const [tab, setTab] = useState('people'); // { id?, email, name, invite? } to set a password for
 
   useEffect(() => { load(); }, []);
 
@@ -123,7 +125,20 @@ export default function UsersPanel({ profile }) {
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      {/* Two questions with the same audience (owners): who has access, and
+          who is actually doing anything. */}
+      <div className="px-6 pt-3 flex gap-1 border-b border-bdr shrink-0">
+        {[['people', 'People'], ['activity', 'Activity']].map(([k, lbl]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-t-lg transition ${
+              tab === k ? 'bg-card text-paper border border-b-0 border-bdr' : 'text-muted hover:text-paper'
+            }`}>{lbl}</button>
+        ))}
+      </div>
+
+      {tab === 'activity' && <TeamActivity profile={profile} />}
+
+      <div className="flex-1 overflow-y-auto p-6" style={{ display: tab === 'people' ? undefined : 'none' }}>
         <div className="max-w-3xl space-y-4">
 
           {inviting && (

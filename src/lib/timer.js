@@ -32,8 +32,17 @@ async function resolvePolymorphic(type, id) {
       return { company_id: data?.company_id || null, location_id: data?.location_id || null };
     }
     if (type === 'ticket') {
-      const { data } = await supabase.from('tickets').select('company_id').eq('id', id).maybeSingle();
-      return { company_id: data?.company_id || null };
+      const { data } = await supabase.from('tickets').select('company_id, location_id').eq('id', id).maybeSingle();
+      const companyId = data?.company_id || null;
+      // The ticket's own site wins — someone chose it deliberately.
+      if (data?.location_id) return { company_id: companyId, location_id: data.location_id };
+      // Otherwise attribute only when the customer has exactly ONE site; with
+      // several it is a guess, and a wrong site is worse than none.
+      if (companyId) {
+        const { data: sites } = await supabase.from('locations').select('id').eq('company_id', companyId).limit(2);
+        if (sites?.length === 1) return { company_id: companyId, location_id: sites[0].id };
+      }
+      return { company_id: companyId };
     }
   } catch { /* ignore */ }
   return {};

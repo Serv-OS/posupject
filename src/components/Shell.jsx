@@ -31,6 +31,9 @@ import ReportsPanel from './crm/ReportsPanel.jsx';
 import ScheduleView from './staffing/ScheduleView.jsx';
 import BookingsPanel from './crm/BookingsPanel.jsx';
 import TimeOffView from './staffing/TimeOffView.jsx';
+import TimesheetsView from './staffing/TimesheetsView.jsx';
+import HandoverView from './staffing/HandoverView.jsx';
+import AskPanel from './AskPanel.jsx';
 import StaffView from './staffing/StaffView.jsx';
 import DepartmentsView from './staffing/DepartmentsView.jsx';
 import GlobalSearch from './GlobalSearch.jsx';
@@ -75,7 +78,7 @@ import DataPanel from './crm/DataPanel.jsx';
 import LeadDetail from './crm/LeadDetail.jsx';
 import ProductsPanel from './crm/ProductsPanel.jsx';
 import QuoteBuilder from './crm/QuoteBuilder.jsx';
-import { Sun, Moon } from 'lucide-react';
+import { Sun, Moon, Sparkles } from 'lucide-react';
 
 // The URL reflects the current view so refresh, the browser back button and
 // "open in new tab" all land on the right page. Scheme: #<view> for a
@@ -97,6 +100,7 @@ export default function Shell({ session }) {
   const [detailId, setDetailId] = useState(() => parseHash().detailId);
   const firstUrlSync = useRef(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
   const [leadPrefill, setLeadPrefill] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('servos-crm-theme') || 'light');
 
@@ -235,6 +239,15 @@ export default function Shell({ session }) {
     );
   }
 
+  // Scope follows what you are looking at, so the same question means
+  // something different on a ticket than on the dashboard.
+  const askScope = (() => {
+    if (view === 'ticket_detail' && detailId) return { type: 'ticket', id: detailId };
+    if (view === 'company_detail' && detailId) return { type: 'company', id: detailId };
+    if (view === 'tickets' || view === 'inbox') return { type: 'support' };
+    return { type: 'overview' };
+  })();
+
   const renderMain = () => {
     switch (view) {
       case 'mywork':
@@ -359,6 +372,10 @@ export default function Shell({ session }) {
         return <BookingsPanel profile={profile} />;
       case 'schedule':
         return <ScheduleView profile={profile} />;
+      case 'handover':
+        return <HandoverView profile={profile} onNavigate={navigateTo} />;
+      case 'timesheets':
+        return <TimesheetsView profile={profile} />;
       case 'timeoff':
         return <TimeOffView profile={profile} />;
       case 'staff':
@@ -430,6 +447,10 @@ export default function Shell({ session }) {
             title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </button>
+          <button onClick={() => setAskOpen(true)} title="Ask about what you're looking at"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-ember/15 text-ember-deep border border-ember/25 hover:bg-ember/25 transition text-xs font-semibold">
+            <Sparkles size={14} /> <span className="hidden sm:inline">Ask</span>
+          </button>
           <NotificationBell profile={profile} onNavigate={navigateTo} />
         </div>
       </div>
@@ -437,6 +458,7 @@ export default function Shell({ session }) {
         {renderMain()}
       </main>
       </div>
+      <AskPanel open={askOpen} onClose={() => setAskOpen(false)} scope={askScope} />
       {openItem && (
         <ItemDetail
           itemId={openItem}

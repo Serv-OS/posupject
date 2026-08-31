@@ -47,7 +47,7 @@ const COLLAPSIBLE = [
     ['modules', 'Modules', LayoutGrid], ['feature_requests', 'Feature Requests', Sparkles], ['releases', 'Releases', Flag],
   ] },
   { id: 'workforce', label: 'Workforce', items: [
-    ['time', 'Time Tracking', Clock], ['schedule', 'Schedule', Calendar], ['bookings', 'Booking Page', CalendarCheck], ['timeoff', 'Time Off', Plane],
+    ['handover', 'Handover', ClipboardList], ['time', 'Time Tracking', Clock], ['timesheets', 'Timesheets', ClipboardCheck, 'owner'], ['schedule', 'Schedule', Calendar], ['bookings', 'Booking Page', CalendarCheck], ['timeoff', 'Time Off', Plane],
     ['staff', 'Staff', User], ['departments', 'Departments & Areas', Building2],
   ] },
   { id: 'insights', label: 'Insights', items: [
@@ -74,7 +74,8 @@ const DEFAULT_GROUPS = { appbuild: true, sales: true, finance: false, inventory:
 // A flat searchable index of every static nav item (core + groups + footer).
 const INDEX = [
   ...CORE.map(([key, label, Icon]) => ({ key, label, Icon, section: 'General' })),
-  ...COLLAPSIBLE.flatMap(g => g.items.map(([key, label, Icon]) => ({ key, label, Icon, section: g.label }))),
+  // `need` carries the 4th tuple element: a role required to see this item.
+  ...COLLAPSIBLE.flatMap(g => g.items.map(([key, label, Icon, need]) => ({ key, label, Icon, section: g.label, need }))),
   ...FOOTER_NAV.map(([key, label, Icon]) => ({ key, label, Icon, section: 'Account' })),
 ];
 const BY_KEY = Object.fromEntries(INDEX.map(r => [r.key, r]));
@@ -128,12 +129,13 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
   const results = useMemo(() => {
     if (!query) return [];
     return INDEX
+      .filter(r => !r.need || profile.role === r.need)
       .map(r => { const idx = r.label.toLowerCase().indexOf(query); const inSec = r.section.toLowerCase().includes(query); return (idx < 0 && !inSec) ? null : { r, idx: idx < 0 ? 99 : idx }; })
       .filter(Boolean)
       .sort((a, b) => (a.idx - b.idx) || a.r.label.localeCompare(b.r.label))
       .slice(0, 14)
       .map(x => x.r);
-  }, [query]);
+  }, [query, profile.role]);
   useEffect(() => { setSel(0); }, [query]);
 
   const go = (key) => { setView(key); setQ(''); setSel(0); };
@@ -237,7 +239,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
             {COLLAPSIBLE.map(g => (
               <div key={g.id} className="flex flex-col items-center gap-0.5 w-full">
                 <div className="h-px w-8 bg-bdr my-1.5" />
-                {g.items.map(([key, label, Icon]) => <RailBtn key={key} row={{ key, label, Icon, section: g.label }} active={activeKey === key} onClick={() => go(key)} navKey={key} />)}
+                {g.items.filter(([, , , need]) => !need || profile.role === need).map(([key, label, Icon]) => <RailBtn key={key} row={{ key, label, Icon, section: g.label }} active={activeKey === key} onClick={() => go(key)} navKey={key} />)}
               </div>
             ))}
           </div>
@@ -317,7 +319,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
                 <GroupHeader label={g.label} count={g.items.length} open={open[g.id]} onToggle={() => toggle(g.id)} />
                 {open[g.id] && (
                   <div className="space-y-0.5">
-                    {g.items.map(([key, label, Icon]) => (
+                    {g.items.filter(([, , , need]) => !need || profile.role === need).map(([key, label, Icon]) => (
                       <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => go(key)} navKey={key}
                         pinned={pinned.includes(key)} onPin={() => togglePin(key)} hover={hover} setHover={setHover} rowKey={key} />
                     ))}

@@ -64,3 +64,10 @@ verify_jwt = false
 verify_jwt = false
 [functions.kb-learn]
 verify_jwt = false
+
+# Owner-gated, but the gate is INSIDE the function (verifies the caller and
+# their role, and scopes owner-only data out for everyone else).
+[functions.team-activity]
+verify_jwt = false
+[functions.ai-ask]
+verify_jwt = false
