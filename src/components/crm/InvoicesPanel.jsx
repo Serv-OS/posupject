@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Receipt, Plus, Repeat, X, Trash2, FileDown } from 'lucide-react';
+import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download } from 'lucide-react';
 import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor } from '../../lib/money';
 import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
@@ -70,7 +70,64 @@ export default function InvoicesPanel({ profile, onNavigate }) {
     onNavigate?.('invoice', data.id);
   };
 
+  const [pdfFor, setPdfFor] = useState(null);   // invoice id currently rendering
+
+  // One invoice → its own PDF, straight from the list. Fetches the pieces the
+  // document needs (lines, seller, bill-to) only when asked, so opening the
+  // list stays cheap.
+  const downloadOne = async (inv, e) => {
+    e.stopPropagation();                        // the row navigates; the button must not
+    setPdfFor(inv.id);
+    try {
+      const [{ data: lines }, { data: seller }, { data: contact }] = await Promise.all([
+        supabase.from('invoice_line_items').select('*').eq('invoice_id', inv.id).order('sort'),
+        supabase.from('support_settings')
+          .select('business_name, business_address, business_email, business_phone, logo_url, quote_accent, invoice_terms')
+          .eq('id', 1).maybeSingle(),
+        inv.contact_id
+          ? supabase.from('contacts').select('first_name, last_name, email').eq('id', inv.contact_id).maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
+      const company = companies.find(c => c.id === inv.company_id);
+      const location = locations.find(l => l.id === inv.location_id);
+      const addr = (o) => o ? [o.address, o.city, o.postcode].filter(Boolean).join(', ') : '';
+      const rows = lines || [];
+      const subtotal = rows.reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
+      const tax = rows.reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unit_price) || 0) * (Number(l.tax_rate) || 0) / 100, 0);
+      const { downloadInvoicePdf } = await import('../../lib/invoicePdf');
+      await downloadInvoicePdf({
+        inv: { ...inv, terms: inv.terms || seller?.invoice_terms },
+        lines: rows,
+        // Totals come from the saved header, falling back to the lines — an
+        // invoice already sent must print the figure the customer was given.
+        totals: { subtotal: inv.subtotal ?? subtotal, tax: inv.tax_amount ?? tax,
+                  total: inv.total ?? (subtotal + tax), paid: inv.amount_paid },
+        seller: {
+          name: seller?.business_name, address: seller?.business_address,
+          email: seller?.business_email, phone: seller?.business_phone,
+          logo_url: seller?.logo_url, accent: seller?.quote_accent,
+        },
+        billTo: {
+          companyName: company?.name, companyAddress: addr(company),
+          contactName: contact ? [contact.first_name, contact.last_name].filter(Boolean).join(' ') : '',
+          contactEmail: contact?.email,
+          locationName: location?.name, locationAddress: addr(location),
+        },
+        fmt: (v) => money(v, curOf(inv)), taxLabel: 'VAT', dateLocale: 'en-GB',
+      });
+    } catch (err) { alert('Could not build that PDF: ' + err.message); }
+    setPdfFor(null);
+  };
+
   const custName = (x) => x.location?.name || x.company?.name || x.label || '—';
+  // The invoice is TO a company, FOR a site. Showing only one of them meant
+  // "Coffee Boy - Preston" never said whose account it belongs to, and
+  // "Lightspeed Netherlands B.V." never said which of their 24 sites it was.
+  const partiesOf = (x) => ({
+    company: x.company?.name || null,
+    site: x.location?.name || null,
+  });
+
 
   // Never sum £ and $ into one figure — each currency keeps its own total.
   const open = invoices.filter(i => ['sent', 'viewed'].includes(i.status));
@@ -218,7 +275,15 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                         className="px-5 py-3 flex items-center gap-4 hover:bg-card/50 cursor-pointer">
                         <div className="font-mono text-xs text-dim w-20 shrink-0">INV-{inv.invoice_number}</div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm text-paper font-medium truncate">{custName(inv)}</div>
+                          {(() => {
+                            const { company, site } = partiesOf(inv);
+                            return (
+                              <>
+                                <div className="text-sm text-paper font-medium truncate">{company || site || inv.label || '—'}</div>
+                                {company && site && <div className="text-[11px] text-muted truncate">{site}</div>}
+                              </>
+                            );
+                          })()}
                           {inv.po_number && <div className="text-[10px] text-muted font-mono truncate">PO {inv.po_number}</div>}
                           {inv.viewed_at && <div className="text-[10px] text-emerald-600">👁 Viewed {new Date(inv.viewed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>}
                           {inv.recurring_id && <div className="text-[10px] text-uv flex items-center gap-1"><Repeat size={10} /> recurring</div>}
@@ -226,6 +291,11 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                         <div className="text-xs text-muted shrink-0 w-24 text-right">Due {fmtD(inv.due_date)}</div>
                         <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{money(inv.total, inv.currency)}</div>
                         <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg shrink-0 w-20 text-center ${INV_BADGE[st]}`}>{st}</span>
+                        <button onClick={(e) => downloadOne(inv, e)} disabled={pdfFor === inv.id}
+                          title={`Download INV-${inv.invoice_number} as a PDF`}
+                          className="shrink-0 p-1.5 rounded-lg text-dim hover:text-ember hover:bg-ember/10 transition disabled:opacity-40">
+                          <Download size={15} />
+                        </button>
                       </div>
                     );
                   })}

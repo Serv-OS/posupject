@@ -57,7 +57,9 @@ export default function SettingsPanel({ profile }) {
   const load = async () => {
     setLoading(true);
     const [gc, ss, profs, sla, rg] = await Promise.all([
-      supabase.from('gmail_connections').select('*').order('created_at', { ascending: false }),
+      // The token-free view: everyone can see WHICH mailbox is connected;
+      // the refresh token stays out of the browser entirely.
+      supabase.from('gmail_connections_safe').select('*').order('created_at', { ascending: false }),
       supabase.from('support_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('profiles').select('teams'),
       supabase.from('sla_policies').select('*').order('priority'),
