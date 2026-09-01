@@ -160,7 +160,14 @@ Deno.serve(async (req) => {
         }
       } catch { /* table absent on this instance */ }
     };
-    await Promise.all([countCreated('quotes', 'quote'), countCreated('invoices', 'invoice')]);
+    await Promise.all([
+      countCreated('quotes', 'quote'), countCreated('invoices', 'invoice'),
+      // created_by was added on 1 Sep 2026 after a location ("VSC - Bali Cafe")
+      // was created and the database recorded nobody. Rows older than that
+      // migration have NULL and simply do not appear — better than guessing.
+      countCreated('locations', 'site'), countCreated('companies', 'customer'),
+      countCreated('contacts', 'contact'), countCreated('deals', 'deal'),
+    ]);
     events.sort((a, b) => (a.at < b.at ? 1 : -1));
 
     const people = (profiles || []).map((p) => {
