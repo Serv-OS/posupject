@@ -75,7 +75,7 @@ Deno.serve(async (req) => {
     // ── What they did ───────────────────────────────────────────────────────
     // Two sources cover almost everything a person does here: activities they
     // logged (notes, emails, calls, SMS) and stages they moved.
-    const [{ data: acts }, { data: stages }, { data: tasks }] = await Promise.all([
+    const [{ data: acts }, { data: stages }, { data: tasks }, { data: times }, { data: hands }] = await Promise.all([
       admin.from('crm_activities')
         .select('id, actor_id, type, subject, body, subject_type, subject_id, occurred_at, direction')
         .gte('occurred_at', since30).not('actor_id', 'is', null)
@@ -88,6 +88,17 @@ Deno.serve(async (req) => {
         .select('id, owner_id, title, completed_at')
         .gte('completed_at', since30).not('completed_at', 'is', null)
         .order('completed_at', { ascending: false }).limit(1000),
+      // Logging time IS work, and it was the biggest blind spot: on 1 Sep one
+      // colleague had 15 actions and this function could see 5 of them, because
+      // the other 10 were time entries. Someone doing a full day of site visits
+      // and logging every one looked idle.
+      admin.from('time_entries')
+        .select('id, profile_id, label, created_at, duration_seconds')
+        .gte('created_at', since30).not('profile_id', 'is', null)
+        .order('created_at', { ascending: false }).limit(2000),
+      admin.from('handovers')
+        .select('id, author_id, title, created_at')
+        .gte('created_at', since30).order('created_at', { ascending: false }).limit(200),
     ]);
 
     type Event = { at: string; who: string; what: string; kind: string };
@@ -116,24 +127,41 @@ Deno.serve(async (req) => {
       if (!t.owner_id) continue;
       events.push({ at: t.completed_at!, who: t.owner_id, kind: 'task', what: `Completed task — ${t.title}` });
     }
+    for (const t of times || []) {
+      const mins = Math.round((t.duration_seconds || 0) / 60);
+      events.push({
+        at: t.created_at, who: t.profile_id!, kind: 'time',
+        what: `Logged ${mins ? `${mins}m` : 'time'}${t.label ? ` — ${t.label}` : ''}`,
+      });
+    }
+    for (const h of hands || []) {
+      if (!h.author_id) continue;
+      events.push({ at: h.created_at, who: h.author_id, kind: 'handover', what: `Wrote a handover${h.title ? ` — ${h.title}` : ''}` });
+    }
     events.sort((a, b) => (a.at < b.at ? 1 : -1));
 
     // Records raised, per person — the "produced something" signal that a
     // note-count alone misses.
+    // Raising a record is an action. Only quotes and invoices record who
+    // CREATED them; elsewhere owner_id is an ASSIGNMENT that can be changed
+    // months later, so a record created today and assigned to someone is not
+    // evidence that they did anything. Those are counted as events (with the
+    // creation date) only where the column genuinely means authorship.
     const created: Record<string, number> = {};
-    const countCreated = async (table: string, col = 'created_by', at = 'created_at') => {
+    const countCreated = async (table: string, label: string, col = 'created_by') => {
       try {
-        const { data } = await admin.from(table).select(`${col}`).gte(at, since30).not(col, 'is', null).limit(2000);
-        for (const r of data || []) {
-          const id = (r as Record<string, string>)[col];
-          if (id) created[id] = (created[id] || 0) + 1;
+        const { data } = await admin.from(table).select(`id, ${col}, created_at`)
+          .gte('created_at', since30).not(col, 'is', null).limit(2000);
+        for (const r of (data || []) as Record<string, string>[]) {
+          const id = r[col];
+          if (!id) continue;
+          created[id] = (created[id] || 0) + 1;
+          events.push({ at: r.created_at, who: id, kind: 'created', what: `Raised a ${label}` });
         }
       } catch { /* table absent on this instance */ }
     };
-    await Promise.all([
-      countCreated('quotes'), countCreated('invoices'), countCreated('tickets'),
-      countCreated('deals', 'owner_id'), countCreated('contacts', 'owner_id'),
-    ]);
+    await Promise.all([countCreated('quotes', 'quote'), countCreated('invoices', 'invoice')]);
+    events.sort((a, b) => (a.at < b.at ? 1 : -1));
 
     const people = (profiles || []).map((p) => {
       const mine = events.filter((e) => e.who === p.id);

@@ -157,8 +157,10 @@ export default function TeamActivity({ profile }) {
         </div>
 
         <div className="text-[11px] text-dim">
-          <span className="text-muted">Active day</span> = they logged a note, call, email, SMS or chat, moved something's stage,
-          or completed a task. Work done outside the CRM (site visits, phone calls never logged) will not show here.
+          <span className="text-muted">Active day</span> = they logged a note, call, email, SMS or chat, logged time,
+          moved something's stage, completed a task, wrote a handover, or raised a quote or invoice.
+          Work done outside the CRM will not show here — and owning a record is not an action, so a company
+          assigned to someone says nothing about whether they did anything.
         </div>
 
         {/* Feed */}
