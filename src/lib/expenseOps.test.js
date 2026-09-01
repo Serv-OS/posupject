@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ytdMilesBefore, canDo } from './expenseOps.js';
+import { ytdMilesBefore, canDo, buildApprovePatch, personOf, expenseMatches, sumExpenses } from './expenseOps.js';
 
 const claims = [
   { id: 'a', type: 'mileage', journey_date: '2026-05-01', miles: 4000 },   // TY 2026
@@ -40,4 +40,91 @@ describe('canDo (workflow guards)', () => {
   it('staff cannot submit someone else’s claim', () => {
     expect(canDo('submit', { status: 'draft', submitter_id: 'other' }, staff)).toBe(false);
   });
+});
+
+describe('buildApprovePatch', () => {
+  const now = '2026-09-01T10:00:00.000Z';
+
+  it('stops a personal claim at approved, so it still has to be paid back', () => {
+    const r = buildApprovePatch({ paid_by: 'personal' }, 'me', now);
+    expect(r.status).toBe('approved');
+    expect(r.patch.status).toBe('approved');
+    expect(r.patch.approver_id).toBe('me');
+    expect(r.patch.approved_at).toBe(now);
+    expect(r.patch.rejection_reason).toBeNull();
+    expect(r.patch.paid_at).toBeUndefined();       // nothing paid yet
+  });
+
+  // The one that matters for bulk approve: the company already spent this
+  // money, so approving it must CLOSE it, not queue up a reimbursement.
+  it('closes a company-card claim as paid, with nothing to reimburse', () => {
+    const r = buildApprovePatch({ paid_by: 'company_card' }, 'me', now);
+    expect(r.status).toBe('paid');
+    expect(r.patch.status).toBe('paid');
+    expect(r.patch.paid_at).toBe(now);
+    expect(r.patch.payment_method).toBe('company_card');
+    expect(r.note).toMatch(/no reimbursement/i);
+  });
+
+  it('treats a missing paid_by as personal', () => {
+    expect(buildApprovePatch({}, 'me', now).status).toBe('approved');
+  });
+});
+
+describe('personOf', () => {
+  it('is who the money goes to, not who typed it in', () => {
+    expect(personOf({ submitter_id: 'a', reimburse_to_user_id: 'b' })).toBe('b');
+  });
+  it('falls back to the submitter', () => {
+    expect(personOf({ submitter_id: 'a', reimburse_to_user_id: null })).toBe('a');
+  });
+});
+
+describe('expenseMatches', () => {
+  const e = {
+    expense_number: 1015, submitter_id: 'a', reimburse_to_user_id: 'b', category_id: 'fuel',
+    type: 'staff_claim', paid_by: 'company_card', status: 'submitted',
+    expense_date: '2026-08-25', total: 20, description: 'Fuel', category: { label: 'Fuel' },
+  };
+  it('matches an empty filter', () => expect(expenseMatches(e, {})).toBe(true));
+  it('filters on the person being reimbursed, not the submitter', () => {
+    expect(expenseMatches(e, { person: 'b' })).toBe(true);
+    expect(expenseMatches(e, { person: 'a' })).toBe(false);
+  });
+  it('honours an inclusive date range', () => {
+    expect(expenseMatches(e, { from: '2026-08-25', to: '2026-08-25' })).toBe(true);
+    expect(expenseMatches(e, { from: '2026-08-26' })).toBe(false);
+    expect(expenseMatches(e, { to: '2026-08-24' })).toBe(false);
+  });
+  it('separates company card from personal', () => {
+    expect(expenseMatches(e, { paidBy: 'company_card' })).toBe(true);
+    expect(expenseMatches(e, { paidBy: 'personal' })).toBe(false);
+  });
+  it('treats a missing paid_by as personal when filtering', () => {
+    expect(expenseMatches({ ...e, paid_by: null }, { paidBy: 'personal' })).toBe(true);
+  });
+  it('searches the reference and the description', () => {
+    expect(expenseMatches(e, { q: 'exp-1015' })).toBe(true);
+    expect(expenseMatches(e, { q: 'fuel' })).toBe(true);
+    expect(expenseMatches(e, { q: 'parking' })).toBe(false);
+  });
+  it('does not treat an amount of 0 as "no filter"', () => {
+    expect(expenseMatches({ ...e, total: 0 }, { min: 0, max: 0 })).toBe(true);
+    expect(expenseMatches(e, { max: 10 })).toBe(false);
+  });
+});
+
+describe('sumExpenses', () => {
+  it('keeps reclaimable VAT separate from VAT charged', () => {
+    const t = sumExpenses([
+      { subtotal: 100, tax_amount: 20, total: 120, vat_reclaimable: true, vat_reclaim_amount: 20 },
+      { subtotal: 50, tax_amount: 10, total: 60, vat_reclaimable: false },   // no VAT invoice held
+    ]);
+    expect(t.count).toBe(2);
+    expect(t.net).toBe(150);
+    expect(t.tax).toBe(30);
+    expect(t.gross).toBe(180);
+    expect(t.reclaimable).toBe(20);
+  });
+  it('handles an empty list', () => expect(sumExpenses([]).gross).toBe(0));
 });

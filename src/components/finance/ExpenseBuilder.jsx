@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { round2, gbp2 } from '../../lib/money.js';
 import { computeMileage, taxYearBounds } from '../../lib/rates.js';
-import { ytdMilesBefore, canDo, EXPENSE_ACTIONS, STATUS_LABEL, STATUS_BADGE, isApprover, PAID_BY, isCompanyPaid } from '../../lib/expenseOps.js';
+import { ytdMilesBefore, canDo, EXPENSE_ACTIONS, STATUS_LABEL, STATUS_BADGE, isApprover, PAID_BY, isCompanyPaid, buildApprovePatch } from '../../lib/expenseOps.js';
 import AttachmentsCard from '../crm/AttachmentsCard.jsx';
 
 const nowIso = () => new Date().toISOString();
@@ -118,12 +118,12 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
     load();
   };
 
-  const approve = () => isCompanyPaid(exp)
-    ? act('approve', {
-        approver_id: profile.id, approved_at: nowIso(), rejection_reason: null,
-        paid_at: nowIso(), payment_method: 'company_card',
-      }, 'paid on the company card - no reimbursement due', 'paid')
-    : act('approve', { approver_id: profile.id, approved_at: nowIso(), rejection_reason: null });
+  // Shared with the bulk approve on the list, so the two cannot drift.
+  const approve = () => {
+    const { patch, note, status } = buildApprovePatch(exp, profile.id, nowIso());
+    const { status: _s, ...extra } = patch;
+    return act('approve', extra, note, status);
+  };
   const reject = () => { const r = prompt('Reason for rejection?'); if (r == null) return; act('reject', { approver_id: profile.id, rejection_reason: r }, r); };
   const pay = () => { const ref = prompt('Payment reference (optional):') || null; act('pay', { paid_at: nowIso(), payment_reference: ref }, ref ? `ref ${ref}` : null); };
   const submit = () => act('submit', { submitted_at: nowIso() });
