@@ -1,5 +1,8 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
+import { useStickyState } from '../../lib/stickyState';
+import { downloadListPdf } from '../../lib/listPdf';
+import { computeSla } from '../../lib/sla';
 import SlaBadge from './SlaBadge.jsx';
 import { ListContainer, RecordCard, CardHead, Chip, ChipRow, MetaRow, OwnerTag } from './cardKit.jsx';
 
@@ -28,9 +31,12 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
   const [companies, setCompanies] = useState([]);
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState({ status: 'open', search: '' });
+  // Working a queue means opening ticket after ticket. Only the filter is
+  // remembered — the create form and the loaded rows must still start clean.
+  const [filter, setFilter] = useStickyState('tickets', { status: 'open', search: '' });
   const [locations, setLocations] = useState([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [subject, setSubject] = useState('');
   const [newLocation, setNewLocation] = useState('');
   const [companyId, setCompanyId] = useState('');
@@ -85,6 +91,53 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
   const ownerName = (id) => {
     const m = members.find(u => u.id === id);
     return m ? (m.display_name || m.email.split('@')[0]) : '';
+  };
+
+  const siteName = (id) => locations.find(l => l.id === id)?.name || '';
+  // Year included, unlike the card: a printout outlives the "recent queue"
+  // assumption the on-screen dates lean on.
+  const pdfDate = (v) => (v ? new Date(v).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) : '');
+
+  // Exports `filtered`, never `tickets`: a printed queue that quietly contained
+  // the whole table is the one failure nobody would catch until they acted on it.
+  // Nothing on a ticket is money, so there is no currency column here — the
+  // dual-region currency rule applies to invoices/quotes, which carry one.
+  const exportPdf = async () => {
+    setExporting(true);
+    try {
+      await downloadListPdf({
+        title: 'Support tickets',
+        columns: ['Ref', 'Subject', 'Customer', 'Site', 'Stage', 'Priority', 'SLA', 'Owner', 'Opened', 'Customer replied'],
+        rows: filtered.map(t => {
+          // The same computeSla the card's SlaBadge runs, so the paper says what
+          // the screen said at the moment it was printed.
+          const sla = computeSla(t);
+          return [
+            t.ticket_number ? `#${t.ticket_number}` : '',
+            t.subject,
+            companyName(t.company_id),
+            siteName(t.location_id),
+            STAGE_LABELS[t.stage] || t.stage,
+            t.priority,
+            sla.phase === 'none' ? '' : sla.label,
+            ownerName(t.owner_id),
+            pdfDate(t.created_at),
+            awaitingReply(t) ? 'Yes' : '',
+          ];
+        }),
+        // Only the filters actually narrowing the list, so the PDF says what it
+        // is a list of. "All" narrows nothing, so it is not named.
+        filters: [
+          filter.status === 'open' ? 'Open tickets only'
+            : filter.status === 'all' ? null
+            : `Stage: ${STAGE_LABELS[filter.status] || filter.status}`,
+          filter.search ? `Search: \u201C${filter.search}\u201D` : null,
+        ].filter(Boolean),
+        footNote: 'Tickets the customer has replied to are listed first, then newest first \u2014 the same order as the screen.',
+      });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleLocationChange = (locId) => {
@@ -156,6 +209,10 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
           <option value="all">All</option>
           {Object.entries(STAGE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
+        <button type="button" onClick={exportPdf} disabled={exporting || !filtered.length}
+          className="ml-auto px-3 py-1.5 text-sm text-muted border border-bdr rounded disabled:opacity-50">
+          {exporting ? 'Building PDF...' : 'Export PDF'}
+        </button>
       </div>
 
       {showCreate && (

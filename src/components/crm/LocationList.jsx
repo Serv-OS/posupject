@@ -1,8 +1,10 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import LeadBadge from './LeadBadge.jsx';
-import { primaryLead, LEAD_STAGES } from '../../lib/leadStages';
+import { primaryLead, LEAD_STAGES, LEAD_STAGE_MAP } from '../../lib/leadStages';
 import { ListContainer, RecordCard, CardHead, Chip, ChipRow } from './cardKit.jsx';
+import { useStickyState } from '../../lib/stickyState';
+import { downloadListPdf } from '../../lib/listPdf';
 
 const STATUS_COLORS = {
   prospect: 'bg-blue-100 text-blue-700 border border-blue-200',
@@ -15,10 +17,13 @@ export default function LocationList({ profile, onSelect, onNavigate }) {
   const [locations, setLocations] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [leads, setLeads] = useState([]);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [leadFilter, setLeadFilter] = useState('all');
+  // One object, one key: adding a filter later cannot orphan a stale
+  // sessionStorage entry, and useStickyState merges it onto the default.
+  const [filters, setFilters] = useStickyState('locations', { search: '', status: 'all', lead: 'all' });
+  const { search, status: statusFilter, lead: leadFilter } = filters;
+  const setFilter = (k, v) => setFilters(p => ({ ...p, [k]: v }));
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const blankLoc = { name: '', company_id: '', new_company: '', address: '', city: '', postcode: '', phone: '', email: '', venue_type: '', covers: '', status: 'prospect', notes: '' };
   const [showCreate, setShowCreate] = useState(false);
   const [nl, setNl] = useState(blankLoc);
@@ -109,6 +114,50 @@ export default function LocationList({ profile, onSelect, onNavigate }) {
 
   const companyName = (id) => companies.find(c => c.id === id)?.name || '';
 
+  const leadFilterLabel = leadFilter === 'any' ? 'Has a lead'
+    : leadFilter === 'none' ? 'No lead'
+    : LEAD_STAGE_MAP[leadFilter]?.label || leadFilter;
+
+  // Only the filters actually narrowing the list, so the PDF says what it is a
+  // list of. 'all' narrows nothing, so it is never named.
+  const activeFilters = [
+    search && `Search: \u201C${search}\u201D`,
+    statusFilter !== 'all' && `Status: ${statusFilter}`,
+    leadFilter !== 'all' && `Lead: ${leadFilterLabel}`,
+  ].filter(Boolean);
+
+  // No money on this screen: the venue trading figures live on the record, in
+  // GBP only, so nothing here needs the dual-region currency treatment.
+  const exportPdf = async () => {
+    setExporting(true);
+    try {
+      await downloadListPdf({
+        title: 'Locations',
+        columns: ['Location', 'Venue code', 'Company', 'Contacts', 'City', 'Postcode', 'Status', 'Lead', 'Venue type', 'Covers'],
+        // `filtered`, never `locations`, so the paper copy matches the screen.
+        rows: filtered.map(l => {
+          const lead = leadFor(l.id);
+          return [
+            l.name,
+            l.venue_code || '',
+            companyName(l.company_id),
+            contactNames(l.id),
+            l.city || '',
+            l.postcode || '',
+            l.status || '',
+            lead ? (LEAD_STAGE_MAP[lead.stage]?.label || lead.stage) : '',
+            (l.venue_type || '').replace(/_/g, ' '),
+            l.covers ?? '',
+          ];
+        }),
+        filters: activeFilters,
+        footNote: 'Sorted by location name, as shown on screen. A blank venue code is a venue not yet linked to the POS platform.',
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const counts = useMemo(() => {
     const m = { prospect: 0, onboarding: 0, live: 0, churned: 0 };
     locations.forEach(l => { if (m[l.status] !== undefined) m[l.status]++; });
@@ -124,10 +173,16 @@ export default function LocationList({ profile, onSelect, onNavigate }) {
             {locations.length} total / {counts.live} live / {counts.onboarding} onboarding / {counts.prospect} prospect
           </div>
         </div>
-        {canWrite && (
-          <button onClick={() => setShowCreate(true)}
-            className="px-3 py-1.5 bg-ember text-white text-sm font-semibold rounded-xl hover:bg-ember-deep transition">+ Add location</button>
-        )}
+        <div className="flex gap-2">
+          <button onClick={exportPdf} disabled={exporting || !filtered.length}
+            className="px-3 py-1.5 text-sm text-muted border border-bdr rounded-xl transition disabled:opacity-50">
+            {exporting ? 'Building PDF...' : 'Export PDF'}
+          </button>
+          {canWrite && (
+            <button onClick={() => setShowCreate(true)}
+              className="px-3 py-1.5 bg-ember text-white text-sm font-semibold rounded-xl hover:bg-ember-deep transition">+ Add location</button>
+          )}
+        </div>
       </div>
 
       {showCreate && (
@@ -176,10 +231,10 @@ export default function LocationList({ profile, onSelect, onNavigate }) {
       )}
 
       <div className="px-6 py-3 border-b border-bdr flex items-center gap-2">
-        <input value={search} onChange={e => setSearch(e.target.value)}
+        <input value={search} onChange={e => setFilter('search', e.target.value)}
           placeholder="Search locations..."
           className="px-3 py-1.5 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember w-72" />
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+        <select value={statusFilter} onChange={e => setFilter('status', e.target.value)}
           className="px-2 py-1.5 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember">
           <option value="all">All statuses</option>
           <option value="prospect">Prospect</option>
@@ -187,7 +242,7 @@ export default function LocationList({ profile, onSelect, onNavigate }) {
           <option value="live">Live</option>
           <option value="churned">Churned</option>
         </select>
-        <select value={leadFilter} onChange={e => setLeadFilter(e.target.value)}
+        <select value={leadFilter} onChange={e => setFilter('lead', e.target.value)}
           className="px-2 py-1.5 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember">
           <option value="all">All leads</option>
           <option value="any">Has a lead</option>

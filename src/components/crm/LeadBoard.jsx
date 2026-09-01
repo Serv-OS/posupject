@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
+import { useStickyState } from '../../lib/stickyState';
+import { downloadListPdf } from '../../lib/listPdf';
 
 const STAGES = [
   { key: 'new_lead',      label: 'New Lead',          color: '#3b82f6' },
@@ -28,8 +30,11 @@ export default function LeadBoard({ profile, onNavigate, prefill, onPrefillConsu
   const [locations, setLocations] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [members, setMembers] = useState([]);
-  const [viewMode, setViewMode] = useState('board');
-  const [search, setSearch] = useState('');
+  // Board-vs-list and the search box are how you left the screen, so they come
+  // back with you from a lead record. One object, one key, safe to extend.
+  const [filters, setFilters] = useStickyState('leads', { view: 'board', search: '' });
+  const { view: viewMode, search } = filters;
+  const setFilter = (k, v) => setFilters(p => ({ ...p, [k]: v }));
   const [showCreate, setShowCreate] = useState(false);
   const [dragItem, setDragItem] = useState(null);
 
@@ -109,6 +114,36 @@ export default function LeadBoard({ profile, onNavigate, prefill, onPrefillConsu
   const companyName = (id) => companies.find(c => c.id === id)?.name || '';
   const locationName = (id) => locations.find(l => l.id === id)?.name || '';
   const contactFullName = (id) => { const c = contacts.find(x => x.id === id); return c ? [c.first_name, c.last_name].filter(Boolean).join(' ') || c.email : ''; };
+
+  // Print what you are looking at: the board reads stage by stage, the list
+  // reads newest first, so the row order follows the view you are in. Leads
+  // carry no value or currency column, so there is no money on this sheet.
+  const exportPdf = () => {
+    const rows = viewMode === 'board'
+      ? STAGES.flatMap(s => byStage[s.key] || [])
+      : filtered;
+    return downloadListPdf({
+      title: 'Leads',
+      columns: ['Lead', 'Stage', 'Priority', 'Company', 'Location', 'Contact', 'Venue', 'Source', 'Owner', 'Next action'],
+      rows: rows.map(l => [
+        l.name,
+        STAGE_LABELS[l.stage] || l.stage || '',
+        l.priority || '',
+        companyName(l.company_id),
+        locationName(l.location_id),
+        contactFullName(l.contact_id),
+        [l.venue_type?.replace(/_/g, ' '), l.covers ? `${l.covers} covers` : ''].filter(Boolean).join(' / '),
+        (l.source || '').replace(/_/g, ' '),
+        ownerName(l.owner_id),
+        l.next_action || '',
+      ]),
+      // Search is the only filter this screen has; say so when it is on.
+      filters: search ? [`Search: "${search}"`] : [],
+      footNote: viewMode === 'board'
+        ? 'Ordered by pipeline stage, as shown on the board.'
+        : 'Newest first, as shown in the list.',
+    });
+  };
 
   // Filtered search results
   const companyResults = useMemo(() => {
@@ -261,12 +296,14 @@ export default function LeadBoard({ profile, onNavigate, prefill, onPrefillConsu
           </div>
         </div>
         <div className="flex gap-2">
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search leads..."
+          <input value={search} onChange={e => setFilter('search', e.target.value)} placeholder="Search leads..."
             className="px-3 py-1.5 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember w-48" />
           <div className="flex bg-card border border-bdr rounded-xl">
-            <button onClick={() => setViewMode('board')} className={`px-3 py-1 text-xs rounded-xl ${viewMode === 'board' ? 'text-paper bg-ink-soft' : 'text-muted'}`}>Board</button>
-            <button onClick={() => setViewMode('list')} className={`px-3 py-1 text-xs rounded-xl ${viewMode === 'list' ? 'text-paper bg-ink-soft' : 'text-muted'}`}>List</button>
+            <button onClick={() => setFilter('view', 'board')} className={`px-3 py-1 text-xs rounded-xl ${viewMode === 'board' ? 'text-paper bg-ink-soft' : 'text-muted'}`}>Board</button>
+            <button onClick={() => setFilter('view', 'list')} className={`px-3 py-1 text-xs rounded-xl ${viewMode === 'list' ? 'text-paper bg-ink-soft' : 'text-muted'}`}>List</button>
           </div>
+          <button onClick={exportPdf} disabled={!filtered.length}
+            className="px-3 py-1.5 text-sm text-muted border border-bdr rounded-xl hover:text-paper transition disabled:opacity-50">Export PDF</button>
           {canWrite && <button onClick={() => setShowCreate(true)} className="px-3 py-1.5 bg-ember text-white text-sm font-semibold rounded-xl hover:bg-ember-deep transition">+ Add lead</button>}
         </div>
       </div>

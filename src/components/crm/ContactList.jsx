@@ -1,8 +1,10 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import LeadBadge from './LeadBadge.jsx';
-import { primaryLead, LEAD_STAGES } from '../../lib/leadStages';
+import { primaryLead, LEAD_STAGES, LEAD_STAGE_MAP } from '../../lib/leadStages';
 import { ListContainer, RecordCard, CardHead, Chip, ChipRow } from './cardKit.jsx';
+import { useStickyState } from '../../lib/stickyState';
+import { downloadListPdf } from '../../lib/listPdf';
 
 export default function ContactList({ profile, onSelect }) {
   const [contacts, setContacts] = useState([]);
@@ -10,8 +12,12 @@ export default function ContactList({ profile, onSelect }) {
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
   const [leads, setLeads] = useState([]);
-  const [search, setSearch] = useState('');
-  const [leadFilter, setLeadFilter] = useState('all');
+  const [members, setMembers] = useState([]);
+  // Filters live in one sticky object so opening a contact and coming back does
+  // not dump you into the unfiltered list again.
+  const [filters, setFilters] = useStickyState('contacts', { search: '', leadFilter: 'all' });
+  const { search, leadFilter } = filters;
+  const setFilter = (k, v) => setFilters(p => ({ ...p, [k]: v }));
   const [loading, setLoading] = useState(true);
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
@@ -20,18 +26,22 @@ export default function ContactList({ profile, onSelect }) {
 
   const load = async () => {
     setLoading(true);
-    const [c, a, co, ld, loc] = await Promise.all([
+    const [c, a, co, ld, loc, m] = await Promise.all([
       supabase.from('contacts').select('*').order('last_name'),
       supabase.from('associations').select('*').or('from_type.eq.contact,to_type.eq.contact'),
       supabase.from('companies').select('id, name'),
       supabase.from('leads').select('id, contact_id, stage, name'),
       supabase.from('locations').select('id, name'),
+      // Owners are not on the card, but a printed contact list is useless
+      // without knowing who each one belongs to.
+      supabase.from('profiles').select('id, email, display_name'),
     ]);
     setContacts(c.data || []);
     setAssociations(a.data || []);
     setCompanies(co.data || []);
     setLeads(ld.data || []);
     setLocations(loc.data || []);
+    setMembers(m.data || []);
     setLoading(false);
   };
 
@@ -75,6 +85,43 @@ export default function ContactList({ profile, onSelect }) {
 
   const locationCount = (contactId) => linkedIds(contactId, 'location').length;
 
+  const ownerName = (id) => {
+    const m = members.find(u => u.id === id);
+    return m ? (m.display_name || m.email.split('@')[0]) : '';
+  };
+
+  const fullNameOf = (c) => [c.first_name, c.last_name].filter(Boolean).join(' ') || 'No name';
+  const stageLabel = (key) => LEAD_STAGE_MAP[key]?.label || key;
+
+  const exportPdf = async () => {
+    // `filtered` is the exact array the cards below map over, so the PDF can
+    // never quietly include rows the current filter is hiding. Contacts hold no
+    // money, so nothing here is currency-bearing.
+    const active = [];
+    if (search) active.push(`Search: "${search}"`);
+    if (leadFilter === 'any') active.push('Lead: has a lead');
+    else if (leadFilter === 'none') active.push('Lead: no lead');
+    else if (leadFilter !== 'all') active.push(`Lead: ${stageLabel(leadFilter)}`);
+
+    await downloadListPdf({
+      title: 'Contacts',
+      columns: ['Contact', 'Job title', 'Email', 'Phone', 'Company', 'Lead', 'Owner'],
+      rows: filtered.map(c => {
+        const lead = leadFor(c.id);
+        return [
+          fullNameOf(c),
+          c.job_title || '',
+          c.email || '',
+          c.phone || '',
+          getCompanyNames(c.id),
+          lead ? stageLabel(lead.stage) : '',
+          ownerName(c.owner_id),
+        ];
+      }),
+      filters: active,
+    });
+  };
+
   const blank = { first_name: '', last_name: '', email: '', phone: '', job_title: '', company_id: '', source: '', notes: '' };
   const [showCreate, setShowCreate] = useState(false);
   const [nc, setNc] = useState(blank);
@@ -116,16 +163,20 @@ export default function ContactList({ profile, onSelect }) {
       </div>
 
       <div className="px-6 py-3 border-b border-bdr flex items-center gap-2">
-        <input value={search} onChange={e => setSearch(e.target.value)}
+        <input value={search} onChange={e => setFilter('search', e.target.value)}
           placeholder="Search contacts..."
           className="px-3 py-1.5 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember w-72" />
-        <select value={leadFilter} onChange={e => setLeadFilter(e.target.value)}
+        <select value={leadFilter} onChange={e => setFilter('leadFilter', e.target.value)}
           className="px-2 py-1.5 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember">
           <option value="all">All contacts</option>
           <option value="any">Has a lead</option>
           <option value="none">No lead</option>
           {LEAD_STAGES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
         </select>
+        <button onClick={exportPdf} disabled={!filtered.length}
+          className="ml-auto px-3 py-1.5 text-sm text-muted border border-bdr rounded hover:text-paper transition disabled:opacity-50">
+          Export PDF
+        </button>
       </div>
 
       {showCreate && (
@@ -157,7 +208,7 @@ export default function ContactList({ profile, onSelect }) {
         )}
         {!loading && filtered.map(c => {
           const lead = leadFor(c.id);
-          const fullName = [c.first_name, c.last_name].filter(Boolean).join(' ') || 'No name';
+          const fullName = fullNameOf(c);
           return (
             <RecordCard key={c.id} onClick={() => onSelect(c.id)}>
               <CardHead title={fullName} subtitle={c.job_title} badge={lead && <LeadBadge stage={lead.stage} />} />

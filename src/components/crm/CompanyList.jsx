@@ -1,16 +1,21 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import LeadBadge from './LeadBadge.jsx';
-import { primaryLead, LEAD_STAGES } from '../../lib/leadStages';
+import { primaryLead, LEAD_STAGES, LEAD_STAGE_MAP } from '../../lib/leadStages';
 import { ListContainer, RecordCard, CardHead, Chip, ChipRow, MetaRow, OwnerTag } from './cardKit.jsx';
+import { useStickyState } from '../../lib/stickyState';
+import { downloadListPdf } from '../../lib/listPdf';
 
 export default function CompanyList({ profile, onSelect }) {
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
   const [members, setMembers] = useState([]);
   const [leads, setLeads] = useState([]);
-  const [search, setSearch] = useState('');
-  const [leadFilter, setLeadFilter] = useState('all');
+  // Filters live in one sticky object so opening a company and coming back does
+  // not dump you into the unfiltered list again.
+  const [filters, setFilters] = useStickyState('companies', { search: '', leadFilter: 'all' });
+  const { search, leadFilter } = filters;
+  const setFilter = (k, v) => setFilters(p => ({ ...p, [k]: v }));
   const [loading, setLoading] = useState(true);
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
@@ -62,6 +67,44 @@ export default function CompanyList({ profile, onSelect }) {
     return m ? (m.display_name || m.email.split('@')[0]) : '';
   };
 
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '';
+  const stageLabel = (key) => LEAD_STAGE_MAP[key]?.label || key;
+
+  const exportPdf = async () => {
+    // `filtered` is the exact array the cards below map over, so the PDF can
+    // never quietly include rows the current filter is hiding.
+    //
+    // Companies carry no money and no currency of their own (currency lives on
+    // invoices and quotes), so the only region marker to print is the country
+    // code — worth a column now that the book is split UK/US.
+    const hasCountry = filtered.some(c => c.country);
+    const active = [];
+    if (search) active.push(`Search: "${search}"`);
+    if (leadFilter === 'any') active.push('Lead: has a lead');
+    else if (leadFilter === 'none') active.push('Lead: no lead');
+    else if (leadFilter !== 'all') active.push(`Lead: ${stageLabel(leadFilter)}`);
+
+    await downloadListPdf({
+      title: 'Companies',
+      columns: ['Company', 'Industry', 'City', ...(hasCountry ? ['Country'] : []), 'Lead', 'Owner', 'Locations', 'Created'],
+      rows: filtered.map(c => {
+        const lead = leadFor(c.id);
+        const live = liveCount(c.id);
+        return [
+          c.name,
+          c.industry || '',
+          c.city || '',
+          ...(hasCountry ? [c.country || ''] : []),
+          lead ? stageLabel(lead.stage) : '',
+          ownerName(c.owner_id),
+          `${locCount(c.id)}${live > 0 ? ` (${live} live)` : ''}`,
+          fmtDate(c.created_at),
+        ];
+      }),
+      filters: active,
+    });
+  };
+
   const blank = { name: '', domain: '', industry: '', phone: '', email: '', website: '', address: '', city: '', postcode: '', country: '', notes: '' };
   const [showCreate, setShowCreate] = useState(false);
   const [nc, setNc] = useState(blank);
@@ -100,16 +143,20 @@ export default function CompanyList({ profile, onSelect }) {
       </div>
 
       <div className="px-6 py-3 border-b border-bdr flex items-center gap-2">
-        <input value={search} onChange={e => setSearch(e.target.value)}
+        <input value={search} onChange={e => setFilter('search', e.target.value)}
           placeholder="Search companies..."
           className="px-3 py-1.5 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember w-72" />
-        <select value={leadFilter} onChange={e => setLeadFilter(e.target.value)}
+        <select value={leadFilter} onChange={e => setFilter('leadFilter', e.target.value)}
           className="px-2 py-1.5 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember">
           <option value="all">All companies</option>
           <option value="any">Has a lead</option>
           <option value="none">No lead</option>
           {LEAD_STAGES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
         </select>
+        <button onClick={exportPdf} disabled={!filtered.length}
+          className="ml-auto px-3 py-1.5 text-sm text-muted border border-bdr rounded hover:text-paper transition disabled:opacity-50">
+          Export PDF
+        </button>
       </div>
 
       {showCreate && (
