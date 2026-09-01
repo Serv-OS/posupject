@@ -58,7 +58,11 @@ export default function TimePanel({ profile, onNavigate }) {
   const filtered = staffFilter === 'all' ? entries : entries.filter(e => e.profile_id === staffFilter);
 
   // Aggregations
-  const byStaff = {};
+  // Seed every staff member at zero. Previously someone who logged no time
+  // simply vanished from the list, which reads as "not on the team" rather than
+  // "did not log anything" — the two need to look different.
+  const byStaff = Object.fromEntries(
+    members.map(m => [m.display_name || m.email?.split('@')[0] || 'Unknown', 0]));
   const byCompany = {};
   const byLocation = {};
   let unassigned = 0;
@@ -75,7 +79,7 @@ export default function TimePanel({ profile, onNavigate }) {
     if (e.location?.name) byLocation[e.location.name] = (byLocation[e.location.name] || 0) + sec;
     else unassigned += sec;
   }
-  const staffRows = Object.entries(byStaff).sort((a, b) => b[1] - a[1]);
+  const staffRows = Object.entries(byStaff).sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]));
   const companyRows = Object.entries(byCompany).sort((a, b) => b[1] - a[1]);
   const locationRows = [
     ...Object.entries(byLocation).sort((a, b) => b[1] - a[1]),
@@ -110,7 +114,11 @@ export default function TimePanel({ profile, onNavigate }) {
   };
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
-  const hrs = (sec) => (sec / 3600).toFixed(1);
+  const hrs = (sec) => {
+    if (!sec) return '0.0';
+    if (sec < 360) return `${Math.max(1, Math.round(sec / 60))}m`;  // under 6 min: minutes, not "0.0"
+    return (sec / 3600).toFixed(1);
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -238,7 +246,9 @@ function ReportTable({ icon, title, rows, total, hrs }) {
               <div key={name} className="px-3 py-2">
                 <div className="flex items-center justify-between text-sm mb-1">
                   <span className="text-paper truncate">{name}</span>
-                  <span className="font-mono font-semibold text-paper tabular-nums ml-2">{hrs(sec)}h</span>
+                  <span className={`font-mono font-semibold tabular-nums ml-2 ${sec ? 'text-paper' : 'text-dim'}`}>
+                    {(() => { const v = hrs(sec); return v.endsWith('m') ? v : `${v}h`; })()}
+                  </span>
                 </div>
                 <div className="h-1.5 rounded-full bg-card overflow-hidden">
                   <div className="h-full bg-ember rounded-full" style={{ width: `${pct}%` }} />
