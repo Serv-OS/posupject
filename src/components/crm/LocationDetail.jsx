@@ -53,15 +53,34 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
     setMembers(m.data || []);
     setProjects(prj.data || []);
     setLeads(ld.data || []);
+    // Deals and onboardings belong to THIS LOCATION, not to whoever happens to
+    // own the company this month. Fetching them by the location's company_id
+    // was wrong three ways: the page listed every sibling site's deals as if
+    // they were this one's, a location moved to another company instantly lost
+    // its own deal off the page while a stranger's appeared in its place, and a
+    // location with no company kept whatever the previously-viewed one had.
+    // Nothing was ever deleted; the page was asking the wrong question.
+    const [assoc, ob] = await Promise.all([
+      // Written from either end depending on which screen made the link.
+      supabase.from('associations').select('from_type, from_id, to_type, to_id')
+        .or(`and(to_type.eq.location,to_id.eq.${locationId}),and(from_type.eq.location,from_id.eq.${locationId})`),
+      supabase.from('onboardings').select('*').eq('location_id', locationId).order('created_at', { ascending: false }),
+    ]);
+    const dealIds = [...new Set((assoc.data || [])
+      .map(a => (a.from_type === 'deal' ? a.from_id : a.to_type === 'deal' ? a.to_id : null))
+      .filter(Boolean))];
+    const d = dealIds.length
+      ? await supabase.from('deals').select('*').in('id', dealIds).order('created_at', { ascending: false })
+      : { data: [] };
+    setDeals(d.data || []);
+    setOnboardings(ob.data || []);
+
+    // The company block is the only part that legitimately depends on the link.
     if (l.data?.company_id) {
-      const [c, d, ob] = await Promise.all([
-        supabase.from('companies').select('id, name').eq('id', l.data.company_id).single(),
-        supabase.from('deals').select('*').eq('company_id', l.data.company_id).order('created_at', { ascending: false }),
-        supabase.from('onboardings').select('*').eq('company_id', l.data.company_id).order('created_at', { ascending: false }),
-      ]);
-      setCompany(c.data);
-      setDeals(d.data || []);
-      setOnboardings(ob.data || []);
+      const { data: c } = await supabase.from('companies').select('id, name').eq('id', l.data.company_id).single();
+      setCompany(c);
+    } else {
+      setCompany(null);
     }
   };
 
