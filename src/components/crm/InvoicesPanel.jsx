@@ -230,8 +230,12 @@ export default function InvoicesPanel({ profile, onNavigate }) {
 
   const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
   // One definition for header, filters and rows so the columns cannot drift.
-  const GRID = 'grid items-center gap-3 px-5 grid-cols-[96px_minmax(0,1.4fr)_minmax(0,1.4fr)_148px_116px_88px_34px]';
+  const GRID = 'grid items-center gap-3 px-5 grid-cols-[96px_minmax(0,1.4fr)_minmax(0,1.4fr)_178px_108px_84px_34px]';
   const colInput = 'w-full px-2 py-1 bg-card border border-bdr rounded-lg text-[11px] text-paper placeholder-dim focus:outline-none focus:border-ember';
+  // Safari draws an EMPTY date box with today's date greyed in, so an untouched
+  // filter looks like it is already narrowing the list. Never let the browser's
+  // empty state decide whether a filter reads as on: an active one is outlined.
+  const colCls = (v) => `${colInput}${v ? ' border-ember bg-ember/10' : ''}`;
   const setCol = (k, v) => setFilter('cols', { ...cols, [k]: v });
   const colsActive = Object.values(cols).some(Boolean);
 
@@ -310,18 +314,27 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                 <div />
               </div>
               <div className={`${GRID} py-2 border-b border-bdr bg-card/40`}>
-                <input className={colInput} value={cols.num} onChange={e => setCol('num', e.target.value)} placeholder="1085" />
-                <input className={colInput} value={cols.company} onChange={e => setCol('company', e.target.value)} placeholder="Filter company…" />
-                <input className={colInput} value={cols.location} onChange={e => setCol('location', e.target.value)} placeholder="Filter location…" />
+                <input className={colCls(cols.num)} value={cols.num} onChange={e => setCol('num', e.target.value)} placeholder="1085" />
+                <input className={colCls(cols.company)} value={cols.company} onChange={e => setCol('company', e.target.value)} placeholder="Filter company…" />
+                <input className={colCls(cols.location)} value={cols.location} onChange={e => setCol('location', e.target.value)} placeholder="Filter location…" />
+                {/* Two boxes because a due date is a RANGE. They were unlabelled
+                    and read as one date repeated. A date input cannot carry a
+                    placeholder, so the words have to be on the page. */}
                 <div className="flex flex-col gap-1">
-                  <input type="date" className={colInput} value={cols.dueFrom} onChange={e => setCol('dueFrom', e.target.value)} title="Due on or after" />
-                  <input type="date" className={colInput} value={cols.dueTo} onChange={e => setCol('dueTo', e.target.value)} title="Due on or before" />
+                  <label className="flex items-center gap-1">
+                    <span className="text-[9px] font-mono uppercase text-dim w-7 shrink-0">From</span>
+                    <input type="date" className={colCls(cols.dueFrom)} value={cols.dueFrom} onChange={e => setCol('dueFrom', e.target.value)} />
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <span className="text-[9px] font-mono uppercase text-dim w-7 shrink-0">To</span>
+                    <input type="date" className={colCls(cols.dueTo)} value={cols.dueTo} onChange={e => setCol('dueTo', e.target.value)} />
+                  </label>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <input className={colInput + ' text-right'} value={cols.min} onChange={e => setCol('min', e.target.value)} placeholder="min" inputMode="decimal" />
-                  <input className={colInput + ' text-right'} value={cols.max} onChange={e => setCol('max', e.target.value)} placeholder="max" inputMode="decimal" />
+                  <input className={colCls(cols.min) + ' text-right'} value={cols.min} onChange={e => setCol('min', e.target.value)} placeholder="min" inputMode="decimal" />
+                  <input className={colCls(cols.max) + ' text-right'} value={cols.max} onChange={e => setCol('max', e.target.value)} placeholder="max" inputMode="decimal" />
                 </div>
-                <select className={colInput} value={statusFilter} onChange={e => setFilter('statusFilter', e.target.value)}>
+                <select className={colCls(statusFilter !== 'all')} value={statusFilter} onChange={e => setFilter('statusFilter', e.target.value)}>
                   <option value="all">All</option><option value="draft">Draft</option>
                   <option value="sent">Sent</option><option value="overdue">Overdue</option><option value="paid">Paid</option>
                 </select>
