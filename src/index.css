@@ -330,3 +330,18 @@ body {
     flex-basis: auto !important;
   }
 }
+
+/* Native dropdowns in dark mode.
+   Two things were wrong. First, `color-scheme: dark` sat on `body`, but the
+   browser paints native popups (select lists, date pickers, scrollbars) from
+   the ROOT element, which was still `normal` — so every dropdown rendered in
+   the light scheme while the page behind it was dark. Shell.jsx now sets it on
+   documentElement too.
+   Second, --card is a TRANSLUCENT white. That works for a control sitting on
+   the page, but a popup is its own surface with nothing behind it to tint, so
+   options came out unreadable. They need an opaque colour of their own. */
+select option,
+select optgroup {
+  background-color: var(--scene);   /* opaque in both themes, unlike --card */
+  color: rgb(var(--c-text));
+}

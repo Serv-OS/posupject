@@ -106,6 +106,9 @@ export default function Shell({ session }) {
 
   useEffect(() => {
     document.body.classList.toggle('dark', theme === 'dark');
+    // Native popups take their scheme from the ROOT, not the body, so without
+    // this every select dropdown rendered light on a dark page.
+    document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
     localStorage.setItem('servos-crm-theme', theme);
   }, [theme]);
 
