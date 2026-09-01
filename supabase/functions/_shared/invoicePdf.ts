@@ -38,7 +38,11 @@ export async function buildInvoicePdfBytes({ inv = {} as any, lines = [] as any[
   let y = M;
 
   // Header — seller (left) + INVOICE meta (right)
-  const logoData = seller.logo_url ? await toDataUrl(seller.logo_url) : null;
+  // Prefer the pre-encoded logo. Fetching and base64-encoding the logo PNG for
+  // every invoice was the single biggest CPU cost in this function and is what
+  // exhausted the worker's budget mid-run. seller.logo_data is already small
+  // and already encoded, so this costs nothing. logo_url stays the fallback.
+  const logoData = seller.logo_data || (seller.logo_url ? await toDataUrl(seller.logo_url) : null);
   let leftBottom = y;
   if (logoData) {
     try {
