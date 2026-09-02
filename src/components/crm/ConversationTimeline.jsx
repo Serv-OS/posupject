@@ -834,7 +834,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
 
             {/* @mention dropdown */}
             {showMentions && filteredMembers.length > 0 && (
-              <div className="absolute bottom-full left-0 mb-1 w-64 glass-raised rounded-xl overflow-hidden shadow-lg z-10 max-h-40 overflow-y-auto">
+              <div className="absolute bottom-full left-0 mb-1 w-64 menu-surface rounded-xl overflow-hidden shadow-lg z-10 max-h-40 overflow-y-auto">
                 {filteredMembers.slice(0, 8).map(m => (
                   <button key={m.id} onClick={() => insertMention(m)}
                     className="w-full px-3 py-2 text-left text-sm text-paper hover:bg-ember/10 flex items-center gap-2 transition">
@@ -869,7 +869,7 @@ export default function ConversationTimeline({ subjectType, subjectId, profile, 
             {askStatus && (
               <>
                 <div className="lg:hidden fixed inset-0 z-40 bg-black/40" onClick={() => setAskStatus(false)} />
-                <div className="fixed inset-x-3 bottom-3 z-50 lg:absolute lg:inset-x-auto lg:bottom-11 lg:right-2 lg:z-30 lg:w-60 glass-raised rounded-2xl lg:rounded-xl shadow-xl overflow-hidden"
+                <div className="fixed inset-x-3 bottom-3 z-50 lg:absolute lg:inset-x-auto lg:bottom-11 lg:right-2 lg:z-30 lg:w-60 menu-surface rounded-2xl lg:rounded-xl shadow-xl overflow-hidden"
                   style={{ marginBottom: 'env(safe-area-inset-bottom)' }}>
                   <div className="px-3 py-2 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim border-b border-bdr">Send &amp; set ticket status</div>
                   {TICKET_STAGES.map(s => (

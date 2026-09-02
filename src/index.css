@@ -35,6 +35,7 @@
   --glass-bg: linear-gradient(160deg, rgba(255,255,255,.74), rgba(255,255,255,.50));
   --card-bg: linear-gradient(160deg, rgba(255,255,255,.80), rgba(255,255,255,.56));
   --raised-bg: linear-gradient(160deg, rgba(255,255,255,.88), rgba(255,255,255,.66));
+  --menu-bg: #FFFFFF;
   --glass-border: rgba(255,255,255,.85);
   --glass-hi: inset 0 1px 0 rgba(255,255,255,.95);
   --glass-lo: inset 0 -1px 0 rgba(20,40,28,.05);
@@ -66,6 +67,7 @@ body.dark {
   --glass-bg: linear-gradient(160deg, rgba(255,255,255,.085), rgba(255,255,255,.025));
   --card-bg: linear-gradient(160deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
   --raised-bg: linear-gradient(160deg, rgba(255,255,255,.10), rgba(255,255,255,.04));
+  --menu-bg: #191D1B;   /* lifted off --scene so it still reads as raised */
   --glass-border: rgba(255,255,255,.12);
   --glass-hi: inset 0 1px 0 rgba(255,255,255,.28);
   --glass-lo: inset 0 -1px 0 rgba(0,0,0,.22);
@@ -344,4 +346,20 @@ select option,
 select optgroup {
   background-color: var(--scene);   /* opaque in both themes, unlike --card */
   color: rgb(var(--c-text));
+}
+
+/* Floating menus must be readable, full stop.
+   .glass-raised leans on backdrop-filter to turn a 4%-white surface into
+   something solid. That works when the blur can sample the page behind it, but
+   backdrop-filter only samples within its own backdrop root, and an ancestor
+   with backdrop-filter, filter, transform or opacity starts a new one. These
+   popovers open INSIDE .glass-card, so the blur had nothing to sample and the
+   dark surface stayed 96% transparent: the Send and status menu was see-through
+   with the buttons behind it showing straight through the text.
+   A menu therefore gets a real, opaque background and keeps only the border and
+   shadow from the glass look. */
+.menu-surface {
+  background: var(--menu-bg);
+  border: 1px solid var(--bdr);
+  box-shadow: var(--glass-shadow);
 }
