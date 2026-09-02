@@ -259,7 +259,7 @@ export default function LocationList({ profile, onSelect, onNavigate }) {
         {!loading && filtered.map(l => {
           const lead = leadFor(l.id);
           return (
-            <RecordCard key={l.id} onClick={() => onSelect(l.id)}>
+            <RecordCard key={l.id} href={`#location_detail/${l.id}`} onClick={() => onSelect(l.id)}>
               <CardHead title={l.name} badge={
                 <span className="flex items-center gap-1.5">
                   {lead && <LeadBadge stage={lead.stage} />}

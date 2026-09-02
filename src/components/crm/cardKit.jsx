@@ -7,13 +7,24 @@ export function ListContainer({ children }) {
   );
 }
 
-export function RecordCard({ onClick, children, highlight = false }) {
-  return (
-    <div onClick={onClick}
-      className={`glass-card rounded-2xl p-5 cursor-pointer hover:border-ember/30 transition ${highlight ? 'ring-2 ring-amber-400/60' : ''}`}>
-      {children}
-    </div>
-  );
+export function RecordCard({ onClick, href, children, highlight = false }) {
+  const cls = `glass-card rounded-2xl p-5 cursor-pointer hover:border-ember/30 transition ${highlight ? 'ring-2 ring-amber-400/60' : ''}`;
+  if (!href) return <div onClick={onClick} className={cls}>{children}</div>;
+
+  // With an href this is a REAL anchor, so right-click "Open in new tab",
+  // Cmd-click, middle-click and "Copy link" all behave the way they do on every
+  // other website. A div with an onClick cannot do any of that: the browser has
+  // no idea it leads anywhere, so the context menu has nothing to offer.
+  //
+  // A plain left click is still handled in-app, so navigation stays instant and
+  // does not reload the whole CRM. Anything with a modifier, or a middle click,
+  // is left alone for the browser to deal with.
+  const handle = (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    onClick?.(e);
+  };
+  return <a href={href} onClick={handle} className={`block ${cls}`}>{children}</a>;
 }
 
 export function CardHead({ title, subtitle, badge }) {

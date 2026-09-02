@@ -210,7 +210,7 @@ export default function ContactList({ profile, onSelect }) {
           const lead = leadFor(c.id);
           const fullName = fullNameOf(c);
           return (
-            <RecordCard key={c.id} onClick={() => onSelect(c.id)}>
+            <RecordCard key={c.id} href={`#contact_detail/${c.id}`} onClick={() => onSelect(c.id)}>
               <CardHead title={fullName} subtitle={c.job_title} badge={lead && <LeadBadge stage={lead.stage} />} />
               <ChipRow>
                 <Chip icon={'\u{1F4E7}'}>{c.email}</Chip>

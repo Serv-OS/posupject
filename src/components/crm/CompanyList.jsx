@@ -9,6 +9,8 @@ import { downloadListPdf } from '../../lib/listPdf';
 export default function CompanyList({ profile, onSelect }) {
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [assocs, setAssocs] = useState([]);
   const [members, setMembers] = useState([]);
   const [leads, setLeads] = useState([]);
   // Filters live in one sticky object so opening a company and coming back does
@@ -24,16 +26,23 @@ export default function CompanyList({ profile, onSelect }) {
 
   const load = async () => {
     setLoading(true);
-    const [c, l, m, ld] = await Promise.all([
+    const [c, l, m, ld, ct, as] = await Promise.all([
       supabase.from('companies').select('*').order('name'),
-      supabase.from('locations').select('id, company_id, status'),
+      supabase.from('locations').select('id, company_id, status, name'),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('leads').select('id, company_id, stage, name'),
+      supabase.from('contacts').select('id, first_name, last_name, email, job_title'),
+      // Contacts hang off companies through the associations table, not a
+      // company_id column, which is why the list could never show them.
+      supabase.from('associations').select('from_type, from_id, to_type, to_id, label')
+        .or('and(from_type.eq.company,to_type.eq.contact),and(from_type.eq.contact,to_type.eq.company)'),
     ]);
     setCompanies(c.data || []);
     setLocations(l.data || []);
     setMembers(m.data || []);
     setLeads(ld.data || []);
+    setContacts(ct.data || []);
+    setAssocs(as.data || []);
     setLoading(false);
   };
 
@@ -59,6 +68,20 @@ export default function CompanyList({ profile, onSelect }) {
     }
     return result;
   }, [companies, leads, search, leadFilter]);
+
+  // An association is stored in whichever direction it happened to be created,
+  // so both ends have to be checked. Reading only from_id would have shown the
+  // contact on some companies and not others, which is worse than showing none.
+  const contactsFor = (companyId) => {
+    const ids = new Set();
+    for (const a of assocs) {
+      if (a.from_type === 'company' && a.from_id === companyId && a.to_type === 'contact') ids.add(a.to_id);
+      else if (a.to_type === 'company' && a.to_id === companyId && a.from_type === 'contact') ids.add(a.from_id);
+    }
+    return contacts.filter(c => ids.has(c.id));
+  };
+  const contactName = (c) => [c.first_name, c.last_name].filter(Boolean).join(' ') || c.email || 'Unnamed contact';
+  const sitesFor = (companyId) => locations.filter(l => l.company_id === companyId);
 
   const locCount = (companyId) => locations.filter(l => l.company_id === companyId).length;
   const liveCount = (companyId) => locations.filter(l => l.company_id === companyId && l.status === 'live').length;
@@ -192,15 +215,45 @@ export default function CompanyList({ profile, onSelect }) {
         {!loading && filtered.map(c => {
           const lead = leadFor(c.id);
           return (
-            <RecordCard key={c.id} onClick={() => onSelect(c.id)}>
+            <RecordCard key={c.id} href={`#company_detail/${c.id}`} onClick={() => onSelect(c.id)}>
               <CardHead title={c.name} subtitle={c.industry} badge={lead && <LeadBadge stage={lead.stage} />} />
               <ChipRow>
                 <Chip icon={'\u{1F310}'}>{c.domain}</Chip>
                 <Chip icon={'\u{1F4CD}'}>{c.city}</Chip>
               </ChipRow>
+              {/* Who and what is actually attached. The row used to show the
+                  OWNER and a location count, which answered "who is it assigned
+                  to" rather than "who do we deal with there". A company with a
+                  named primary contact and a named site looked empty. */}
+              {(() => {
+                const people = contactsFor(c.id);
+                const sites = sitesFor(c.id);
+                if (!people.length && !sites.length) return null;
+                return (
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    {people.slice(0, 3).map(p => (
+                      <span key={p.id} title={[contactName(p), p.job_title, p.email].filter(Boolean).join(' · ')}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] bg-ember/10 text-ember-deep border border-ember/20">
+                        {'\u{1F464}'} {contactName(p)}
+                      </span>
+                    ))}
+                    {people.length > 3 && <span className="text-[11px] text-dim">+{people.length - 3} more</span>}
+                    {sites.slice(0, 2).map(s => (
+                      <span key={s.id} title={s.name}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] bg-slate-100 text-slate-600 border border-slate-200">
+                        {'\u{1F4CD}'} {s.name}
+                      </span>
+                    ))}
+                    {sites.length > 2 && <span className="text-[11px] text-dim">+{sites.length - 2} more sites</span>}
+                  </div>
+                );
+              })()}
               <MetaRow>
                 <OwnerTag name={ownerName(c.owner_id)} />
                 <span>{locCount(c.id)} location{locCount(c.id) !== 1 ? 's' : ''}{liveCount(c.id) > 0 ? ` · ${liveCount(c.id)} live` : ''}</span>
+                {contactsFor(c.id).length > 0 && (
+                  <span>{contactsFor(c.id).length} contact{contactsFor(c.id).length !== 1 ? 's' : ''}</span>
+                )}
               </MetaRow>
             </RecordCard>
           );
