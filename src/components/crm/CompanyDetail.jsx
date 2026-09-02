@@ -12,6 +12,7 @@ import InvoicesCard from './InvoicesCard.jsx';
 import EntityPicker from './EntityPicker.jsx';
 import { primaryLead } from '../../lib/leadStages';
 
+import { priorityLabel } from '../../lib/priority';
 const STATUS_COLORS = {
   prospect: 'bg-blue-100 text-blue-700 border border-blue-200',
   onboarding: 'bg-orange-100 text-orange-700 border border-orange-200',
@@ -299,7 +300,7 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
                         <div className="text-sm text-paper">{t.subject}</div>
                         <div className="flex items-center gap-2 mt-1">
                           <span className="text-[10px] text-muted uppercase">{t.stage.replace(/_/g, ' ')}</span>
-                          <span className="text-[10px] font-bold text-dim">{t.priority}</span>
+                          <span className="text-[10px] font-bold text-dim">{priorityLabel(t.priority)}</span>
                         </div>
                       </div>
                     ))}

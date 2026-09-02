@@ -6,6 +6,7 @@ import { computeSla } from '../../lib/sla';
 import SlaBadge from './SlaBadge.jsx';
 import { ListContainer, RecordCard, CardHead, Chip, ChipRow, MetaRow, OwnerTag } from './cardKit.jsx';
 
+import { PRIORITY_LABEL, priorityLabel } from '../../lib/priority';
 const STAGE_STYLES = {
   new: 'bg-blue-100 text-blue-700 border border-blue-200',
   in_progress: 'bg-orange-100 text-orange-700 border border-orange-200',
@@ -247,7 +248,7 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
                 })}
               </select>
               <select className={input + ' w-24'} value={priority} onChange={e => setPriority(e.target.value)}>
-                <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option>
+                <option value="P0">{PRIORITY_LABEL.P0}</option><option value="P1">{PRIORITY_LABEL.P1}</option><option value="P2">{PRIORITY_LABEL.P2}</option><option value="P3">{PRIORITY_LABEL.P3}</option>
               </select>
               <select className={input + ' w-36'} value={ticketType} onChange={e => setTicketType(e.target.value)}>
                 <option value="support">Support</option><option value="bug">Bug</option>
@@ -273,7 +274,7 @@ export default function TicketList({ profile, onSelect, onNavigate }) {
             />
             <ChipRow>
               <Chip tone="slate" icon={'\u{1F3E2}'}>{companyName(t.company_id)}</Chip>
-              <span className={`inline-flex items-center px-2 py-1 text-xs font-bold rounded-lg bg-card border border-bdr ${PRIORITY_STYLES[t.priority]}`}>{t.priority}</span>
+              <span className={`inline-flex items-center px-2 py-1 text-xs font-bold rounded-lg bg-card border border-bdr ${PRIORITY_STYLES[t.priority]}`}>{priorityLabel(t.priority)}</span>
               {awaitingReply(t) && (
                 <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-bold rounded-lg bg-amber-100 text-amber-700 border border-amber-200 animate-pulse">
                   {'\u{1F4AC}'} Customer replied

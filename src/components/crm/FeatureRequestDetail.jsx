@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import AssociationManager from './AssociationManager.jsx';
 
+import { PRIORITY_LABEL, priorityLabel } from '../../lib/priority';
 const STATUSES = ['new','under_review','planned','in_progress','shipped','declined'];
 const STATUS_LABELS = { new:'New', under_review:'Under Review', planned:'Planned', in_progress:'In Progress', shipped:'Shipped', declined:'Declined' };
 const STATUS_STYLES = {
@@ -68,7 +69,7 @@ export default function FeatureRequestDetail({ requestId, profile, onClose, onNa
         <div className="flex-1 min-w-0">
           <div className="text-lg font-bold text-paper truncate">{request.title}</div>
           <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">
-            {request.priority} / {STATUS_LABELS[request.status]}
+            {priorityLabel(request.priority)} / {STATUS_LABELS[request.status]}
           </div>
         </div>
         <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded ${STATUS_STYLES[request.status]}`}>{STATUS_LABELS[request.status]}</span>
@@ -103,7 +104,7 @@ export default function FeatureRequestDetail({ requestId, profile, onClose, onNa
           {tab === 'overview' && !editing && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Priority" value={request.priority} />
+                <Field label="Priority" value={priorityLabel(request.priority)} />
                 <Field label="Status" value={STATUS_LABELS[request.status]} />
                 <Field label="Requested by" value={contactName(request.requested_by)} />
                 <Field label="Owner" value={ownerName(request.owner_id)} />
@@ -122,7 +123,7 @@ export default function FeatureRequestDetail({ requestId, profile, onClose, onNa
                 <div><label className={label}>Status</label><select className={input} value={draft.status} onChange={e => set('status', e.target.value)}>
                   {STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select></div>
                 <div><label className={label}>Priority</label><select className={input} value={draft.priority} onChange={e => set('priority', e.target.value)}>
-                  <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option></select></div>
+                  <option value="P0">{PRIORITY_LABEL.P0}</option><option value="P1">{PRIORITY_LABEL.P1}</option><option value="P2">{PRIORITY_LABEL.P2}</option><option value="P3">{PRIORITY_LABEL.P3}</option></select></div>
                 <div><label className={label}>Requested by</label><select className={input} value={draft.requested_by || ''} onChange={e => set('requested_by', e.target.value || null)}>
                   <option value="">None</option>
                   {contacts.map(c => <option key={c.id} value={c.id}>{[c.first_name, c.last_name].filter(Boolean).join(' ') || c.email}</option>)}

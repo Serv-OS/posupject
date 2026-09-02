@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ListContainer, RecordCard, CardHead, Chip, ChipRow, MetaRow, OwnerTag } from './cardKit.jsx';
 
+import { PRIORITY_LABEL } from '../../lib/priority';
 const STATUS_STYLES = {
   new: 'bg-blue-100 text-blue-700 border border-blue-200',
   under_review: 'bg-purple-100 text-purple-700 border border-purple-200',
@@ -130,7 +131,7 @@ export default function FeatureRequestList({ profile, onSelect }) {
             <div className="flex gap-2">
               <input className={input + ' flex-1'} value={description} onChange={e => setDescription(e.target.value)} placeholder="Description (optional)" />
               <select className="px-2 py-2 bg-card border border-bdr rounded text-sm text-paper" value={priority} onChange={e => setPriority(e.target.value)}>
-                <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option>
+                <option value="P0">{PRIORITY_LABEL.P0}</option><option value="P1">{PRIORITY_LABEL.P1}</option><option value="P2">{PRIORITY_LABEL.P2}</option><option value="P3">{PRIORITY_LABEL.P3}</option>
               </select>
               <button type="submit" className="px-4 py-2 bg-ember text-ink text-sm font-semibold rounded shrink-0">Create</button>
               <button type="button" onClick={() => setShowCreate(false)} className="px-3 py-2 text-sm text-muted border border-bdr rounded shrink-0">Cancel</button>

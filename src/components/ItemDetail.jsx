@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { supabase } from '../lib/supabase';
 
+import { PRIORITY_LABEL, priorityLabel } from '../lib/priority';
 export default function ItemDetail({ itemId, profile, onClose }) {
   const [item, setItem]       = useState(null);
   const [buckets, setBuckets] = useState([]);
@@ -137,7 +138,7 @@ export default function ItemDetail({ itemId, profile, onClose }) {
                 <div className="flex items-center gap-2 flex-wrap text-xs">
                   <Pill>{currentBucket?.name || '—'}</Pill>
                   <Pill>{item.type}</Pill>
-                  <Pill>{item.priority}</Pill>
+                  <Pill>{priorityLabel(item.priority)}</Pill>
                   {assignee && <Pill>&#x1F464; {assignee.display_name || assignee.email}</Pill>}
                   {feature && <Pill style={{ borderColor: feature.color + '50', color: feature.color }}>&#x25C6; {feature.name}</Pill>}
                   {item.version_seen && <Pill>Seen {item.version_seen}</Pill>}
@@ -302,10 +303,10 @@ function EditForm({ draft, setDraft, buckets, members, features, uploading, setU
         <div>
           <label className={label}>Priority</label>
           <select className={input} value={draft.priority} onChange={e => set('priority', e.target.value)}>
-            <option value="P0">P0 — critical</option>
-            <option value="P1">P1 — high</option>
-            <option value="P2">P2 — normal</option>
-            <option value="P3">P3 — low</option>
+            <option value="P0">{PRIORITY_LABEL.P0}</option>
+            <option value="P1">{PRIORITY_LABEL.P1}</option>
+            <option value="P2">{PRIORITY_LABEL.P2}</option>
+            <option value="P3">{PRIORITY_LABEL.P3}</option>
           </select>
         </div>
         <div>

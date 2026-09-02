@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
+import { PRIORITY_FILTER_OPTIONS, PRIORITY_LABEL, priorityLabel } from '../lib/priority';
 const PRIORITY_STYLES = {
   P0: 'bg-red-100 text-red-700 border border-red-200 border-red-500/30',
   P1: 'bg-orange-100 text-orange-700 border border-orange-200 border-orange-500/30',
@@ -289,7 +290,7 @@ export default function Board({ project, profile, onOpenItem }) {
           placeholder="Search items…"
           className="px-3 py-1.5 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember w-48"/>
         <Select value={filter.priority} onChange={v => setFilter({ ...filter, priority: v })}
-          options={[['all','All priorities'],['P0','P0'],['P1','P1'],['P2','P2'],['P3','P3']]}/>
+          options={PRIORITY_FILTER_OPTIONS}/>
         <Select value={filter.type} onChange={v => setFilter({ ...filter, type: v })}
           options={[['all','All types'],['feature','Features'],['bug','Bugs'],['task','Tasks'],['chore','Chores']]}/>
         <Select value={filter.assignee} onChange={v => setFilter({ ...filter, assignee: v })}
@@ -301,7 +302,7 @@ export default function Board({ project, profile, onOpenItem }) {
         <div className="ml-auto flex items-center gap-2">
           <span className="text-[10px] font-mono uppercase tracking-[0.18em] text-dim">Sort</span>
           <Select value={sort} onChange={setSort}
-            options={[['manual','Manual (drag order)'],['newest','Newest first'],['oldest','Oldest first'],['updated','Recently updated'],['priority','Priority (P0 first)'],['title','A → Z']]}/>
+            options={[['manual','Manual (drag order)'],['newest','Newest first'],['oldest','Oldest first'],['updated','Recently updated'],['priority','Priority (most urgent first)'],['title','A → Z']]}/>
         </div>
         {(filter.priority!=='all' || filter.type!=='all' || filter.assignee!=='all' || filter.feature!=='all' || filter.search) && (
           <button onClick={() => setFilter({ priority:'all', type:'all', assignee:'all', feature:'all', search:'' })}
@@ -564,10 +565,10 @@ function CreateItemModal({ draft: initial, buckets, members, features, project, 
             <div>
               <label className={label}>Priority</label>
               <select className={input} value={draft.priority} onChange={e => set('priority', e.target.value)}>
-                <option value="P0">P0 — critical</option>
-                <option value="P1">P1 — high</option>
-                <option value="P2">P2 — normal</option>
-                <option value="P3">P3 — low</option>
+                <option value="P0">{PRIORITY_LABEL.P0}</option>
+                <option value="P1">{PRIORITY_LABEL.P1}</option>
+                <option value="P2">{PRIORITY_LABEL.P2}</option>
+                <option value="P3">{PRIORITY_LABEL.P3}</option>
               </select>
             </div>
             <div>
@@ -644,7 +645,7 @@ function Card({ item, members, features, onClick, onDragStart, onDragOver, onDro
         <div className="text-sm text-paper flex-1 min-w-0 leading-snug">{item.title}</div>
       </div>
       <div className="flex items-center gap-2 flex-wrap">
-        <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border ${PRIORITY_STYLES[item.priority]}`}>{item.priority}</span>
+        <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border ${PRIORITY_STYLES[item.priority]}`}>{priorityLabel(item.priority)}</span>
         {feature && (
           <span className="px-1.5 py-0.5 text-[9px] rounded border font-mono"
             style={{ borderColor: feature.color + '50', color: feature.color, backgroundColor: feature.color + '15' }}>

@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import TimerButton from './TimerButton.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
 
+import { PRIORITY_LABEL } from '../../lib/priority';
 const STATUS_STYLES = {
   todo: 'bg-blue-100 text-blue-700 border border-blue-200',
   in_progress: 'bg-orange-100 text-orange-700 border border-orange-200',
@@ -427,8 +428,8 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                         placeholder="Add a task..." />
                       <select className="px-2 py-2 bg-card border border-bdr rounded text-sm text-paper"
                         value={newPriority} onChange={e => setNewPriority(e.target.value)}>
-                        <option value="P0">P0</option><option value="P1">P1</option>
-                        <option value="P2">P2</option><option value="P3">P3</option>
+                        <option value="P0">{PRIORITY_LABEL.P0}</option><option value="P1">{PRIORITY_LABEL.P1}</option>
+                        <option value="P2">{PRIORITY_LABEL.P2}</option><option value="P3">{PRIORITY_LABEL.P3}</option>
                       </select>
                       <button type="submit" disabled={!newTask.trim()}
                         className="px-3 py-2 bg-ember text-white text-xs font-semibold rounded disabled:opacity-50">Add</button>

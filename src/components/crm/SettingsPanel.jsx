@@ -7,6 +7,7 @@ import BrandingCard from './BrandingCard.jsx';
 import { clearRegionCache, toE164 } from '../../lib/region';
 
 import { getGoogleClientId } from '../../lib/googleClientId';
+import { priorityLabel } from '../../lib/priority';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const REDIRECT_URI = `${SUPABASE_URL}/functions/v1/gmail-oauth-callback`;
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send';
@@ -900,7 +901,7 @@ export default function SettingsPanel({ profile }) {
                   <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim">First response</div>
                   <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim">Resolution</div>
                   {slaPolicies.map(p => (
-                    <FragmentRow key={p.priority} p={p} isOwner={isOwner} saveSla={saveSla} />
+                    <FragmentRow key={priorityLabel(p.priority)} p={p} isOwner={isOwner} saveSla={saveSla} />
                   ))}
                 </div>
                 <div className="text-[11px] text-dim mt-3 pt-3 border-t border-bdr leading-relaxed">
@@ -1094,7 +1095,7 @@ export default function SettingsPanel({ profile }) {
 function FragmentRow({ p, isOwner, saveSla }) {
   return (
     <>
-      <div className="text-sm font-bold text-paper">{p.priority}</div>
+      <div className="text-sm font-bold text-paper">{priorityLabel(p.priority)}</div>
       <DurationInput minutes={p.first_response_minutes} disabled={!isOwner}
         onSave={(m) => saveSla(p.priority, 'first_response_minutes', m)} />
       <DurationInput minutes={p.resolution_minutes} disabled={!isOwner}

@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import TimerButton from './TimerButton.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
 
+import { PRIORITY_LABEL, priorityLabel } from '../../lib/priority';
 const STATUS_OPTIONS = ['todo', 'in_progress', 'blocked', 'done'];
 const STATUS_STYLES = {
   todo: 'bg-blue-100 text-blue-700 border border-blue-200',
@@ -152,7 +153,7 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
           <div className={`text-xl font-bold truncate ${task.status === 'done' ? 'text-dim line-through' : 'text-paper'}`}>{task.title}</div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             <span className={`badge-status ${STATUS_STYLES[task.status]}`}>{task.status.replace('_', ' ')}</span>
-            <span className="text-xs text-dim font-mono">{task.priority}</span>
+            <span className="text-xs text-dim font-mono">{priorityLabel(task.priority)}</span>
             {task.due_date && (
               <span className={`text-xs ${new Date(task.due_date) < new Date() && task.status !== 'done' ? 'text-red-600 font-bold' : 'text-dim'}`}>
                 Due {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
@@ -189,7 +190,7 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
                   <div><label className={label}>Status</label><select className={input} value={draft.status} onChange={e => set('status', e.target.value)}>
                     {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}</select></div>
                   <div><label className={label}>Priority</label><select className={input} value={draft.priority} onChange={e => set('priority', e.target.value)}>
-                    <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option></select></div>
+                    <option value="P0">{PRIORITY_LABEL.P0}</option><option value="P1">{PRIORITY_LABEL.P1}</option><option value="P2">{PRIORITY_LABEL.P2}</option><option value="P3">{PRIORITY_LABEL.P3}</option></select></div>
                   <div><label className={label}>Assignee</label><select className={input} value={draft.owner_id || ''} onChange={e => set('owner_id', e.target.value || null)}>
                     <option value="">Unassigned</option>{members.map(m => <option key={m.id} value={m.id}>{m.display_name || m.email}</option>)}</select></div>
                   <div><label className={label}>Due date</label><input className={input} type="date" value={draft.due_date || ''} onChange={e => set('due_date', e.target.value || null)} /></div>

@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 
+import { PRIORITIES, PRIORITY_LABEL } from '../../lib/priority';
 // Project templates: design a project once (tasks, sub-tasks, due-date offsets,
 // assignment), then stamp it onto jobs — automatically via the automations
 // engine (076) when an onboarding job is created / typed, or manually from a
@@ -180,7 +181,7 @@ export default function ProjectTemplates({ profile }) {
           placeholder={isChild ? 'Sub-task title' : 'Task title'} />
         <select className={smallInput + ' shrink-0 ' + (PRIORITY_STYLES[row.priority] || '')} value={row.priority} disabled={!isOwner}
           onChange={e => patchTask(row.id, { priority: e.target.value })} title="Priority">
-          {['P0', 'P1', 'P2', 'P3'].map(p => <option key={p} value={p}>{p}</option>)}
+          {PRIORITIES.map(p => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
         </select>
         <label className="flex items-center gap-1 text-[10px] text-muted shrink-0" title="Due this many days after the job starts">
           +<input type="number" min="0" className={smallInput + ' w-14 text-center'} value={row.due_offset_days ?? 0} disabled={!isOwner}

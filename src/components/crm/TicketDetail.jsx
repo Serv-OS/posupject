@@ -9,6 +9,7 @@ import AttachmentsCard from './AttachmentsCard.jsx';
 import TimerButton from './TimerButton.jsx';
 import { loadRegions, localTimeForPhone } from '../../lib/region';
 
+import { PRIORITY_LABEL, PRIORITY_OPTIONS, priorityLabel } from '../../lib/priority';
 const STAGES = ['new','in_progress','waiting_on_customer','escalated','resolved','closed'];
 const STAGE_LABELS = { new:'New', in_progress:'In Progress', waiting_on_customer:'Waiting on Customer', escalated:'Escalated', resolved:'Resolved', closed:'Closed' };
 const STAGE_STYLES = {
@@ -263,7 +264,7 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
             )}
             <span className={`hidden lg:inline-flex badge-status ${STAGE_STYLES[ticket.stage]}`}>{STAGE_LABELS[ticket.stage]}</span>
             <SlaBadge ticket={ticket} />
-            <span className="text-xs text-dim font-mono">{ticket.priority}</span>
+            <span className="text-xs text-dim font-mono">{priorityLabel(ticket.priority)}</span>
             <span className="hidden lg:inline text-xs text-muted">{ticket.ticket_type}</span>
             {company && (
               <span className="hidden lg:inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-lg bg-slate-100 text-slate-600 border border-slate-200 cursor-pointer hover:border-slate-300"
@@ -331,7 +332,7 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                   <div><label className={label}>Stage</label><select className={input} value={draft.stage} onChange={e => set('stage', e.target.value)}>
                     {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}</select></div>
                   <div><label className={label}>Priority</label><select className={input} value={draft.priority} onChange={e => set('priority', e.target.value)}>
-                    <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option></select></div>
+                    <option value="P0">{PRIORITY_LABEL.P0}</option><option value="P1">{PRIORITY_LABEL.P1}</option><option value="P2">{PRIORITY_LABEL.P2}</option><option value="P3">{PRIORITY_LABEL.P3}</option></select></div>
                   <div><label className={label}>Type</label><select className={input} value={draft.ticket_type || 'support'} onChange={e => set('ticket_type', e.target.value)}>
                     <option value="support">Support</option><option value="bug">Bug</option><option value="feature_request">Feature Request</option><option value="billing">Billing</option><option value="other">Other</option></select></div>
                   <div><label className={label}>Owner</label><select className={input} value={draft.owner_id || ''} onChange={e => set('owner_id', e.target.value || null)}>
@@ -437,7 +438,7 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                   {canWrite ? (
                     <>
                       <InlineSelect label="Priority" value={ticket.priority || 'P2'} onChange={v => patchTicket({ priority: v })}
-                        options={[['P0','P0'],['P1','P1'],['P2','P2'],['P3','P3']]} />
+                        options={PRIORITY_OPTIONS} />
                       <InlineSelect label="Type" value={ticket.ticket_type || 'support'} onChange={v => patchTicket({ ticket_type: v })}
                         options={[['support','Support'],['bug','Bug'],['feature_request','Feature Request'],['billing','Billing'],['other','Other']]} />
                       <InlineSelect label="Stage" value={ticket.stage} onChange={v => changeStage(v)}
@@ -447,7 +448,7 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                     </>
                   ) : (
                     <>
-                      <Field label="Priority" value={ticket.priority} />
+                      <Field label="Priority" value={priorityLabel(ticket.priority)} />
                       <Field label="Type" value={ticket.ticket_type} />
                       <Field label="Stage" value={STAGE_LABELS[ticket.stage]} />
                       <Field label="Owner" value={ownerName(ticket.owner_id)} />

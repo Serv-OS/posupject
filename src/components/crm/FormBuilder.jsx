@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 
+import { PRIORITIES, PRIORITY_LABEL } from '../../lib/priority';
 const FIELD_TYPES = ['text', 'email', 'tel', 'textarea', 'select'];
 const MAPS_COMMON = [
   { v: 'none', l: "Don't map (store as note)" },
@@ -168,7 +169,7 @@ export default function FormBuilder({ formId, profile, onClose, onNavigate }) {
                 <div><label className={label}>Default priority</label>
                   <select className={input} value={form.settings?.default_priority || (form.destination === 'support' ? 'P2' : 'warm')} onChange={e => setSetting('default_priority', e.target.value)}>
                     {form.destination === 'support'
-                      ? ['P0','P1','P2','P3'].map(p => <option key={p} value={p}>{p}</option>)
+                      ? PRIORITIES.map(p => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)
                       : ['hot','warm','medium','cold'].map(p => <option key={p} value={p}>{p}</option>)}
                   </select></div>
                 <label className="flex items-center gap-2 pt-1 cursor-pointer">
