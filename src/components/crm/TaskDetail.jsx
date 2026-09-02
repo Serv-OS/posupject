@@ -4,6 +4,7 @@ import TimerButton from './TimerButton.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
 
 import { PRIORITY_LABEL, priorityLabel } from '../../lib/priority';
+import ActivityTimeline from './ActivityTimeline.jsx';
 const STATUS_OPTIONS = ['todo', 'in_progress', 'blocked', 'done'];
 const STATUS_STYLES = {
   todo: 'bg-blue-100 text-blue-700 border border-blue-200',
@@ -284,6 +285,15 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
                       className="btn-glass px-3 py-2 rounded-xl text-xs disabled:opacity-50 shrink-0">Add</button>
                   </form>
                 )}
+              </Card>
+
+              {/* Notes, calls and emails against the task itself. Everything
+                  else with a detail page already had this; tasks were the one
+                  place where the reasoning behind a job had nowhere to live, so
+                  it ended up on the ticket, or nowhere. Attachments already use
+                  subjectType="task", so this is the same pattern. */}
+              <Card title="Notes &amp; activity">
+                <ActivityTimeline subjectType="task" subjectId={taskId} profile={profile} />
               </Card>
             </div>
 
