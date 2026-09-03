@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase } from '../../lib/supabase';
-import AttachmentsCard from './AttachmentsCard.jsx';
-import { getRunning, startTimer, stopTimer, fmtClock } from '../../lib/timer';
-import { parseQuickAdd, quickAddRow } from '../../lib/quickAdd';
-import { PRIORITY_LABEL } from '../../lib/priority';
+import { supabase } from './stub.js';
+import AttachmentsCard from '../components/crm/AttachmentsCard.jsx';
+import { getRunning, startTimer, stopTimer, fmtClock } from './timerStub.js';
+import { parseQuickAdd, quickAddRow } from '../lib/quickAdd';
+import { PRIORITY_LABEL } from '../lib/priority';
 import {
   Avatar, Check, Pill, StatusPill, LinkChip, SectionLabel, Mono, PageTitle,
   PrimaryBtn, GhostBtn, SolidChipBtn, Card, DashedAdd, SkeletonList, MobileDock, DockField, hair, dueLabel, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL,
-} from './ui.jsx';
+} from '../components/crm/ui.jsx';
 
 // Screen 04 — a project reads as a plan, not a pile.
 //
@@ -400,7 +400,7 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                 const targetName = target === '__none' ? null : target;
                 const inlineOpen = addingTo != null;
                 return inlineOpen ? (
-                  <div className="hidden lg:flex items-center gap-2.5 px-[14px] py-[9px] rounded-[12px] border" style={{ background: 'var(--surface-solid)', borderColor: 'rgb(var(--c-primary) / .5)' }}>
+                  <div className="flex items-center gap-2.5 px-[14px] py-[9px] rounded-[12px] border" style={{ background: 'var(--surface-solid)', borderColor: 'rgb(var(--c-primary) / .5)' }}>
                     <span className="text-[18px] leading-none text-dim">+</span>
                     <input autoFocus value={addText} onChange={e => setAddText(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTask(targetName); } if (e.key === 'Escape') setAddingTo(null); }}

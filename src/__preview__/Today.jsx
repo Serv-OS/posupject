@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { supabase } from '../../lib/supabase';
-import { groupTasks, DUE_LABEL, dueBucket } from '../../lib/taskGrouping';
-import { useStickyState } from '../../lib/stickyState';
-import { priorityLabel } from '../../lib/priority';
-import QuickAddRow from './QuickAddRow.jsx';
+import { supabase } from './stub.js';
+import { groupTasks, DUE_LABEL, dueBucket } from '../lib/taskGrouping';
+import { useStickyState } from '../lib/stickyState';
+import { priorityLabel } from '../lib/priority';
+import QuickAddRow from '../components/crm/QuickAddRow.jsx';
 import {
   Avatar, TypeChip, StatusPill, MetaLabel, Mono, PageTitle, LensPill, Card, SkeletonList, EmptyState, PrimaryBtn, GhostBtn, SolidChipBtn,
   MobileDock, DockField, useSwipeRow, StatusMenu, hair, dueLabel, fmtRel,
-} from './ui.jsx';
-import { getRunning, fmtClock } from '../../lib/timer';
+} from '../components/crm/ui.jsx';
+import { getRunning, fmtClock } from './timerStub.js';
 
 // Screens 01 and 13 — the landing screen, across every module.
 //

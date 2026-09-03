@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase } from '../../lib/supabase';
-import AttachmentsCard from './AttachmentsCard.jsx';
-import { getRunning, startTimer, stopTimer, fmtClock, fmtDuration } from '../../lib/timer';
-import { PRIORITY_LABEL, PRIORITY_SLA } from '../../lib/priority';
+import { supabase } from './stub.js';
+import AttachmentsCard from '../components/crm/AttachmentsCard.jsx';
+import { getRunning, startTimer, stopTimer, fmtClock, fmtDuration } from './timerStub.js';
+import { PRIORITY_LABEL, PRIORITY_SLA } from '../lib/priority';
 import {
   Avatar, Check, LinkChip, SectionLabel, Mono, PageTitle, PrimaryBtn, GhostBtn, SolidChipBtn, Card, SkeletonList, MobileDock,
   hair, dueLabel, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL, initialsOf,
-} from './ui.jsx';
+} from '../components/crm/ui.jsx';
 
 // Screen 08 — two columns, no edit mode.
 //

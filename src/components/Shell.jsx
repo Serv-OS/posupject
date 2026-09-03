@@ -86,6 +86,9 @@ import ProductsPanel from './crm/ProductsPanel.jsx';
 import QuoteBuilder from './crm/QuoteBuilder.jsx';
 import { Sun, Moon, Sparkles } from 'lucide-react';
 
+// Views laid out to the Projects & Tasks spec at every width; opts them out of the old mobile CSS hacks.
+const WORK_VIEWS = new Set(['today', 'tasks', 'task_detail', 'projects', 'project_detail', 'work', 'work_board', 'work_timeline', 'work_calendar', 'people', 'project_templates']);
+
 // The URL reflects the current view so refresh, the browser back button and
 // "open in new tab" all land on the right page. Scheme: #<view> for a
 // list/section, #<view>/<id> for a record detail. Empty hash → the default view.
@@ -477,7 +480,7 @@ export default function Shell({ session }) {
           <NotificationBell profile={profile} onNavigate={navigateTo} />
         </div>
       </div>
-      <main className="flex-1 min-w-0 overflow-hidden">
+      <main className={`flex-1 min-w-0 overflow-hidden ${WORK_VIEWS.has(view) ? 'work' : ''}`}>
         {renderMain()}
       </main>
       </div>

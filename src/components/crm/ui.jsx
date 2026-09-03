@@ -362,6 +362,56 @@ export function StatusMenu({ current, onPick, onClose, align = 'right' }) {
   );
 }
 
+// ── Mobile (screens 11, 15–18) ──────────────────────────────────────────────
+/** The docked bar above the tab bar. Same height on every screen, so the thumb
+ *  never hunts. Renders a spacer in flow so content can scroll clear of it. */
+export function MobileDock({ children }) {
+  return (
+    <>
+      <div className="lg:hidden h-[76px] shrink-0" aria-hidden />
+      <div className="lg:hidden fixed inset-x-0 z-30 px-[14px] pt-[10px] pb-[8px]"
+        style={{ bottom: 'calc(56px + env(safe-area-inset-bottom))', background: 'linear-gradient(180deg, transparent, var(--scene) 30%)' }}>
+        {children}
+      </div>
+    </>
+  );
+}
+/** The docked add field: surface-solid, 14px 16px, radius 14, shadow-card. */
+export function DockField({ children, onClick }) {
+  return (
+    <button type="button" onClick={onClick} className="w-full flex items-center gap-2.5 px-4 py-[14px] rounded-[14px] border text-left"
+      style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)', boxShadow: 'var(--shadow-card)' }}>
+      <span className="text-[19px] leading-none text-dim">+</span>
+      <span className="text-[15px] text-dim">{children}</span>
+    </button>
+  );
+}
+/** Swipe right completes, swipe left opens status. Returns touch handlers and
+ *  the live offset so the row can slide under the thumb. Mouse is ignored:
+ *  on desktop the checkbox and the pill do these jobs. */
+export function useSwipeRow(onRight, onLeft, threshold = 72) {
+  const [dx, setDx] = _useState(0);
+  const start = _useRef(null);
+  const handlers = {
+    onTouchStart: (e) => { start.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, moved: false }; },
+    onTouchMove: (e) => {
+      if (!start.current) return;
+      const ddx = e.touches[0].clientX - start.current.x, ddy = e.touches[0].clientY - start.current.y;
+      if (Math.abs(ddy) > Math.abs(ddx)) return;   // a scroll, not a swipe
+      start.current.moved = true;
+      setDx(Math.max(-120, Math.min(120, ddx)));
+    },
+    onTouchEnd: () => {
+      const d = dx; setDx(0);
+      if (!start.current?.moved) return;
+      if (d > threshold) onRight?.(); else if (d < -threshold) onLeft?.();
+      start.current = null;
+    },
+  };
+  return { dx, handlers };
+}
+import { useState as _useState } from 'react';
+
 // ── Dates ───────────────────────────────────────────────────────────────────
 const dayKey = (d) => { const x = d instanceof Date ? d : new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
 /** "Today" / "2 days late" / "12 Sep" / "No date" with a tone the caller can colour by. */

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Home, MapPin, Mail, LayoutGrid, Search, X } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import { CORE, COLLAPSIBLE } from './Sidebar.jsx';
+import { supabase } from './stub.js';
+import { CORE, COLLAPSIBLE } from '../components/Sidebar.jsx';
 import { useStickyState } from '../lib/stickyState';
 
 // Mobile information architecture (screens 15–16).
