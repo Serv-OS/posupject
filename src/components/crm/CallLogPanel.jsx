@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { PhoneCall, PhoneIncoming, PhoneOutgoing, PhoneMissed, Voicemail } from 'lucide-react';
 import CallButton from '../CallButton.jsx';
 
+import { digits10, contactForCall } from '../../lib/callMatch';
 const fmtWhen = (d) => new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtDur = (s) => { const n = Number(s) || 0; return n >= 60 ? `${Math.floor(n / 60)}m ${n % 60}s` : `${n}s`; };
 
@@ -15,7 +16,7 @@ export const callKind = (a) => {
 };
 
 // Last 10 digits, so +44 7700 900123 / 07700900123 / (770) 090-0123 all match.
-const lastDigits = (s) => (s || '').replace(/\D/g, '').slice(-10);
+const lastDigits = digits10;   // kept as a local alias; the rule now lives in lib/phone.js
 
 const KIND_BADGE = {
   answered: 'bg-emerald-100 text-emerald-700 border-emerald-200',
@@ -44,7 +45,7 @@ export default function CallLogPanel({ profile, onNavigate }) {
       supabase.from('crm_activities').select('*').eq('type', 'call')
         .order('occurred_at', { ascending: false }).limit(1000),
       supabase.from('profiles').select('id, email, display_name'),
-      supabase.from('contacts').select('id, first_name, last_name, phone, mobile'),
+      supabase.from('contacts').select('id, first_name, last_name, phone, email'),
     ]);
     setCalls(a.data || []); setPeople(p.data || []); setContacts(c.data || []);
     setLoading(false);
@@ -64,7 +65,7 @@ export default function CallLogPanel({ profile, onNavigate }) {
     const p = people.find(x => x.id === id);
     return p ? (p.display_name || p.email) : null;
   };
-  const contactOf = (a) => contacts.find(c => c.id === a.contact_id);
+  const contactOf = (a) => contactForCall(a, contacts);
 
   // Create a contact straight from a call, then adopt every other call from the
   // same number so the whole history shows the name, not just this row.
@@ -105,7 +106,7 @@ export default function CallLogPanel({ profile, onNavigate }) {
     if (search.trim()) {
       const md = a.channel_metadata || {};
       const ct = contactOf(a);
-      const hay = [md.from_number, md.to_number, ct?.first_name, ct?.last_name, ct?.phone, ct?.mobile,
+      const hay = [md.from_number, md.to_number, ct?.first_name, ct?.last_name, ct?.phone,
         agentName(a.actor_id), a.body].filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(search.trim().toLowerCase())) return false;
     }
@@ -212,7 +213,7 @@ export default function CallLogPanel({ profile, onNavigate }) {
                     </div>
                     <div className="ml-auto flex items-center gap-2">
                       {/* Ring them back — the number from the call, else the contact's own */}
-                      <CallButton number={number || ct?.mobile || ct?.phone} variant="icon"
+                      <CallButton number={number || ct?.phone} variant="icon"
                         title={`Call ${ctName || number || ''} back`} />
                       {canWrite && !ct && number && (
                         <button onClick={() => setNewContact({ number, first_name: '', last_name: '', email: '' })}
