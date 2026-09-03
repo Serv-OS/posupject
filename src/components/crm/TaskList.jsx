@@ -2,6 +2,8 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 
 import { PRIORITY_LABEL, priorityLabel } from '../../lib/priority';
+import { groupTasks } from '../../lib/taskGrouping';
+import { useStickyState } from '../../lib/stickyState';
 const STATUS_STYLES = {
   todo: 'bg-blue-100 text-blue-700 border border-blue-200',
   in_progress: 'bg-orange-100 text-orange-700 border border-orange-200',
@@ -25,6 +27,10 @@ export default function TaskList({ profile, onSelect }) {
   const [onboardings, setOnboardings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ status: 'open', assignee: 'all', search: '' });
+  // One grouping control, remembered — a list you regroup on every visit is a
+  // list you stop trusting.
+  const [groupBy, setGroupBy] = useStickyState('tasks.groupBy', 'due');
+  const [collapsed, setCollapsed] = useState({});
   const [expanded, setExpanded] = useState({});
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState('');
@@ -295,6 +301,15 @@ export default function TaskList({ profile, onSelect }) {
       </div>
 
       <div className="px-6 py-3 border-b border-bdr flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 mr-1">
+          <span className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim">Group</span>
+          {[['due', 'Due'], ['project', 'Project'], ['assignee', 'Assignee'], ['priority', 'Priority']].map(([k, lbl]) => (
+            <button key={k} onClick={() => setGroupBy(k)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${groupBy === k ? 'bg-ember text-white' : 'text-muted hover:text-paper'}`}>
+              {lbl}
+            </button>
+          ))}
+        </div>
         <input value={filter.search} onChange={e => setFilter({ ...filter, search: e.target.value })}
           placeholder="Search tasks..."
           className="px-3 py-1.5 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember w-56" />
@@ -348,7 +363,41 @@ export default function TaskList({ profile, onSelect }) {
 
       <div className="flex-1 overflow-y-auto">
         {loading && <div className="px-6 py-8 text-center text-dim text-sm">Loading...</div>}
-        {!loading && filtered.map(t => renderTask(t))}
+        {!loading && groupTasks(filtered, groupBy, { projects, members }).map(g => {
+          const hidden = collapsed[g.key];
+          return (
+            <div key={g.key}>
+              {/* The header carries progress so a project reads as a unit even
+                  inside a flat list — the whole point of screen 02. */}
+              <button onClick={() => setCollapsed(c => ({ ...c, [g.key]: !c[g.key] }))}
+                className="w-full px-6 py-2 flex items-center gap-2.5 bg-card/40 border-y border-bdr hover:bg-card/60 transition text-left">
+                <span className={`text-dim text-[10px] transition-transform ${hidden ? '' : 'rotate-90'}`}>&#9654;</span>
+                <span className="text-[11px] font-bold text-paper">{g.label}</span>
+                <span className="text-[10px] text-dim font-mono">{g.progress.done}/{g.progress.total}</span>
+                {g.progress.blocked > 0 && (
+                  <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-100 text-red-700">{g.progress.blocked} blocked</span>
+                )}
+                <span className="ml-auto flex items-center gap-2">
+                  <span className="w-24 h-1.5 rounded-full bg-bdr overflow-hidden">
+                    <span className="block h-full bg-ember" style={{ width: `${g.progress.pct}%` }} />
+                  </span>
+                  <span className="text-[10px] text-dim font-mono tabular-nums w-9 text-right">{g.progress.pct}%</span>
+                </span>
+              </button>
+              {!hidden && (g.sub
+                ? g.sub.map(sub => (
+                    <div key={sub.key}>
+                      <div className="px-6 py-1.5 pl-11 flex items-center gap-2 bg-card/20">
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-dim">{sub.label}</span>
+                        <span className="text-[10px] text-dim font-mono">{sub.progress.done}/{sub.progress.total}</span>
+                      </div>
+                      {sub.tasks.map(t => renderTask(t))}
+                    </div>
+                  ))
+                : g.tasks.map(t => renderTask(t)))}
+            </div>
+          );
+        })}
         {!loading && filtered.length === 0 && (
           <div className="px-6 py-8 text-center text-dim text-sm">
             {filter.search || filter.status !== 'open' || filter.assignee !== 'all'
