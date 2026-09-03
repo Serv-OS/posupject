@@ -489,7 +489,7 @@ export default function Shell({ session }) {
           onClose={() => setOpenItem(null)}
         />
       )}
-      <QuickAddCommand profile={profile} onNavigate={navigateTo} />
+      <QuickAddCommand profile={profile} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} context={view === 'project_detail' ? { projectId: detailId } : null} />
       <MobileNav profile={profile} view={view} onGo={(k) => setView(k)} />
 
     </div>
