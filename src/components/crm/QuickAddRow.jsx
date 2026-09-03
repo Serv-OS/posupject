@@ -57,8 +57,14 @@ export default function QuickAddRow({ profile, members, projects, presets, onCre
 
   return (
     <div>
-      <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-bdr hover:border-ember/40 focus-within:border-ember transition bg-card/30">
-        <span className="text-dim text-sm shrink-0">+</span>
+      {/* A raised row with a real checkbox square on the left, not a dashed
+          placeholder with a plus. It reads as the first row of the list you are
+          about to add to, which is the point: the fastest add is the one that
+          looks like it is already part of the thing. */}
+      <div className="flex items-center gap-2.5 px-4 py-[13px] rounded-[14px] border border-bdr focus-within:border-ember transition"
+        style={{ background: 'var(--raised-bg)', boxShadow: 'var(--shadow-card)' }}>
+        <span className="w-[18px] h-[18px] rounded-[5px] shrink-0 border-2"
+          style={{ borderColor: 'var(--check-bdr)' }} />
         <input
           value={text}
           onChange={e => setText(e.target.value)}
@@ -67,14 +73,18 @@ export default function QuickAddRow({ profile, members, projects, presets, onCre
             if (e.key === 'Escape') setText('');
           }}
           disabled={busy}
-          placeholder={placeholder || 'Add a task…  @person  #project  !priority  fri'}
-          className="flex-1 bg-transparent text-sm text-paper placeholder-dim focus:outline-none disabled:opacity-50"
+          placeholder={placeholder || 'Add a task — try @peter #adyen fri !high'}
+          className="flex-1 min-w-0 bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none disabled:opacity-50"
         />
-        {text.trim() && (
+        {text.trim() ? (
           <button onClick={() => create(false)} disabled={busy || !parsed.title.trim()}
-            className="btn-glass px-3 py-1 rounded-lg text-xs font-semibold disabled:opacity-40 shrink-0">
+            className="px-3 py-1 rounded-lg text-xs font-semibold bg-ember text-white disabled:opacity-40 shrink-0">
             {busy ? '…' : 'Add'}
           </button>
+        ) : (
+          <span className="hidden sm:block font-mono text-[11px] text-dim shrink-0">
+            Enter to add &middot; &#8679;Enter to open
+          </span>
         )}
       </div>
 
