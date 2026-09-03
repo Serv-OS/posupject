@@ -39,7 +39,8 @@ create index if not exists idx_tasks_start_date on public.tasks(start_date) wher
 --
 -- A work item is only ever a POINTER. Deleting the source row removes it, with
 -- nothing to clean up, because a view holds no rows of its own.
-create or replace view public.work_items as
+drop view if exists public.work_items;
+create view public.work_items as
 select
   'task'::text                          as type,
   'tasks'::text                         as source_table,
@@ -47,8 +48,10 @@ select
   t.title                               as title,
   coalesce(p.name, c.name, l.name)      as subtitle,
   t.owner_id                            as owner_id,
+  t.created_by                          as created_by,   -- powers the "I asked for" lens
   t.status                              as status,
   t.priority                            as priority,
+  t.blocked_reason                      as blocked_reason,
   t.due_date::timestamptz               as due_at,
   jsonb_build_object('view', 'task_detail', 'id', t.id) as link,
   t.updated_at                          as updated_at

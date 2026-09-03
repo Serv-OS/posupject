@@ -12,7 +12,7 @@ import {
 
 // Core pinned block (un-grouped, top).
 const CORE = [
-  ['mywork', 'My Work', Home], ['inbox', 'Inbox', Mail], ['calendar', 'Calendar', Calendar], ['chat', 'Chat', MessageSquare],
+  ['today', 'Today', Home], ['mywork', 'My Work (old)', Home], ['inbox', 'Inbox', Mail], ['calendar', 'Calendar', Calendar], ['chat', 'Chat', MessageSquare],
 ];
 
 // Collapsible groups (App Build is dynamic; My Work + My Account are pinned)

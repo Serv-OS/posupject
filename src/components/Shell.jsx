@@ -71,6 +71,7 @@ import FormsList from './crm/FormsList.jsx';
 import FormBuilder from './crm/FormBuilder.jsx';
 import TemplatesPanel from './crm/TemplatesPanel.jsx';
 import MyWork from './crm/MyWork.jsx';
+import TodayPanel from './crm/TodayPanel.jsx';
 import InboxPanel from './crm/InboxPanel.jsx';
 import CalendarPanel from './crm/CalendarPanel.jsx';
 import ChatPanel from './crm/ChatPanel.jsx';
@@ -253,6 +254,10 @@ export default function Shell({ session }) {
 
   const renderMain = () => {
     switch (view) {
+      case 'today':
+        return <TodayPanel profile={profile} onNavigate={navigateTo} />;
+      // Kept reachable on purpose while the redesign settles: if Today has a
+      // bad day, the old screen is one nav click away rather than a revert.
       case 'mywork':
         return <MyWork profile={profile} onNavigate={navigateTo} />;
       case 'inbox':
