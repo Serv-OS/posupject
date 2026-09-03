@@ -65,3 +65,28 @@ describe('isStalled', () => {
     expect(isStalled({ status: 'todo' }, NOW)).toBe(false);
   });
 });
+
+describe('the bar adds up', () => {
+  // A person whose work is entirely blocked must not draw an empty bar.
+  it('overdue + blocked + in progress + to do covers every open item', () => {
+    const rows = workloadRows([
+      w({ owner_id: 'u1', status: 'blocked' }),
+      w({ owner_id: 'u1', status: 'blocked' }),
+    ], MEMBERS, NOW);
+    const r = rows.find(x => x.id === 'u1');
+    expect(r.total).toBe(2);
+    expect(r.blocked).toBe(2);
+    expect(r.overdue + r.blocked + r.inProgress + r.todo).toBe(r.total);
+  });
+
+  it('holds for a mixed load too', () => {
+    const rows = workloadRows([
+      w({ owner_id: 'u1', due_at: day(-2) }),
+      w({ owner_id: 'u1', status: 'in_progress' }),
+      w({ owner_id: 'u1', status: 'blocked' }),
+      w({ owner_id: 'u1' }),
+    ], MEMBERS, NOW);
+    const r = rows.find(x => x.id === 'u1');
+    expect(r.overdue + r.blocked + r.inProgress + r.todo).toBeGreaterThanOrEqual(r.total);
+  });
+});

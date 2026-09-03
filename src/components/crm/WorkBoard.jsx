@@ -140,10 +140,15 @@ export default function WorkBoard({ profile, onNavigate }) {
                   {r.blocked > 0 && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber/15 text-amber">{r.blocked} blocked</span>}
                 </div>
                 {/* Scaled against the busiest person, so the bars compare. */}
+                {/* Blocked gets its own segment. Without it, someone whose work
+                    is ENTIRELY blocked drew an empty bar and read as having
+                    nothing on — the exact opposite of the truth, and on this
+                    data that was Duncan with two blocked items. */}
                 <div className="h-2.5 rounded-full bg-bdr overflow-hidden flex" style={{ width: `${Math.max(4, r.scale * 100)}%` }}>
-                  {r.overdue > 0 && <span className="h-full bg-red-500" style={{ width: `${(r.overdue / r.total) * 100}%` }} />}
-                  {r.inProgress > 0 && <span className="h-full bg-ember" style={{ width: `${(r.inProgress / r.total) * 100}%` }} />}
-                  {r.todo > 0 && <span className="h-full bg-slate-300" style={{ width: `${(r.todo / r.total) * 100}%` }} />}
+                  {r.overdue > 0 && <span className="h-full bg-red-500" title={`${r.overdue} overdue`} style={{ width: `${(r.overdue / r.total) * 100}%` }} />}
+                  {r.blocked > 0 && <span className="h-full bg-amber" title={`${r.blocked} blocked`} style={{ width: `${(r.blocked / r.total) * 100}%` }} />}
+                  {r.inProgress > 0 && <span className="h-full bg-ember" title={`${r.inProgress} in progress`} style={{ width: `${(r.inProgress / r.total) * 100}%` }} />}
+                  {r.todo > 0 && <span className="h-full bg-slate-300" title={`${r.todo} to do`} style={{ width: `${(r.todo / r.total) * 100}%` }} />}
                 </div>
                 {r.stalled.length > 0 && (
                   <div className="mt-2.5 pt-2.5 border-t border-bdr">
