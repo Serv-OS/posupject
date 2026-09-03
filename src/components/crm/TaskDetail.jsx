@@ -3,9 +3,11 @@ import { supabase } from '../../lib/supabase';
 import TimerButton from './TimerButton.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
 
-import { PRIORITY_LABEL, priorityLabel } from '../../lib/priority';
+import { PRIORITY_LABEL, PRIORITY_SLA, priorityLabel } from '../../lib/priority';
 import ActivityTimeline from './ActivityTimeline.jsx';
+import FieldChip from './FieldChip.jsx';
 const STATUS_OPTIONS = ['todo', 'in_progress', 'blocked', 'done'];
+const STATUS_LABEL = { todo: 'To do', in_progress: 'In progress', blocked: 'Blocked', done: 'Done' };
 const STATUS_STYLES = {
   todo: 'bg-blue-100 text-blue-700 border border-blue-200',
   in_progress: 'bg-orange-100 text-orange-700 border border-orange-200',
@@ -46,6 +48,17 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
     setCompanies(c.data || []);
     setLocations(l.data || []);
     setDeals(d.data || []);
+  };
+
+  // One field, one write, no mode. The Edit button stays for the description
+  // and title, where a textarea is genuinely the right control.
+  const setField = async (patch) => {
+    if (!canWrite) return;
+    const before = task;
+    setTask(t => ({ ...t, ...patch }));            // optimistic
+    const { error } = await supabase.from('tasks').update(patch).eq('id', taskId);
+    if (error) { setTask(before); alert('Could not save: ' + error.message); return; }
+    load();
   };
 
   const startEdit = () => { setDraft({ ...task }); setEditing(true); };
@@ -97,6 +110,15 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
 
   const changeStatus = async (status) => {
     const patch = { status };
+    // "Blocked" with no reason tells the next person nothing. Asking once, here,
+    // is what makes the Waiting rail on Today worth reading.
+    if (status === 'blocked') {
+      const why = prompt('What is it waiting on?', task.blocked_reason || '');
+      if (why === null) return;
+      patch.blocked_reason = why.trim() || null;
+    } else if (task.status === 'blocked') {
+      patch.blocked_reason = null;   // unblocked: the old reason is no longer true
+    }
     if (status === 'done') {
       const openSubs = subtasks.filter(s => s.status !== 'done').length;
       if (openSubs > 0 && !confirm(`${openSubs} subtask${openSubs > 1 ? 's are' : ' is'} still open. Complete anyway?`)) return;
@@ -165,19 +187,71 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
         {!editing && (
           <div className="flex gap-2 shrink-0 items-center">
             <TimerButton subjectType="task" subjectId={taskId} label={task.title} profile={profile} />
-            {canWrite && STATUS_OPTIONS.filter(s => s !== task.status).map(s => (
-              <button key={s} onClick={() => changeStatus(s)}
-                className={`px-2.5 py-1.5 text-[10px] font-bold uppercase rounded-xl ${STATUS_STYLES[s]} hover:opacity-80 transition`}>
-                {s === 'done' ? 'Complete' : s.replace('_', ' ')}
-              </button>
-            ))}
-            {canWrite && <button onClick={startEdit} className="btn-ghost px-3 py-1.5 rounded-xl text-xs">Edit</button>}
+            {canWrite && <button onClick={startEdit} className="btn-ghost px-3 py-1.5 rounded-xl text-xs">Edit text</button>}
             {profile.role === 'owner' && (
               <button onClick={deleteTask} className="px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded-xl hover:bg-red-50 transition">Delete</button>
             )}
           </div>
         )}
       </div>
+
+      {/* Every field that is a choice, edited where it is displayed. Replaces
+          an edit MODE that made moving a due date a four-step job. */}
+      {!editing && (
+        <div className="px-6 py-2.5 border-b border-bdr flex items-center gap-2 flex-wrap">
+          <FieldChip label="Status" disabled={!canWrite}
+            value={STATUS_LABEL[task.status] || task.status}
+            tone={task.status === 'blocked' ? 'red' : task.status === 'done' ? 'green' : task.status === 'in_progress' ? 'ember' : 'default'}
+            options={STATUS_OPTIONS.map(v => ({ value: v, label: STATUS_LABEL[v] || v.replace('_', ' ') }))}
+            onPick={(v) => changeStatus(v)} />
+
+          <FieldChip label="Priority" disabled={!canWrite}
+            value={PRIORITY_LABEL[task.priority] || '—'}
+            tone={task.priority === 'P0' ? 'red' : task.priority === 'P1' ? 'amber' : 'muted'}
+            options={['P0', 'P1', 'P2', 'P3'].map(v => ({ value: v, label: PRIORITY_LABEL[v], hint: PRIORITY_SLA[v]?.resolve }))}
+            onPick={(v) => setField({ priority: v })} />
+
+          <FieldChip label="Owner" disabled={!canWrite}
+            value={ownerName(task.owner_id) || 'Unassigned'}
+            tone={task.owner_id ? 'default' : 'muted'}
+            options={[{ value: null, label: 'Unassigned' }, ...members.map(m => ({ value: m.id, label: m.display_name || m.email }))]}
+            onPick={(v) => setField({ owner_id: v })} />
+
+          <FieldChip label="Due" disabled={!canWrite}
+            value={task.due_date ? new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : 'No date'}
+            tone={task.due_date && new Date(task.due_date) < new Date(new Date().toDateString()) && task.status !== 'done' ? 'red' : 'muted'}>
+            <div className="space-y-2">
+              <input type="date" value={task.due_date || ''} onChange={e => setField({ due_date: e.target.value || null })}
+                className="w-full px-2 py-1 bg-card border border-bdr rounded-lg text-xs text-paper" />
+              {task.due_date && (
+                <button onClick={() => setField({ due_date: null })} className="text-[11px] text-dim hover:text-red-600">Clear date</button>
+              )}
+            </div>
+          </FieldChip>
+
+          <FieldChip label="Project" disabled={!canWrite}
+            value={projects.find(p => p.id === task.project_id)?.name || 'None'}
+            tone={task.project_id ? 'ember' : 'muted'}
+            options={[{ value: null, label: 'No project' }, ...projects.map(p => ({ value: p.id, label: p.name }))]}
+            onPick={(v) => setField({ project_id: v, phase: null })} />
+
+          {/* Phase only exists once a project does, and only if it uses them. */}
+          {task.project_id && (projects.find(p => p.id === task.project_id)?.phases || []).length > 0 && (
+            <FieldChip label="Phase" disabled={!canWrite}
+              value={task.phase || 'Unphased'}
+              tone={task.phase ? 'ember' : 'muted'}
+              options={[{ value: null, label: 'Unphased' },
+                ...(projects.find(p => p.id === task.project_id)?.phases || []).map(x => ({ value: x, label: x }))]}
+              onPick={(v) => setField({ phase: v })} />
+          )}
+
+          {task.status === 'blocked' && (
+            <span className="text-[11px] text-red-600">
+              {task.blocked_reason ? `Blocked — ${task.blocked_reason}` : 'Blocked'}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Card grid layout */}
       <div className="flex-1 overflow-y-auto p-6">
@@ -300,15 +374,19 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
             {/* RIGHT: Linked context */}
             <div className="col-span-4 space-y-4">
               {/* Project */}
-              <Card title="Project">
-                {linkedProject ? (
+              {/* A card only exists once it has something in it. An empty
+                  "Project" card told you nothing except that the page had room
+                  for one; five of them turned the rail into a list of absences.
+                  What is missing is offered once, at the bottom, as an Add row. */}
+              {linkedProject && (
+                <Card title="Project">
                   <div onClick={() => onNavigate?.('project', linkedProject.id)}
                     className="p-3 glass-inner rounded-xl cursor-pointer">
                     <div className="text-sm font-medium text-paper">{linkedProject.name}</div>
                     <div className="text-xs text-muted mt-0.5">{linkedProject.status}</div>
                   </div>
-                ) : <Empty>No project assigned</Empty>}
-              </Card>
+                </Card>
+              )}
 
               {/* Linked company */}
               {ctx.companyName && (
@@ -335,6 +413,30 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
               )}
 
               <AttachmentsCard subjectType="task" subjectId={taskId} profile={profile} />
+
+              {/* Everything this task has NOT got, in one row rather than one
+                  empty card each. */}
+              {canWrite && (() => {
+                const missing = [];
+                if (!linkedProject) missing.push(['Project', () => document.querySelector('[data-chip="project"]')?.click()]);
+                if (!task.owner_id) missing.push(['Owner', null]);
+                if (!task.due_date) missing.push(['Due date', null]);
+                if (!ctx.companyName) missing.push(['Customer', null]);
+                if (!missing.length) return null;
+                return (
+                  <div className="glass-card rounded-2xl px-4 py-3">
+                    <div className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim mb-1.5">Not set</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {missing.map(([lbl]) => (
+                        <span key={lbl} className="px-2 py-0.5 rounded-lg border border-dashed border-bdr text-[11px] text-dim">
+                          {lbl}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="text-[11px] text-dim mt-1.5">Set these from the chips at the top.</div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

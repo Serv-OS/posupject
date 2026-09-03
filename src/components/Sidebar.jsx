@@ -11,12 +11,12 @@ import {
 } from 'lucide-react';
 
 // Core pinned block (un-grouped, top).
-const CORE = [
-  ['mywork', 'My Work', Home], ['inbox', 'Inbox', Mail], ['calendar', 'Calendar', Calendar], ['chat', 'Chat', MessageSquare],
+export const CORE = [
+  ['today', 'Today', Home], ['work', 'Work', Home], ['mywork', 'My Work (old)', Home], ['inbox', 'Inbox', Mail], ['calendar', 'Calendar', Calendar], ['chat', 'Chat', MessageSquare],
 ];
 
 // Collapsible groups (App Build is dynamic; My Work + My Account are pinned)
-const COLLAPSIBLE = [
+export const COLLAPSIBLE = [
   { id: 'sales', label: 'Sales', items: [
     ['companies', 'Companies', Building2], ['locations', 'Locations', MapPin], ['contacts', 'Contacts', User],
     ['leads', 'Leads', Target], ['deals', 'Deals', Banknote],
