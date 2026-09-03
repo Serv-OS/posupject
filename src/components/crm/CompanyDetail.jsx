@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { EditSheet } from './ui.jsx';
 import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
@@ -153,8 +154,29 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
 
       {/* Card grid - everything visible at once */}
       <div className="flex-1 overflow-y-auto p-6">
-        {editing ? (
+        {editing ? (<>
           <div className="max-w-4xl">
+            {/* Phone (23): the same fields in the same order, as a full-screen sheet. */}
+            <div className="lg:hidden">
+              <EditSheet title="Edit company" values={draft} onChange={set} onCancel={() => setEditing(false)} onSave={save}
+                sections={[
+                { title: 'Identity', fields: [
+                  { key: 'name', label: 'Name' }, { key: 'domain', label: 'Domain' }, { key: 'website', label: 'Website' }, { key: 'industry', label: 'Industry' },
+                  { key: 'country', label: 'Country', type: 'select', options: [['GB', 'United Kingdom'], ['US', 'United States']], hint: 'Drives invoice and quote currency defaults' },
+                ] },
+                { title: 'Address & contact', fields: [
+                  { key: 'phone', label: 'Phone', type: 'tel' }, { key: 'email', label: 'Email', type: 'email' },
+                  { key: 'address', label: 'Address' }, { key: 'city', label: 'City' }, { key: 'postcode', label: 'Postcode' },
+                ] },
+                { title: 'Commercial', summary: 'size, source, owner', fields: [
+                  { key: 'employee_count', label: 'Employees', type: 'number', parse: (v) => (v ? parseInt(v) : null) }, { key: 'source', label: 'Source' },
+                  { key: 'owner_id', label: 'Owner', type: 'select', options: [['', 'Unassigned'], ...members.map(m => [m.id, m.display_name || m.email])] },
+                ] },
+                { title: 'Notes', fields: [{ key: 'notes', label: 'Notes', type: 'textarea' }] },
+              ]} />
+            </div>
+          </div>
+          <div className="hidden lg:block max-w-4xl">
             <Card title="Edit Company">
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={label}>Name</label><input className={input} value={draft.name || ''} onChange={e => set('name', e.target.value)} /></div>
@@ -181,7 +203,7 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
               </div>
             </Card>
           </div>
-        ) : (
+        </>) : (
           <div className="grid grid-cols-12 gap-4 max-w-[1400px]">
 
             {/* LEFT COLUMN: Key Info + Locations */}

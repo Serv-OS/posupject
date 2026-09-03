@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { MobileTable, MobileDock, DockField, Mono, Pill } from '../crm/ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Wallet, Plus, Repeat, X, Trash2 } from 'lucide-react';
 import { gbp2, computeTotals } from '../../lib/money.js';
@@ -97,7 +98,47 @@ export default function BillsPanel({ profile, onNavigate }) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-5 border-b border-bdr flex items-center justify-between flex-wrap gap-3">
+      {/* Phone (20): title + the two numbers that matter, then cards or the real table. */}
+      <div className="lg:hidden flex-1 min-h-0 flex flex-col">
+        <div className="px-[18px] pt-3 pb-2.5 flex items-start gap-2.5">
+          <div className="flex-1 min-w-0">
+            <div className="font-display text-[23px] font-extrabold text-paper">Bills</div>
+            <Mono className="!tracking-[.18em] uppercase">{toPay.length} open · {gbp2(outstanding)} due</Mono>
+          </div>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-3 py-[9px] rounded-[10px] border text-[13px] font-semibold text-paper" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>
+            <option value="all">Filter</option>
+            {['draft', 'to_pay', 'partially_paid', 'overdue', 'paid', 'void'].map(x => <option key={x} value={x}>{STATUS_LABEL[x]}</option>)}
+          </select>
+        </div>
+        <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
+          {loading ? <div className="p-6 text-center text-dim text-sm">Loading…</div> : (
+            <MobileTable storageKey="bills.mobile" rows={filtered} onRow={(b) => onNavigate?.('bill', b.id)} empty="No bills yet — add your first supplier cost."
+              selectable={false}
+              columns={[
+                { key: 'supplier', label: 'Supplier', pinned: true, render: (b) => supName(b) },
+                { key: 'number', label: 'Number', render: (b) => `BILL-${b.bill_number}`, mono: true },
+                { key: 'due', label: 'Due', render: (b) => fmtD(b.due_date) },
+                { key: 'total', label: 'Total', align: 'right', mono: true, render: (b) => gbp2(b.total) },
+                { key: 'status', label: 'Status', render: (b) => STATUS_LABEL[billStatus(b)] },
+                { key: 'paid', label: 'Paid', align: 'right', mono: true, render: (b) => gbp2(b.amount_paid || 0) },
+                { key: 'ref', label: 'Ref', render: (b) => b.supplier_ref || '—' },
+                { key: 'context', label: 'Context', render: (b) => (b.cost_context === 'deal' ? 'deal cost' : 'ongoing') },
+                { key: 'recurring', label: 'Recurring', render: (b) => (b.recurring_id ? 'yes' : '—') },
+                { key: 'created', label: 'Created', render: (b) => fmtD(b.created_at) },
+              ]}
+              card={(b) => {
+                const st = billStatus(b);
+                const days = b.due_date ? Math.round((new Date(b.due_date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000) : null;
+                const chip = st === 'overdue' ? { text: `Overdue ${Math.abs(days)}d`, tone: 'coral' } : st === 'paid' ? { text: 'Paid', tone: 'primary' } : st === 'draft' ? { text: 'Draft', tone: 'muted' } : { text: b.due_date ? `Due ${fmtD(b.due_date)}` : STATUS_LABEL[st], tone: 'amber' };
+                return { title: supName(b), amount: gbp2(b.total), chip, tone: st === 'overdue' ? 'coral' : undefined,
+                  meta: [`BILL-${b.bill_number}`, b.supplier_ref ? `ref ${b.supplier_ref}` : null, b.recurring_id ? 'recurring' : (b.cost_context === 'deal' ? 'deal cost' : null)].filter(Boolean).join(' · ') };
+              }} />
+          )}
+        </div>
+        {canWrite && <MobileDock><DockField onClick={newBill}>New bill, or scan a receipt</DockField></MobileDock>}
+      </div>
+
+      <div className="hidden lg:flex px-6 py-5 border-b border-bdr items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2.5">
           <Wallet size={20} className="text-ember" />
           <div>
@@ -116,7 +157,7 @@ export default function BillsPanel({ profile, onNavigate }) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="hidden lg:block flex-1 overflow-y-auto p-6">
         <div className="max-w-[1100px] mx-auto space-y-5">
           {tab === 'bills' ? (
             <>

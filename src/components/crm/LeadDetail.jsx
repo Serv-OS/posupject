@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { EditSheet } from './ui.jsx';
 import TimerButton from './TimerButton.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 import AssociationManager from './AssociationManager.jsx';
@@ -168,8 +169,28 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
       )}
 
       <div className="flex-1 overflow-y-auto p-6">
-        {editing ? (
+        {editing ? (<>
           <div className="max-w-2xl">
+            {/* Phone (23): the same fields in the same order, as a full-screen sheet. */}
+            <div className="lg:hidden">
+              <EditSheet title="Edit lead" values={draft} onChange={set} onCancel={() => setEditing(false)} onSave={save}
+                sections={[
+                { title: 'Lead', fields: [
+                  { key: 'name', label: 'Name' },
+                  { key: 'source', label: 'Source', type: 'select', options: [['', '--'], ...SOURCE_OPTIONS.map(s => [s, s.replace(/_/g, ' ')])] },
+                  { key: 'priority', label: 'Priority', type: 'select', options: [['hot', 'Hot'], ['warm', 'Warm'], ['medium', 'Medium'], ['cold', 'Cold']] },
+                  { key: 'owner_id', label: 'Owner', type: 'select', options: [['', 'Unassigned'], ...members.map(m => [m.id, m.display_name || m.email])] },
+                ] },
+                { title: 'Venue', fields: [
+                  { key: 'venue_type', label: 'Venue type', type: 'select', options: [['', '--'], ...VENUE_TYPES.map(v => [v, v.replace(/_/g, ' ')])] },
+                  { key: 'covers', label: 'Covers', type: 'number' }, { key: 'current_pos', label: 'Current POS' },
+                ] },
+                { title: 'Next step', summary: 'action, date', fields: [{ key: 'next_action', label: 'Next action', placeholder: 'e.g. Book demo' }, { key: 'next_action_date', label: 'Next action date', type: 'date' }] },
+                { title: 'Notes', fields: [{ key: 'notes', label: 'Notes', type: 'textarea' }] },
+              ]} />
+            </div>
+          </div>
+          <div className="hidden lg:block max-w-2xl">
             <Card title="Edit Lead">
               <div className="space-y-3">
                 <div><label className={label}>Name</label><input className={input} value={draft.name || ''} onChange={e => set('name', e.target.value)} /></div>
@@ -192,7 +213,7 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
               </div>
             </Card>
           </div>
-        ) : (
+        </>) : (
           <div className="grid grid-cols-12 gap-4 max-w-[1400px]">
             {/* LEFT: key info + linked records */}
             <div className="col-span-4 space-y-4">

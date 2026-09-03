@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { EditSheet } from './ui.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ConversationTimeline from './ConversationTimeline.jsx';
 import CallButton from '../CallButton.jsx';
@@ -321,8 +322,30 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
       )}
 
       {/* Content */}
-      {editing ? (
+      {editing ? (<>
         <div className="flex-1 min-h-0 overflow-y-auto p-4 lg:p-6">
+            {/* Phone (23): the same fields in the same order, as a full-screen sheet. */}
+            <div className="lg:hidden">
+              <EditSheet title="Edit ticket" values={draft} onChange={set} onCancel={() => setEditing(false)} onSave={save}
+                sections={[
+                { title: 'Ticket', fields: [
+                  { key: 'subject', label: 'Subject' }, { key: 'description', label: 'Description', type: 'textarea' },
+                  { key: 'stage', label: 'Stage', type: 'select', options: STAGES.map(s => [s, STAGE_LABELS[s]]) },
+                  { key: 'priority', label: 'Priority', type: 'select', options: ['P0', 'P1', 'P2', 'P3'].map(p => [p, PRIORITY_LABEL[p]]) },
+                  { key: 'ticket_type', label: 'Type', type: 'select', options: [['support', 'Support'], ['bug', 'Bug'], ['feature_request', 'Feature Request'], ['billing', 'Billing'], ['other', 'Other']] },
+                  { key: 'owner_id', label: 'Owner', type: 'select', options: [['', 'Unassigned'], ...members.map(m => [m.id, m.display_name || m.email])] },
+                ] },
+                { title: 'Who', fields: [
+                  { key: 'company_id', label: 'Company', type: 'select', options: companies.map(c => [c.id, c.name]) },
+                  { key: 'location_id', label: 'Site', type: 'select', options: [['', 'Not site specific'], ...locations.filter(l => !draft.company_id || l.company_id === draft.company_id).map(l => [l.id, `${l.name}${l.city ? ` — ${l.city}` : ''}`])] },
+                  { key: 'channel', label: 'Channel', type: 'select', options: [['', 'Not set'], ['email', 'Email'], ['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['phone', 'Phone'], ['web', 'Web']] },
+                  { key: 'customer_email', label: 'Customer email', type: 'email' }, { key: 'customer_phone', label: 'Customer phone', type: 'tel' },
+                ] },
+                { title: 'Notes', fields: [{ key: 'notes', label: 'Notes', type: 'textarea' }] },
+              ]} />
+            </div>
+          </div>
+        <div className="hidden lg:block flex-1 min-h-0 overflow-y-auto p-4 lg:p-6">
           <div className="max-w-3xl">
             <Card title="Edit Support Ticket">
               <div className="space-y-3">
@@ -363,7 +386,7 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
             </Card>
           </div>
         </div>
-      ) : (
+      </>) : (
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-0 lg:gap-5 p-0 lg:p-6 max-w-[1600px] w-full mx-auto overflow-hidden">
 
             {/* Side cards. On a phone this is one scrolling "Details" pane; on

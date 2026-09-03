@@ -1,6 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import Sidebar from './Sidebar.jsx';
+import MobileInbox from './crm/MobileInbox.jsx';
+import { OfflineBanner } from './crm/ui.jsx';
+import { useIsMobile } from '../lib/useMedia';
+import { watch as watchOfflineQueue } from '../lib/offlineQueue';
 import PhoneBar from './PhoneBar.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import TimerWidget from './TimerWidget.jsx';
@@ -105,6 +109,9 @@ export default function Shell({ session }) {
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
   const [view, setView]         = useState(() => parseHash().view);
+  const isMobile = useIsMobile();
+  // Writes made without signal send themselves when it returns (screen 18).
+  useEffect(() => watchOfflineQueue(supabase), []);
   const [openItem, setOpenItem] = useState(null);
   const [detailId, setDetailId] = useState(() => parseHash().detailId);
   const firstUrlSync = useRef(true);
@@ -278,6 +285,7 @@ export default function Shell({ session }) {
       case 'mywork':
         return <MyWork profile={profile} onNavigate={navigateTo} />;
       case 'inbox':
+        if (isMobile) return <MobileInbox profile={profile} onNavigate={navigateTo} />;
         return <InboxPanel profile={profile} onNavigate={navigateTo} />;
       case 'calendar':
         return <CalendarPanel profile={profile} onNavigate={navigateTo} />;
@@ -480,6 +488,7 @@ export default function Shell({ session }) {
           <NotificationBell profile={profile} onNavigate={navigateTo} />
         </div>
       </div>
+      {isMobile && view !== 'inbox' && <div className="fixed top-0 inset-x-0 z-50 pointer-events-none [&>*]:pointer-events-auto"><OfflineBanner onView={() => setView('inbox')} /></div>}
       <main className={`flex-1 min-w-0 overflow-hidden ${WORK_VIEWS.has(view) ? 'work' : ''}`}>
         {renderMain()}
       </main>

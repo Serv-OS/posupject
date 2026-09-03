@@ -444,3 +444,237 @@ export function fmtHM(seconds) {
   const s = Math.max(0, Math.round(seconds || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
 }
+
+// ── Phone patterns (screens 18, 20, 22, 23) ───────────────────────────────
+
+import { isOnline as _isOnline, pending as _pending } from '../../lib/offlineQueue';
+
+/** Bottom sheet: dims the page, slides a card up from the tab bar. */
+export function MobileSheet({ title, sub, onClose, children, footer, tall }) {
+  return (
+    <div className="fixed inset-0 z-[70] flex flex-col justify-end bg-black/40" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className={`rounded-t-[20px] border-t flex flex-col ${tall ? 'h-[88vh]' : 'max-h-[80vh]'}`}
+        style={{ background: 'var(--raised-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-pop)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        <div className="mx-auto mt-2 w-9 h-1 rounded-full" style={{ background: 'var(--ink-line)' }} />
+        {(title || sub) && (
+          <div className="px-[18px] pt-3 pb-2.5 border-b" style={{ borderColor: 'var(--hair)' }}>
+            {title && <div className="text-[15px] font-bold text-paper">{title}</div>}
+            {sub && <div className="text-[12px] text-dim">{sub}</div>}
+          </div>
+        )}
+        <div className="flex-1 overflow-y-auto px-[14px] py-3 flex flex-col gap-3">{children}</div>
+        {footer && <div className="px-[14px] py-3 border-t flex gap-2" style={{ borderColor: 'var(--hair)' }}>{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+/** A row in a sheet: title, optional sub, optional trailing. Coral tone for destructive. */
+export function SheetRow({ children, sub, trailing, onClick, tone, active }) {
+  return (
+    <button type="button" onClick={onClick} className="w-full min-h-[48px] px-[15px] py-2.5 rounded-[12px] flex items-center gap-2.5 text-left border"
+      style={{ background: active ? 'rgb(var(--c-primary) / .10)' : 'var(--surface-solid)', borderColor: active ? 'rgb(var(--c-primary) / .35)' : 'var(--ink-line)' }}>
+      <span className="flex-1 min-w-0">
+        <span className="block text-[15px] font-medium truncate" style={{ color: tone === 'coral' ? 'rgb(var(--c-coral-deep))' : 'rgb(var(--c-text))' }}>{children}</span>
+        {sub && <span className="block text-[12px] text-dim truncate">{sub}</span>}
+      </span>
+      {trailing}
+    </button>
+  );
+}
+
+/** Amber banner: offline, or writes still waiting to send (18). Draws nothing when all is well. */
+export function OfflineBanner({ onView }) {
+  const [state, setState] = _useState({ online: _isOnline(), n: _pending().length, failed: _pending().filter(p => p.error).length });
+  _useEffect(() => {
+    const f = () => setState({ online: _isOnline(), n: _pending().length, failed: _pending().filter(p => p.error).length });
+    window.addEventListener('online', f); window.addEventListener('offline', f); window.addEventListener('offline-queue-changed', f);
+    return () => { window.removeEventListener('online', f); window.removeEventListener('offline', f); window.removeEventListener('offline-queue-changed', f); };
+  }, []);
+  if (state.online && state.n === 0) return null;
+  const title = !state.online ? `Offline${state.n ? ` — ${state.n} change${state.n === 1 ? '' : 's'} queued` : ''}` : state.failed ? `${state.failed} change${state.failed === 1 ? '' : 's'} could not send` : `Sending ${state.n} queued change${state.n === 1 ? '' : 's'}…`;
+  const body = !state.online ? 'They will send when signal returns' : state.failed ? 'Open the Inbox to retry or discard them' : 'Signal is back';
+  return (
+    <div className="lg:hidden mx-[14px] mt-3 px-[14px] py-[11px] rounded-[12px] flex items-center gap-2.5 border"
+      style={{ background: 'rgb(var(--c-amber) / .14)', borderColor: 'rgb(var(--c-amber) / .32)' }}>
+      <div className="flex-1 min-w-0">
+        <div className="text-[13px] font-semibold" style={{ color: 'rgb(var(--c-amber-deep))' }}>{title}</div>
+        <div className="text-[12px] text-muted">{body}</div>
+      </div>
+      {onView && <button type="button" onClick={onView} className="text-[12px] font-semibold" style={{ color: 'rgb(var(--c-amber-deep))' }}>View</button>}
+    </div>
+  );
+}
+
+/** Hold to act (pin, select, move). 550ms, cancelled by movement. */
+export function useLongPress(onLong, ms = 550) {
+  const t = _useRef(null);
+  const clear = () => { if (t.current) { clearTimeout(t.current); t.current = null; } };
+  return (arg) => ({
+    onTouchStart: () => { clear(); t.current = setTimeout(() => { onLong(arg); if (navigator.vibrate) navigator.vibrate(10); }, ms); },
+    onTouchEnd: clear, onTouchMove: clear, onTouchCancel: clear,
+    onContextMenu: (e) => { e.preventDefault(); onLong(arg); },
+  });
+}
+
+/**
+ * Wide data table on a phone (20): Cards showing the three columns you chose, or the
+ * real table with the first column pinned. Long-press a row for selection.
+ *
+ * columns: [{ key, label, render?(row) → node, align?: 'right', mono?: bool, pinned?: bool }]
+ * card:    (row) → { title, amount?, chip?: { text, tone }, meta?: string, tone?: 'coral'|'amber' }
+ */
+export function MobileTable({ storageKey, rows, columns, card, onRow, rowKey = (r) => r.id, empty = 'Nothing here yet.', selectable, bulk }) {
+  const [mode, setMode] = _useState(() => { try { return localStorage.getItem(`${storageKey}.mode`) || 'cards'; } catch { return 'cards'; } });
+  const [chosen, setChosen] = _useState(() => {
+    try { const v = JSON.parse(localStorage.getItem(`${storageKey}.cols`) || 'null'); if (Array.isArray(v) && v.length) return v; } catch { /* default below */ }
+    return columns.filter(c => !c.pinned).slice(0, 3).map(c => c.key);
+  });
+  const [chooser, setChooser] = _useState(false);
+  const [selected, setSelected] = _useState(() => new Set());
+  _useEffect(() => { try { localStorage.setItem(`${storageKey}.mode`, mode); localStorage.setItem(`${storageKey}.cols`, JSON.stringify(chosen)); } catch { /* fine */ } }, [mode, chosen, storageKey]);
+  const press = useLongPress((row) => { if (!selectable) return; setSelected(s => { const n = new Set(s); const k = rowKey(row); n.has(k) ? n.delete(k) : n.add(k); return n; }); });
+  const pinned = columns.find(c => c.pinned) || columns[0];
+  const rest = columns.filter(c => c !== pinned);
+  const shown = rest.filter(c => chosen.includes(c.key));
+  const toggleCol = (k) => setChosen(c => (c.includes(k) ? c.filter(x => x !== k) : [...c, k]));
+  const cell = (c, r) => (c.render ? c.render(r) : r[c.key] ?? '—');
+  const tap = (row) => { if (selected.size) { press(row).onContextMenu({ preventDefault() {} }); return; } onRow?.(row); };
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="flex items-center gap-2">
+        <Segmented value={mode} options={[['cards', 'Cards'], ['table', 'Table']]} onChange={setMode} />
+        <button type="button" onClick={() => setChooser(true)} className="text-[13px] font-semibold" style={{ color: 'rgb(var(--c-primary-deep))' }}>Columns</button>
+        {selectable && selected.size > 0 && <Mono className="ml-auto">{selected.size} selected</Mono>}
+      </div>
+      {rows.length === 0 ? <Card className="px-4 py-6 text-center text-[14px] text-dim">{empty}</Card> : mode === 'cards' ? (
+        <Card>
+          {rows.map((r, i) => {
+            const c = card(r); const k = rowKey(r); const on = selected.has(k);
+            return (
+              <div key={k} {...press(r)} onClick={() => tap(r)} className={`px-[15px] py-[13px] ${i < rows.length - 1 ? 'border-b' : ''}`}
+                style={{ borderColor: 'var(--hair)', borderLeft: c.tone ? `3px solid rgb(var(--c-${c.tone}))` : '3px solid transparent', background: on ? 'rgb(var(--c-primary) / .08)' : undefined }}>
+                <div className="flex items-center gap-2">
+                  {selectable && selected.size > 0 && <Check done={on} size={18} />}
+                  <span className="text-[15px] font-semibold flex-1 min-w-0 truncate text-paper">{c.title}</span>
+                  {c.amount != null && <span className="font-mono text-[14px] font-bold text-paper">{c.amount}</span>}
+                </div>
+                <div className="flex items-center gap-2 mt-1 min-w-0">
+                  {c.chip && <Pill tone={c.chip.tone}>{c.chip.text}</Pill>}
+                  <span className="text-[12px] text-muted truncate">{c.meta || shown.map(col => cell(col, r)).filter(v => v != null && v !== '—').map((v, j) => <span key={j}>{j ? ' · ' : ''}{v}</span>)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <div className="overflow-x-auto [scrollbar-width:thin]">
+            <table className="min-w-full text-[13px] border-collapse">
+              <thead>
+                <tr>
+                  <th className="sticky left-0 z-10 text-left px-[15px] py-2.5 font-mono text-[9px] font-bold tracking-[.18em] uppercase text-dim border-b" style={{ background: 'var(--card-bg)', borderColor: 'var(--hair)' }}>{pinned.label}</th>
+                  {shown.map(c => <th key={c.key} className={`px-3 py-2.5 font-mono text-[9px] font-bold tracking-[.18em] uppercase text-dim border-b whitespace-nowrap ${c.align === 'right' ? 'text-right' : 'text-left'}`} style={{ borderColor: 'var(--hair)' }}>{c.label}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const k = rowKey(r); const on = selected.has(k);
+                  return (
+                    <tr key={k} {...press(r)} onClick={() => tap(r)} style={{ background: on ? 'rgb(var(--c-primary) / .08)' : undefined }}>
+                      <td className={`sticky left-0 z-10 px-[15px] py-2.5 font-medium text-paper whitespace-nowrap ${i < rows.length - 1 ? 'border-b' : ''}`} style={{ background: on ? 'rgb(var(--c-primary) / .08)' : 'var(--card-bg)', borderColor: 'var(--hair)' }}>{cell(pinned, r)}</td>
+                      {shown.map(c => <td key={c.key} className={`px-3 py-2.5 whitespace-nowrap text-paper-soft ${c.align === 'right' ? 'text-right' : ''} ${c.mono ? 'font-mono' : ''} ${i < rows.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>{cell(c, r)}</td>)}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-[15px] py-2 text-[11px] text-dim border-t" style={{ borderColor: 'var(--hair)' }}>First column pinned, rest scrolls · {selectable ? 'long-press a row to select' : `${rest.length} columns available`}</div>
+        </Card>
+      )}
+      {selectable && selected.size > 0 && bulk && (
+        <DarkBar>{bulk([...selected], () => setSelected(new Set()))}</DarkBar>
+      )}
+      {chooser && (
+        <MobileSheet title="Columns" sub={mode === 'cards' ? 'Cards show up to three' : 'Every column of the desktop table'} onClose={() => setChooser(false)}>
+          {rest.map(c => (
+            <SheetRow key={c.key} active={chosen.includes(c.key)} onClick={() => toggleCol(c.key)} trailing={<Check done={chosen.includes(c.key)} size={18} />}>{c.label}</SheetRow>
+          ))}
+        </MobileSheet>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Long edit form on a phone (23): full-screen sheet, the same fields in the same order,
+ * grouped under headings, sections beyond the first two collapsed to a summary row, and
+ * a keyboard accessory bar that walks the fields in order.
+ *
+ * sections: [{ title, summary?, fields: [{ key, label, type?: 'text'|'number'|'date'|'datetime-local'|'select'|'textarea'|'email'|'tel', options?: [[value,label]], placeholder?, hint?, parse?(v) }] }]
+ */
+export function EditSheet({ title, sections, values, onChange, onCancel, onSave, saving, error, openSections = 2 }) {
+  const all = sections.flatMap(s => s.fields);
+  const [open, setOpen] = _useState(() => new Set(sections.slice(0, openSections).map(s => s.title)));
+  const [focus, setFocus] = _useState(-1);
+  const refs = _useRef({});
+  const go = (i) => { const f = all[i]; if (!f) return; const sec = sections.find(s => s.fields.includes(f)); setOpen(o => new Set([...o, sec.title])); setTimeout(() => refs.current[f.key]?.focus(), 30); };
+  const set = (f, raw) => onChange(f.key, f.parse ? f.parse(raw) : (raw === '' ? null : raw));
+  const inputCls = 'w-full bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none';
+  return (
+    <div className="fixed inset-0 z-[70] flex flex-col" style={{ background: 'var(--scene-bg)' }}>
+      <div className="px-[18px] pt-3 pb-3 border-b flex items-center gap-3" style={{ borderColor: 'var(--hair)', background: 'var(--panel-bg)' }}>
+        <button type="button" onClick={onCancel} className="text-[14px] text-muted">Cancel</button>
+        <div className="flex-1 min-w-0 text-center">
+          <div className="text-[15px] font-bold text-paper truncate">{title}</div>
+          <div className="text-[11px] text-dim">{all.length} fields · {sections.length} sections</div>
+        </div>
+        <button type="button" onClick={onSave} disabled={saving} className="text-[14px] font-semibold disabled:opacity-50" style={{ color: 'rgb(var(--c-primary-deep))' }}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-[14px] flex flex-col gap-3 pb-[90px]">
+        {error && <div className="px-[14px] py-2.5 rounded-[12px] text-[13px]" style={{ background: 'rgb(var(--c-coral) / .12)', color: 'rgb(var(--c-coral-deep))' }}>Could not save: {error}</div>}
+        {sections.map(s => (
+          <Card key={s.title}>
+            {open.has(s.title) ? (
+              <>
+                <div className="px-[15px] py-2.5 border-b font-mono text-[9px] font-bold tracking-[.18em] uppercase text-dim" style={{ borderColor: 'var(--hair)' }}>{s.title}</div>
+                {s.fields.map((f, i) => {
+                  const idx = all.indexOf(f); const v = values[f.key] ?? '';
+                  const common = { ref: (el) => { refs.current[f.key] = el; }, onFocus: () => setFocus(idx), className: inputCls, placeholder: f.placeholder || 'Add' };
+                  return (
+                    <div key={f.key} className={`px-[15px] py-[11px] ${i < s.fields.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)', background: focus === idx ? 'rgb(var(--c-primary) / .06)' : undefined }}>
+                      <div className="text-[11px] text-dim mb-0.5">{f.label}</div>
+                      {f.type === 'select' ? (
+                        <select {...common} value={v ?? ''} onChange={e => set(f, e.target.value)}>{(f.options || []).map(([ov, ol]) => <option key={ov} value={ov}>{ol}</option>)}</select>
+                      ) : f.type === 'textarea' ? (
+                        <textarea {...common} rows={3} value={v ?? ''} onChange={e => set(f, e.target.value)} className={inputCls + ' resize-none'} />
+                      ) : (
+                        <input {...common} type={f.type || 'text'} value={f.type === 'datetime-local' ? String(v || '').slice(0, 16) : v ?? ''} onChange={e => set(f, e.target.value)} />
+                      )}
+                      {f.hint && <div className="text-[10px] text-dim mt-1">{f.hint}</div>}
+                    </div>
+                  );
+                })}
+              </>
+            ) : (
+              <button type="button" onClick={() => setOpen(o => new Set([...o, s.title]))} className="w-full px-[15px] py-3 flex items-center text-left">
+                <span className="text-[15px] font-medium text-paper">{s.title}</span>
+                <span className="ml-auto text-[12px] text-dim">{s.fields.length} fields{s.summary ? ` · ${s.summary}` : ''}</span>
+              </button>
+            )}
+          </Card>
+        ))}
+      </div>
+      {focus >= 0 && (
+        <div className="absolute inset-x-0 bottom-0 px-[14px] py-2 border-t flex items-center gap-3" style={{ background: 'var(--panel-bg)', borderColor: 'var(--hair)', paddingBottom: 'calc(8px + env(safe-area-inset-bottom))' }}>
+          <Mono>Field {focus + 1} of {all.length}</Mono>
+          <span className="flex-1" />
+          <button type="button" onClick={() => go(focus - 1)} disabled={focus <= 0} className="text-[13px] font-semibold text-paper disabled:opacity-40">Previous</button>
+          <button type="button" onClick={() => go(focus + 1)} disabled={focus >= all.length - 1} className="text-[13px] font-semibold disabled:opacity-40" style={{ color: 'rgb(var(--c-primary-deep))' }}>Next</button>
+        </div>
+      )}
+    </div>
+  );
+}

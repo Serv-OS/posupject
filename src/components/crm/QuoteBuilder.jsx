@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
 import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
+import { Card, Mono, MobileSheet, SheetRow, EditSheet, PrimaryBtn, GhostBtn } from './ui.jsx';
 
 // Build the customer-safe card-processing breakdown frozen onto the quote.
 // Excludes buy rate & margin — customer only sees current vs our effective rate + saving.
@@ -50,6 +51,9 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const [newProc, setNewProc] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Phone builder (21): which sheet is open — 'settings' | 'add' | 'terms' | 'savings' | 'link' | { item: idx }
+  const [sheet, setSheet] = useState(null);
+  const [itemQ, setItemQ] = useState('');
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -163,8 +167,131 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
 
   return (
     <div className="h-full flex flex-col">
+      {/* Phone (21): header collapsed to a summary bar, items as rows each edited in a sheet, total docked. */}
+      <div className="lg:hidden flex-1 min-h-0 flex flex-col">
+        <div className="px-[18px] pt-3 pb-3 border-b" style={{ borderColor: 'var(--hair)' }}>
+          <button onClick={onClose} className="text-[13px] text-dim">&larr; Quotes</button>
+          <div className="font-display text-[21px] font-extrabold text-paper truncate">Quote — {company?.name || `#${quote.quote_number}`}</div>
+          <button onClick={() => canWrite && setSheet('settings')} className="mt-2 w-full flex items-center gap-2.5 px-[13px] py-[11px] rounded-[11px] border text-left" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>
+            <span className="flex-1 min-w-0">
+              <span className="block text-[13px] font-medium text-paper truncate">{quote.status}{quote.valid_until ? ` · valid until ${new Date(quote.valid_until + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : ''} · {taxLabelFor(cur)} per line</span>
+              <span className="block text-[12px] text-dim truncate">{contact ? [contact.first_name, contact.last_name].filter(Boolean).join(' ') : 'No contact'} · terms: {quote.payment_terms === 'deposit' ? `deposit ${quote.deposit_percent || 0}%` : quote.payment_terms === 'invoice_later' ? 'invoice later' : 'pay now'}</span>
+            </span>
+            {canWrite && <span className="text-[13px] font-semibold" style={{ color: 'rgb(var(--c-primary-deep))' }}>Edit</span>}
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-[14px] pb-[calc(150px+env(safe-area-inset-bottom))] flex flex-col gap-3">
+          <Card>
+            <div className="px-[15px] py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--hair)' }}>
+              <span className="text-[14px] font-bold text-paper">Items</span><Mono>{items.length}</Mono>
+            </div>
+            {items.length === 0 && <div className="px-[15px] py-4 text-[13px] text-dim">No items yet.</div>}
+            {items.map((it, idx) => (
+              <button key={idx} onClick={() => canWrite && setSheet({ item: idx })} className="w-full text-left px-[15px] py-3 border-b" style={{ borderColor: 'var(--hair)' }}>
+                <div className="flex items-baseline gap-2.5">
+                  <span className="text-[14px] font-medium text-paper flex-1 min-w-0 truncate">{it.name || 'Item'}</span>
+                  <span className="font-mono text-[14px] font-semibold text-paper">{money(lineTotal(it))}{it.billing_type === 'monthly' ? '/mo' : ''}</span>
+                </div>
+                <div className="text-[12px] text-muted">{it.qty} × {money(it.unit_price)}{Number(it.discount) ? ` · discount ${it.discount}%` : ''}{it.category === 'saas' || it.category === 'payments' ? ` · ${CAT_LABEL[it.category]}` : ` · ${taxLabelFor(cur)} ${it.tax_rate ?? defaultTaxRateFor(cur)}%`}</div>
+              </button>
+            ))}
+            {canWrite && (
+              <button onClick={() => { setItemQ(''); setSheet('add'); }} className="w-full px-[15px] py-[13px] flex items-center gap-2.5 text-[14px] font-semibold" style={{ color: 'rgb(var(--c-primary-deep))' }}>
+                <span className="text-[17px]">+</span> Add item — search the catalogue
+              </button>
+            )}
+          </Card>
+          <Card>
+            <div className="px-[15px] py-2.5 border-b font-mono text-[9px] font-bold tracking-[.18em] uppercase text-dim" style={{ borderColor: 'var(--hair)' }}>Also on this quote</div>
+            {[['terms', 'Terms & notes', quote.terms ? 'set' : 'none'], ['savings', 'Card-processing savings', quote.processing_account_id ? 'attached' : 'none'], ['link', 'Customer link', 'copy']].map(([k, l, v], i, arr) => (
+              <button key={k} onClick={() => setSheet(k)} className={`w-full px-[15px] py-3 flex items-center text-left ${i < arr.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
+                <span className="text-[15px] text-paper">{l}</span><span className="ml-auto text-[12px] text-dim">{v}</span>
+              </button>
+            ))}
+          </Card>
+        </div>
+        {/* Docked total */}
+        <div className="fixed inset-x-0 z-30 px-[14px] pt-2.5 pb-2.5 border-t" style={{ bottom: 'calc(56px + env(safe-area-inset-bottom))', background: 'var(--panel-bg)', backdropFilter: 'blur(12px)', borderColor: 'var(--hair)' }}>
+          <div className="flex items-baseline gap-2">
+            <span className="text-[12px] text-muted flex-1">Net {money(totals.oneOff)} · {taxLabelFor(cur)} {money(totals.tax)}{totals.recurringArr ? ` · ARR ${money(totals.recurringArr)}` : ''}</span>
+            <span className="font-display text-[20px] font-extrabold text-paper">{money(totals.oneOffTotal)}</span>
+          </div>
+          <div className="flex gap-2 mt-2">
+            <GhostBtn className="flex-1 justify-center !py-[11px]" onClick={() => window.open(publicUrl, '_blank')}>Preview</GhostBtn>
+            {canWrite && quote.status !== 'won' && <GhostBtn className="flex-1 justify-center !py-[11px]" onClick={markWon}>Mark won</GhostBtn>}
+            {canWrite && <PrimaryBtn className="flex-1 justify-center !py-[11px]" onClick={save} disabled={saving}>{saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}</PrimaryBtn>}
+          </div>
+        </div>
+
+        {sheet === 'settings' && (
+          <EditSheet title="Quote settings" values={quote} onChange={(k, v) => setQ(k, v)} onCancel={() => setSheet(null)} onSave={() => setSheet(null)} openSections={2}
+            sections={[
+              { title: 'Status & currency', fields: [
+                { key: 'status', label: 'Status', type: 'select', options: ['draft', 'sent', 'viewed', 'signed', 'paid', 'won', 'declined', 'expired', 'void'].map(x => [x, x]) },
+                { key: 'currency', label: 'Currency', type: 'select', options: [['GBP', 'GBP £'], ['USD', 'USD $']] },
+                { key: 'location_id', label: 'Location (install site)', type: 'select', options: [['', '— None —'], ...locations.map(l => [l.id, l.name])] },
+              ] },
+              { title: 'Dates & terms', fields: [
+                { key: 'valid_until', label: 'Valid until', type: 'date' }, { key: 'go_live_date', label: 'Go-live date', type: 'date' },
+                { key: 'payment_terms', label: 'Payment terms', type: 'select', options: [['pay_now', 'Charge full now'], ['deposit', 'Deposit'], ['invoice_later', 'Invoice later']] },
+                { key: 'deposit_percent', label: 'Deposit %', type: 'number' },
+              ] },
+            ]} />
+        )}
+        {sheet === 'add' && (
+          <MobileSheet title="Add item" sub="Search the catalogue, or add a custom line" onClose={() => setSheet(null)} tall>
+            <input autoFocus value={itemQ} onChange={e => setItemQ(e.target.value)} placeholder="Search products…" className="w-full px-[15px] py-[13px] rounded-[12px] border bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+            {products.filter(p => !itemQ.trim() || `${p.name} ${CAT_LABEL[p.category]}`.toLowerCase().includes(itemQ.trim().toLowerCase())).slice(0, 40).map(p => (
+              <SheetRow key={p.id} sub={`${CAT_LABEL[p.category]} · ${p.billing_type === 'monthly' ? 'monthly' : 'one-off'}`} trailing={<span className="font-mono text-[13px] text-paper">{money(p.default_price)}</span>} onClick={() => { addProduct(p); setSheet({ item: items.length }); }}>{p.name}</SheetRow>
+            ))}
+            <SheetRow onClick={() => { addCustom(); setSheet({ item: items.length }); }} sub="Name, price and tax by hand">+ Custom item</SheetRow>
+          </MobileSheet>
+        )}
+        {sheet && typeof sheet === 'object' && items[sheet.item] && (() => {
+          const idx = sheet.item; const it = items[idx];
+          return (
+            <EditSheet title={it.name || 'Item'} values={it} onChange={(k, v) => updateItem(idx, { [k]: v ?? '' })} onCancel={() => setSheet(null)} onSave={() => setSheet(null)} openSections={2}
+              sections={[
+                { title: 'Item', fields: [
+                  { key: 'name', label: 'Name' }, { key: 'description', label: 'Description (shown on the quote)', type: 'textarea' },
+                  { key: 'category', label: 'Category', type: 'select', options: Object.entries(CAT_LABEL) },
+                  { key: 'billing_type', label: 'Billing', type: 'select', options: [['one_off', 'One-off'], ['monthly', 'Monthly'], ['annual', 'Annual'], ['usage', 'Usage']] },
+                ] },
+                { title: 'Price', summary: money(lineTotal(it)), fields: [
+                  { key: 'qty', label: 'Qty', type: 'number' }, { key: 'unit_price', label: `Unit ${currencySymbol(cur)}`, type: 'number' },
+                  { key: 'discount', label: 'Discount %', type: 'number' }, { key: 'tax_rate', label: `${taxLabelFor(cur)} %`, type: 'number' },
+                ] },
+              ]} />
+          );
+        })()}
+        {sheet && typeof sheet === 'object' && items[sheet.item] && (
+          <button onClick={() => { removeItem(sheet.item); setSheet(null); }} className="fixed z-[71] left-[14px] text-[13px] font-semibold" style={{ bottom: 'calc(14px + env(safe-area-inset-bottom))', color: 'rgb(var(--c-coral-deep))' }}>Remove item</button>
+        )}
+        {sheet === 'terms' && (
+          <MobileSheet title="Terms & notes" onClose={() => setSheet(null)} footer={<PrimaryBtn className="flex-1 justify-center" onClick={() => setSheet(null)}>Done</PrimaryBtn>}>
+            <textarea rows={4} value={quote.terms || ''} onChange={e => setQ('terms', e.target.value)} placeholder="Terms & conditions shown on the quote" className="w-full px-[13px] py-[11px] rounded-[12px] border text-[15px] text-paper placeholder-dim focus:outline-none resize-none" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+            <textarea rows={3} value={quote.notes || ''} onChange={e => setQ('notes', e.target.value)} placeholder="Internal notes (not shown to customer)" className="w-full px-[13px] py-[11px] rounded-[12px] border text-[15px] text-paper placeholder-dim focus:outline-none resize-none" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+          </MobileSheet>
+        )}
+        {sheet === 'savings' && (
+          <MobileSheet title="Card-processing savings" sub="Shown to the customer as their savings" onClose={() => setSheet(null)}>
+            {!company ? <div className="text-[13px] text-dim px-1">Add a company to the quote to attach a savings proposal.</div> : (
+              <>
+                <SheetRow active={!quote.processing_account_id} onClick={() => { setQ('processing_account_id', null); setSheet(null); }}>None</SheetRow>
+                {procAccounts.map(a => <SheetRow key={a.id} active={quote.processing_account_id === a.id} sub={`saves ${gbp0(accountSavings(a.rates).saving)}/mo`} onClick={() => { setQ('processing_account_id', a.id); setSheet(null); }}>{a.label || a.location?.name || 'Proposal'}</SheetRow>)}
+              </>
+            )}
+          </MobileSheet>
+        )}
+        {sheet === 'link' && (
+          <MobileSheet title="Customer link" onClose={() => setSheet(null)} footer={<PrimaryBtn className="flex-1 justify-center" onClick={() => { copyLink(); setSheet(null); }}>Copy link</PrimaryBtn>}>
+            <div className="font-mono text-[12px] text-paper break-all px-1">{publicUrl}</div>
+          </MobileSheet>
+        )}
+      </div>
+
       {/* Header */}
-      <div className="px-6 py-4 border-b border-bdr flex items-center gap-3 flex-wrap">
+      <div className="hidden lg:flex px-6 py-4 border-b border-bdr items-center gap-3 flex-wrap">
         <button onClick={onClose} className="text-muted hover:text-paper text-lg">&larr;</button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -184,7 +311,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="hidden lg:block flex-1 overflow-y-auto p-6">
         <div className="grid grid-cols-12 gap-4 max-w-[1200px]">
           {/* Line items */}
           <div className="col-span-8 space-y-4">

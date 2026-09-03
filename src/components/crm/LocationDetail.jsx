@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
+import { EditSheet } from './ui.jsx';
 import { LocationTradingCard } from './TradingCard.jsx';
 import TimerButton from './TimerButton.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
@@ -11,6 +12,10 @@ import LeadBadge from './LeadBadge.jsx';
 import LeadsCard from './LeadsCard.jsx';
 import ProcessingRatesCard from './ProcessingRatesCard.jsx';
 import HardwareCard from './HardwareCard.jsx';
+import SlaBadge from './SlaBadge.jsx';
+import { Card as WorkCard, Pill, Mono, Avatar, MobileSheet, SheetRow, PrimaryBtn, GhostBtn } from './ui.jsx';
+import { runOrQueue, isOnline } from '../../lib/offlineQueue';
+import { startTimer } from '../../lib/timer';
 import InvoicesCard from './InvoicesCard.jsx';
 import LocationModulesCard from './LocationModulesCard.jsx';
 import EntityPicker from './EntityPicker.jsx';
@@ -36,6 +41,54 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   const [saveErr, setSaveErr] = useState('');
   const [draft, setDraft] = useState({});
   const [members, setMembers] = useState([]);
+  // Phone site screen (17): open work here, who is on site, and what you record while standing there.
+  const [tickets, setTickets] = useState([]);
+  const [siteContacts, setSiteContacts] = useState([]);
+  const [sheet, setSheet] = useState(null); // 'more' | 'note' | 'ticket'
+  const [sheetText, setSheetText] = useState('');
+  const [flash, setFlash] = useState('');
+  const fileRef = useRef(null);
+  useEffect(() => {
+    if (!locationId) return;
+    supabase.from('tickets').select('id, ticket_number, subject, priority, stage, status, sla_due_at, first_response_due_at, resolution_due_at, created_at').eq('location_id', locationId).order('created_at', { ascending: false }).limit(30)
+      .then(r => setTickets((r.data || []).filter(t => !/closed|resolved|done|cancel/i.test(`${t.stage || ''} ${t.status || ''}`))));
+    supabase.from('associations').select('from_type, from_id, to_type, to_id').or(`and(from_type.eq.location,from_id.eq.${locationId},to_type.eq.contact),and(to_type.eq.location,to_id.eq.${locationId},from_type.eq.contact)`)
+      .then(async r => {
+        const ids = [...new Set((r.data || []).map(x => (x.from_type === 'contact' ? x.from_id : x.to_id)))];
+        if (!ids.length) { setSiteContacts([]); return; }
+        const c = await supabase.from('contacts').select('id, first_name, last_name, job_title, phone, email').in('id', ids);
+        setSiteContacts(c.data || []);
+      });
+  }, [locationId]);
+  const say = (m) => { setFlash(m); setTimeout(() => setFlash(''), 2500); };
+  const recordNote = async () => {
+    const body = sheetText.trim(); if (!body) return;
+    const r = await runOrQueue(supabase, `Note on ${location?.name || 'site'}`, { table: 'crm_activities', kind: 'insert', values: { type: 'note', body, subject_type: 'location', subject_id: locationId, actor_id: profile.id } });
+    setSheet(null); setSheetText(''); say(r.queued ? 'Note queued — sends when signal returns' : r.error ? `Could not save: ${r.error.message}` : 'Note saved');
+  };
+  const recordPhoto = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    if (!isOnline()) { say('Photos need signal — try again when you are back online'); return; }
+    const path = `location/${locationId}/${crypto.randomUUID()}-${file.name.replace(/[^\w.\-]+/g, '_')}`;
+    const { error: upErr } = await supabase.storage.from('attachments').upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
+    if (upErr) { say(`Upload failed: ${upErr.message}`); return; }
+    const r = await runOrQueue(supabase, `Photo — ${file.name}`, { table: 'attachments', kind: 'insert', values: { subject_type: 'location', subject_id: locationId, file_name: file.name, file_path: path, mime_type: file.type || null, size_bytes: file.size, uploaded_by: profile.id } });
+    say(r.error ? `Could not save: ${r.error.message}` : 'Photo added');
+    if (fileRef.current) fileRef.current.value = '';
+  };
+  const recordTime = async () => {
+    try { await startTimer({ subjectType: 'location', subjectId: locationId, label: location?.name, profileId: profile.id }); say('Timer running for this site'); }
+    catch (err) { say(`Could not start: ${err.message}`); }
+  };
+  const recordTicket = async () => {
+    const subject = sheetText.trim(); if (!subject) return;
+    const values = { subject, location_id: locationId, company_id: location?.company_id || null, priority: 'P2', ticket_type: 'support', owner_id: profile.id, channel: 'phone', source: 'site' };
+    if (!isOnline()) { const r = await runOrQueue(supabase, `New ticket — ${subject}`, { table: 'tickets', kind: 'insert', values }); setSheet(null); setSheetText(''); say(r.queued ? 'Ticket queued — sends when signal returns' : 'Ticket raised'); return; }
+    const { data: t, error } = await supabase.from('tickets').insert(values).select('id').single();
+    if (error) { say(`Could not raise: ${error.message}`); return; }
+    await supabase.from('stage_history').insert({ object_type: 'ticket', object_id: t.id, from_stage: null, to_stage: 'new', changed_by: profile.id });
+    setSheet(null); setSheetText(''); onNavigate?.('ticket', t.id);
+  };
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -155,7 +208,22 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-6 py-5 border-b border-bdr flex items-center gap-4">
+      <div className="lg:hidden px-[18px] pt-3 pb-[14px] border-b" style={{ borderColor: 'var(--hair)' }}>
+        <button onClick={onClose} className="text-[13px] text-dim">&larr; Sites</button>
+        <div className="font-display text-[22px] font-extrabold text-paper truncate">{location.name}</div>
+        <div className="text-[13px] text-muted truncate">
+          {company?.name || 'No company'}{location.go_live_date ? ` · live since ${new Date(location.go_live_date).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })}` : location.status ? ` · ${location.status}` : ''}
+        </div>
+        <div className="flex gap-2 mt-2.5">
+          {location.phone
+            ? <a href={`tel:${location.phone}`} className="flex-1 text-center px-3 py-3 rounded-[11px] text-[14px] font-semibold" style={{ background: 'linear-gradient(180deg, rgb(var(--c-primary)), rgb(var(--c-primary-deep)))', color: 'rgb(var(--c-ink))' }}>Call site</a>
+            : <span className="flex-1 text-center px-3 py-3 rounded-[11px] text-[14px] font-semibold opacity-50" style={{ background: 'var(--surface-solid)', border: '1px solid var(--ink-line)' }}>No phone</span>}
+          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([location.address, location.city, location.postcode].filter(Boolean).join(', ') || location.name)}`} target="_blank" rel="noreferrer"
+            className="flex-1 text-center px-3 py-3 rounded-[11px] text-[14px] font-semibold text-paper" style={{ background: 'var(--surface-solid)', border: '1px solid var(--ink-line)' }}>Navigate</a>
+          <button onClick={() => setSheet('more')} className="px-[15px] py-3 rounded-[11px] text-[14px] text-paper" style={{ background: 'var(--surface-solid)', border: '1px solid var(--ink-line)' }}>…</button>
+        </div>
+      </div>
+      <div className="hidden lg:flex px-6 py-5 border-b border-bdr items-center gap-4">
         <button onClick={onClose} className="text-muted hover:text-paper text-lg">&larr;</button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 mb-1.5">
@@ -195,9 +263,109 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
       </div>
 
       {/* Card grid */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-[14px] lg:p-6">
+        {flash && <div className="lg:hidden mb-3 px-[14px] py-2.5 rounded-[12px] text-[13px] font-medium" style={{ background: 'rgb(var(--c-primary) / .12)', color: 'rgb(var(--c-primary-deep))' }}>{flash}</div>}
+        {!editing && (
+          <div className="lg:hidden flex flex-col gap-3 pb-[calc(70px+env(safe-area-inset-bottom))]">
+            <WorkCard>
+              <div className="px-[15px] py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--hair)' }}>
+                <span className="text-[14px] font-bold text-paper">Open work here</span><Mono>{tickets.length + onboardings.filter(o => !/live|complete|done|cancel/i.test(o.stage || '')).length + projects.filter(p => p.status === 'active').length}</Mono>
+              </div>
+              {tickets.map(t => (
+                <button key={t.id} onClick={() => onNavigate?.('ticket', t.id)} className="w-full text-left px-[15px] py-[13px] border-b" style={{ borderColor: 'var(--hair)', borderLeft: (t.priority === 'P0' || t.priority === 'P1') ? '3px solid rgb(var(--c-coral))' : '3px solid transparent' }}>
+                  <div className="flex items-center gap-2"><Pill tone="coral">Ticket</Pill><SlaBadge ticket={t} /></div>
+                  <div className="text-[15px] font-medium text-paper mt-1">{t.ticket_number ? `#${t.ticket_number} ` : ''}{t.subject}</div>
+                </button>
+              ))}
+              {onboardings.filter(o => !/live|complete|done|cancel/i.test(o.stage || '')).map(o => (
+                <button key={o.id} onClick={() => onNavigate?.('onboarding', o.id)} className="w-full text-left px-[15px] py-[13px] border-b" style={{ borderColor: 'var(--hair)' }}>
+                  <div className="flex items-center gap-2"><Pill tone="uv">Onboarding</Pill><Mono>{String(o.stage || '').replace(/_/g, ' ')}</Mono></div>
+                  <div className="text-[15px] font-medium text-paper mt-1">{o.name || company?.name || 'Onboarding'}</div>
+                </button>
+              ))}
+              {projects.filter(p => p.status === 'active').map(p => (
+                <button key={p.id} onClick={() => onNavigate?.('project', p.id)} className="w-full text-left px-[15px] py-[13px] border-b last:border-b-0" style={{ borderColor: 'var(--hair)' }}>
+                  <div className="flex items-center gap-2"><Pill tone="primary">Project</Pill>{p.due_date && <Mono>due {new Date(p.due_date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</Mono>}</div>
+                  <div className="text-[15px] font-medium text-paper mt-1">{p.name}</div>
+                </button>
+              ))}
+              {tickets.length + onboardings.length + projects.length === 0 && <div className="px-[15px] py-4 text-[13px] text-dim">Nothing open at this site.</div>}
+            </WorkCard>
+            <WorkCard>
+              <div className="px-[15px] py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--hair)' }}><span className="text-[14px] font-bold text-paper">On site</span><Mono>{siteContacts.length}</Mono></div>
+              {siteContacts.length === 0 && <div className="px-[15px] py-4 text-[13px] text-dim">No contacts linked to this site yet.</div>}
+              {siteContacts.map((c, i) => (
+                <div key={c.id} className={`px-[15px] py-[11px] flex items-center gap-2.5 ${i < siteContacts.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
+                  <Avatar id={c.id} name={[c.first_name, c.last_name].filter(Boolean).join(' ')} size={30} />
+                  <button onClick={() => onNavigate?.('contact', c.id)} className="flex-1 min-w-0 text-left">
+                    <div className="text-[15px] font-medium text-paper truncate">{[c.first_name, c.last_name].filter(Boolean).join(' ')}</div>
+                    {c.job_title && <div className="text-[12px] text-muted truncate">{c.job_title}</div>}
+                  </button>
+                  {c.phone && <a href={`tel:${c.phone}`} className="px-3 py-1.5 rounded-[9px] text-[13px] font-semibold text-paper" style={{ background: 'var(--surface-solid)', border: '1px solid var(--ink-line)' }}>Call</a>}
+                </div>
+              ))}
+            </WorkCard>
+            <HardwareCard locationId={locationId} profile={profile} alwaysShow />
+            {canWrite && (
+              <WorkCard>
+                <div className="px-[15px] py-3 border-b text-[14px] font-bold text-paper" style={{ borderColor: 'var(--hair)' }}>Record while you are here</div>
+                <div className="p-[12px] grid gap-2" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+                  {[['Note', () => { setSheetText(''); setSheet('note'); }], ['Photo', () => fileRef.current?.click()], ['Log time', recordTime], ['New ticket', () => { setSheetText(''); setSheet('ticket'); }]].map(([l, fn]) => (
+                    <button key={l} onClick={fn} className="px-3 py-[13px] rounded-[12px] text-[14px] font-semibold text-paper" style={{ background: 'var(--surface-solid)', border: '1px solid var(--ink-line)', boxShadow: 'var(--shadow-tile)' }}>{l}</button>
+                  ))}
+                </div>
+                <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={recordPhoto} />
+              </WorkCard>
+            )}
+            <AttachmentsCard subjectType="location" subjectId={locationId} profile={profile} />
+          </div>
+        )}
+        {sheet === 'more' && (
+          <MobileSheet title={location.name} onClose={() => setSheet(null)}>
+            {canWrite && <SheetRow onClick={() => { setSheet(null); startEdit(); }}>Edit site</SheetRow>}
+            {canWrite && <SheetRow onClick={() => { setSheet(null); onCreateLead?.({ locationId, companyId: location.company_id }); }}>+ Lead</SheetRow>}
+            {location.company_id && <SheetRow onClick={() => { setSheet(null); onNavigate?.('company', location.company_id); }} sub={company?.name}>Open company</SheetRow>}
+            {profile.role === 'owner' && <SheetRow tone="coral" onClick={() => { setSheet(null); deleteRecord(); }}>Delete site</SheetRow>}
+          </MobileSheet>
+        )}
+        {(sheet === 'note' || sheet === 'ticket') && (
+          <MobileSheet title={sheet === 'note' ? 'Note' : 'New ticket'} sub={sheet === 'note' ? `On ${location.name}` : 'Raised for this site, priority Standard'} onClose={() => setSheet(null)}
+            footer={<><GhostBtn className="flex-1 justify-center" onClick={() => setSheet(null)}>Cancel</GhostBtn><PrimaryBtn className="flex-1 justify-center" onClick={sheet === 'note' ? recordNote : recordTicket} disabled={!sheetText.trim()}>{sheet === 'note' ? 'Save note' : 'Raise ticket'}</PrimaryBtn></>}>
+            <textarea autoFocus rows={sheet === 'note' ? 5 : 3} value={sheetText} onChange={e => setSheetText(e.target.value)} placeholder={sheet === 'note' ? 'What did you see or agree?' : 'What is wrong?'}
+              className="w-full px-[13px] py-[11px] rounded-[12px] border text-[15px] text-paper placeholder-dim focus:outline-none resize-none" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+          </MobileSheet>
+        )}
+        {editing && (
+          <div className="lg:hidden">
+            <EditSheet title="Edit location" values={draft} onChange={set} onCancel={() => { setEditing(false); setSaveErr(''); }} onSave={save} error={saveErr}
+              sections={[
+                { title: 'Identity', fields: [
+                  { key: 'name', label: 'Site name' },
+                  { key: 'status', label: 'Status', type: 'select', options: STATUS_OPTIONS.map(x => [x, x]) },
+                  { key: 'venue_type', label: 'Venue type', placeholder: 'restaurant, bar, cafe…' },
+                  { key: 'covers', label: 'Covers', type: 'number', parse: (v) => (v ? parseInt(v) : null) },
+                  { key: 'venue_code', label: 'ServOS venue ID', placeholder: 'SV-1001', parse: (v) => (v.trim().toUpperCase() || null), hint: 'From the ServOS admin portal, beside the venue name.' },
+                ] },
+                { title: 'Address & contact', fields: [
+                  { key: 'address', label: 'Address' }, { key: 'city', label: 'City' }, { key: 'postcode', label: 'Postcode' },
+                  { key: 'phone', label: 'Phone', type: 'tel' }, { key: 'email', label: 'Email', type: 'email' },
+                ] },
+                { title: 'Key dates', summary: 'call, install, go-live', fields: [
+                  { key: 'kickoff_at', label: 'Onboarding call', type: 'datetime-local' },
+                  { key: 'expected_install_date', label: 'Expected install date', type: 'date' },
+                  { key: 'actual_install_date', label: 'Actual install date', type: 'date' },
+                  { key: 'go_live_date', label: 'Go-live date', type: 'date' },
+                  { key: 'activation_date', label: 'Activation date', type: 'date' },
+                ] },
+                { title: 'Ownership & notes', summary: 'owner, notes', fields: [
+                  { key: 'owner_id', label: 'Owner', type: 'select', options: [['', 'Unassigned'], ...members.map(m => [m.id, m.display_name || m.email])] },
+                  { key: 'notes', label: 'Notes', type: 'textarea' },
+                ] },
+              ]} />
+          </div>
+        )}
         {editing ? (
-          <div className="max-w-4xl">
+          <div className="max-w-4xl hidden lg:block">
             <Card title="Edit Location">
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={label}>Name</label><input className={input} value={draft.name || ''} onChange={e => set('name', e.target.value)} /></div>
@@ -249,7 +417,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
             </Card>
           </div>
         ) : (
-          <div className="grid grid-cols-12 gap-4 max-w-[1400px]">
+          <div className="hidden lg:grid grid-cols-12 gap-4 max-w-[1400px]">
 
             {/* LEFT: Key Info + Modules */}
             <div className="col-span-4 space-y-4">

@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
+// ui imported above
+import { MobileTable, MobileSheet, SheetRow, Mono } from '../crm/ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Landmark, Plus, RefreshCw, X, AlertTriangle } from 'lucide-react';
 import { gbp2 } from '../../lib/money.js';
@@ -8,6 +10,7 @@ const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { 
 const daysUntil = (d) => d ? Math.ceil((new Date(d + 'T00:00:00') - Date.now()) / 86400000) : null;
 
 export default function BankFeedPanel({ profile }) {
+  const [pick, setPick] = useState(null); // phone (20): the transaction whose actions are open
   const [connections, setConnections] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [txns, setTxns] = useState([]);
@@ -85,7 +88,32 @@ export default function BankFeedPanel({ profile }) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-5 border-b border-bdr flex items-center justify-between flex-wrap gap-3">
+      <div className="lg:hidden flex-1 min-h-0 flex flex-col">
+        <div className="px-[18px] pt-3 pb-2.5">
+          <div className="font-display text-[23px] font-extrabold text-paper">Bank feed</div>
+          <Mono className="!tracking-[.18em] uppercase">{txns.length} to reconcile</Mono>
+        </div>
+        <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
+          <MobileTable storageKey="bank.mobile" rows={txns} onRow={(t) => setPick(t)} empty="Nothing to reconcile — all caught up."
+            columns={[
+              { key: 'payee', label: 'Payee', pinned: true, render: (t) => t.payee || t.description || 'Payment' },
+              { key: 'date', label: 'Date', render: (t) => fmtD(t.booking_date || t.value_date) },
+              { key: 'amount', label: 'Amount', align: 'right', mono: true, render: (t) => gbp2(t.amount) },
+              { key: 'match', label: 'Suggested', render: (t) => { const sg = suggestMatch(t, bills, expenses); return sg ? `${sg.type}` : '—'; } },
+              { key: 'rule', label: 'Rule', render: (t) => { const r = applyRule(t, rules); return r ? (categories.find(c => c.id === r.category_id)?.label || 'categorised') : '—'; } },
+              { key: 'desc', label: 'Description', render: (t) => t.description || '—' },
+            ]}
+            card={(t) => { const sg = suggestMatch(t, bills, expenses); return { title: t.payee || t.description || 'Payment', amount: gbp2(t.amount), chip: sg ? { text: `Match ${sg.type}`, tone: 'primary' } : { text: 'Unmatched', tone: 'muted' }, meta: fmtD(t.booking_date || t.value_date) }; }} />
+        </div>
+        {pick && (
+          <MobileSheet title={pick.payee || pick.description || 'Payment'} sub={`${gbp2(pick.amount)} · ${fmtD(pick.booking_date || pick.value_date)}`} onClose={() => setPick(null)}>
+            {(() => { const sg = suggestMatch(pick, bills, expenses); return sg && canWrite ? <SheetRow onClick={() => { matchTo(pick, sg.type, sg.id); setPick(null); }} sub="The suggested match">Match {sg.type}</SheetRow> : null; })()}
+            {canWrite && <SheetRow onClick={() => { createBill(pick); setPick(null); }} sub="A paid bill with date, amount and payee filled in">Create bill</SheetRow>}
+            {canWrite && <SheetRow tone="coral" onClick={() => { ignore(pick); setPick(null); }}>Ignore</SheetRow>}
+          </MobileSheet>
+        )}
+      </div>
+      <div className="hidden lg:flex px-6 py-5 border-b border-bdr items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2.5">
           <Landmark size={20} className="text-ember" />
           <div>
@@ -96,7 +124,7 @@ export default function BankFeedPanel({ profile }) {
         {canWrite && <button onClick={connect} disabled={busy === 'institutions'} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5"><Plus size={15} /> {busy === 'institutions' ? 'Loading…' : 'Connect bank'}</button>}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="hidden lg:block flex-1 overflow-y-auto p-6">
         <div className="max-w-3xl mx-auto space-y-5">
           {err && <div className="glass-card rounded-2xl p-3 text-sm text-red-600 flex items-start gap-2"><AlertTriangle size={15} className="mt-0.5 shrink-0" />{err}</div>}
 

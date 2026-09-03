@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { MobileTable, Mono } from './ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { PhoneCall, PhoneIncoming, PhoneOutgoing, PhoneMissed, Voicemail } from 'lucide-react';
 import CallButton from '../CallButton.jsx';
@@ -127,7 +128,31 @@ export default function CallLogPanel({ profile, onNavigate }) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-5 border-b border-bdr flex items-center justify-between flex-wrap gap-3">
+      <div className="lg:hidden flex-1 min-h-0 flex flex-col">
+        <div className="px-[18px] pt-3 pb-2.5">
+          <div className="font-display text-[23px] font-extrabold text-paper">Call log</div>
+          <Mono className="!tracking-[.18em] uppercase">{filtered.length} calls · {stats.missed} missed</Mono>
+        </div>
+        <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
+          <MobileTable storageKey="calls.mobile" rows={filtered} onRow={(a) => { if (a.contact_id) onNavigate?.('contact', a.contact_id); else if (a.subject_type === 'ticket' && a.subject_id) onNavigate?.('ticket', a.subject_id); }} empty="No calls match these filters."
+            columns={[
+              { key: 'who', label: 'Who', pinned: true, render: (a) => { const ct = contactOf(a); const md = a.channel_metadata || {}; return ct ? [ct.first_name, ct.last_name].filter(Boolean).join(' ') : (a.direction === 'inbound' ? md.from_number : (md.to_number || md.from_number)) || 'Unknown number'; } },
+              { key: 'when', label: 'When', render: (a) => fmtWhen(a.occurred_at) },
+              { key: 'kind', label: 'Outcome', render: (a) => callKind(a) },
+              { key: 'direction', label: 'Direction', render: (a) => a.direction },
+              { key: 'duration', label: 'Duration', render: (a) => { const md = a.channel_metadata || {}; const d = md.recording_duration || md.duration_seconds; return d > 0 ? fmtDur(d) : '—'; } },
+              { key: 'agent', label: 'Agent', render: (a) => (a.actor_id ? agentName(a.actor_id) : '—') },
+              { key: 'number', label: 'Number', mono: true, render: (a) => { const md = a.channel_metadata || {}; return (a.direction === 'inbound' ? md.from_number : (md.to_number || md.from_number)) || '—'; } },
+            ]}
+            card={(a) => {
+              const kind = callKind(a); const ct = contactOf(a); const md = a.channel_metadata || {};
+              const number = a.direction === 'inbound' ? md.from_number : (md.to_number || md.from_number); const dur = md.recording_duration || md.duration_seconds;
+              return { title: ct ? [ct.first_name, ct.last_name].filter(Boolean).join(' ') : (number || 'Unknown number'), chip: { text: kind, tone: kind === 'missed' ? 'coral' : kind === 'voicemail' ? 'amber' : 'primary' }, tone: kind === 'missed' ? 'coral' : undefined,
+                meta: [fmtWhen(a.occurred_at), a.direction, a.actor_id ? agentName(a.actor_id) : null, dur > 0 ? fmtDur(dur) : null].filter(Boolean).join(' · ') };
+            }} />
+        </div>
+      </div>
+      <div className="hidden lg:flex px-6 py-5 border-b border-bdr items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2.5">
           <PhoneCall size={20} className="text-ember" />
           <div>
@@ -137,7 +162,7 @@ export default function CallLogPanel({ profile, onNavigate }) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="hidden lg:block flex-1 overflow-y-auto p-6">
         <div className="max-w-[1100px] mx-auto space-y-4">
 
           {/* Stats */}

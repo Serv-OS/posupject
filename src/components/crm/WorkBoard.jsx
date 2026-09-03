@@ -8,6 +8,7 @@ import { startOfWeek, addDays, dayKey } from '../../lib/planning';
 import {
   Avatar, Tag, Pill, MetaLabel, Mono, PageTitle, Segmented, LabelledPill, Card, SkeletonList, EmptyState, hair, dueLabel, fmtHM,
 } from './ui.jsx';
+import { MobileSheet, SheetRow, useLongPress } from './ui.jsx';
 
 // Screens 03 and 07.
 //
@@ -43,6 +44,11 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
   const [lanesMenu, setLanesMenu] = useState(false);
   const [windowMenu, setWindowMenu] = useState(false);
   const [drag, setDrag] = useState(null);
+  const [mCol, setMCol] = useState('in_progress');
+  const [moving, setMoving] = useState(null);
+  const [moveReason, setMoveReason] = useState('');
+  const [swipeX, setSwipeX] = useState(null);
+  const longPress = useLongPress((t) => { if (canWrite && t.status !== 'done') { setMoving(t); setMoveReason(''); } });
   const [err, setErr] = useState('');
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
   useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -157,8 +163,30 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--scene)' }}>
+      {tab === 'board' && (
+        <div className="lg:hidden px-[18px] pt-3 pb-2.5">
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="font-display text-[23px] font-extrabold text-paper">Work board</div>
+              <Mono className="!tracking-[.18em] uppercase">Swipe between columns</Mono>
+            </div>
+            <button onClick={() => setTab('people')} className="text-[13px] text-muted pt-2">People →</button>
+          </div>
+          <div className="mt-2.5 -mx-[4px] flex gap-1.5 overflow-x-auto [scrollbar-width:none] px-[4px]">
+            {COLUMNS.map(([k, label]) => {
+              const on = mCol === k; const n = k === 'done' ? counts.doneWeek : counts[k];
+              return (
+                <button key={k} onClick={() => setMCol(k)} className="shrink-0 px-[13px] py-2 rounded-full text-[13px] border"
+                  style={on ? { background: 'rgb(var(--c-text))', color: 'var(--on-accent)', borderColor: 'transparent', fontWeight: 600 } : { background: 'var(--panel-bg)', borderColor: 'var(--bdr)', color: 'rgb(var(--c-muted))' }}>
+                  {label}{k === 'done' ? '' : ` ${n}`}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {tab === 'board' ? (
-        <div className="px-6 pt-5 flex items-center gap-4 flex-wrap">
+        <div className="hidden lg:flex px-6 pt-5 items-center gap-4 flex-wrap">
           <PageTitle>Board</PageTitle>
           <Segmented value="board" options={[['list', 'List'], ['board', 'Board'], ['calendar', 'Calendar']]} onChange={(v) => { if (v === 'list') onNavigate?.('tasks'); if (v === 'calendar') onNavigate?.('work_calendar'); }} />
           <span className="relative">
@@ -199,8 +227,59 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
       )}
       {err && <div className="px-6 pt-2 text-[12px]" style={{ color: 'rgb(var(--c-coral-deep))' }}>Could not save: {err} <button className="underline ml-1" onClick={() => setErr('')}>dismiss</button></div>}
 
+      {!loading && tab === 'board' && (
+        <div className="lg:hidden flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))] flex flex-col gap-2.5"
+          onTouchStart={e => setSwipeX(e.touches[0].clientX)}
+          onTouchEnd={e => {
+            if (swipeX == null) return; const dx = e.changedTouches[0].clientX - swipeX; setSwipeX(null);
+            if (Math.abs(dx) < 60) return;
+            const i = COLUMNS.findIndex(([k]) => k === mCol); const j = dx < 0 ? Math.min(i + 1, COLUMNS.length - 1) : Math.max(i - 1, 0);
+            setMCol(COLUMNS[j][0]);
+          }}>
+          {(() => {
+            const list = tasks.filter(t => t.status === mCol && (mCol !== 'done' || (t.completed_at && new Date(t.completed_at).getTime() >= weekAgo)));
+            if (list.length === 0) return <Card className="px-4 py-6 text-center text-[14px] text-dim">Nothing {COLUMNS.find(([k]) => k === mCol)[1].toLowerCase()}.</Card>;
+            return list.map(t => {
+              const due = dueLabel(t.due_date, t.status); const tr = trackedFor(t); const p = projects.find(x => x.id === t.project_id);
+              const sub = [p?.name, t.status === 'blocked' && t.blocked_reason ? `blocked by ${t.blocked_reason}` : null].filter(Boolean).join(' · ');
+              return (
+                <div key={t.id} {...longPress(t)} onClick={() => onNavigate?.('task', t.id)} className="rounded-[14px] px-[15px] py-[13px] border"
+                  style={{ background: 'var(--surface-solid)', boxShadow: 'var(--shadow-tile)', borderColor: t.status === 'blocked' ? 'rgb(var(--c-coral) / .35)' : t.status === 'in_progress' ? 'rgb(var(--c-primary) / .35)' : 'var(--ink-line)' }}>
+                  <div className="flex items-center gap-2">
+                    <Pill tone="primary">Task</Pill>
+                    {tr > 0 ? <Mono tone="primary" bold>{fmtHM(tr)}</Mono> : t.due_date ? <Mono tone={due.tone === 'coral' ? 'coral' : 'dim'} bold={due.tone === 'coral'}>{due.text}</Mono> : null}
+                    <span className="ml-auto"><Avatar id={t.owner_id} name={nameOf(t.owner_id)} size={20} /></span>
+                  </div>
+                  <div className="text-[15px] font-medium text-paper mt-1">{t.title}</div>
+                  {sub && <div className="text-[12px] text-muted mt-0.5 truncate">{sub}</div>}
+                </div>
+              );
+            });
+          })()}
+          <div className="text-[12px] text-dim text-center pt-1">Hold a card to move it</div>
+        </div>
+      )}
+      {moving && (
+        <MobileSheet title={`Move “${moving.title}”`} sub="Fewer taps than a desktop drag" onClose={() => setMoving(null)}>
+          {COLUMNS.filter(([k]) => k !== moving.status).map(([k, label]) => (
+            <SheetRow key={k} sub={k === 'blocked' ? 'asks what it is blocked by' : undefined} active={k === 'blocked' && moveReason !== ''}
+              onClick={async () => {
+                if (k === 'blocked' && !moveReason.trim()) { setMoveReason(' '); return; }
+                await (k === 'blocked' ? patch(moving.id, { status: 'blocked', blocked_reason: moveReason.trim() }) : setStatus(moving, k));
+                setMoving(null);
+              }}>{label}</SheetRow>
+          ))}
+          {moveReason !== '' && (
+            <div className="px-[15px] py-2.5 rounded-[12px] border" style={{ background: 'var(--surface-solid)', borderColor: 'rgb(var(--c-coral) / .35)' }}>
+              <input autoFocus value={moveReason.trim()} onChange={e => setMoveReason(e.target.value || ' ')} placeholder="Blocked by…" className="w-full bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none"
+                onKeyDown={async e => { if (e.key === 'Enter' && moveReason.trim()) { await patch(moving.id, { status: 'blocked', blocked_reason: moveReason.trim() }); setMoving(null); } }} />
+              <div className="text-[11px] text-dim mt-1">Enter to move it to Blocked</div>
+            </div>
+          )}
+        </MobileSheet>
+      )}
       {loading ? <div className="p-6"><SkeletonList rows={4} /></div> : tab === 'board' ? (
-        <div className="flex-1 overflow-auto px-6 pt-[18px] pb-6 flex flex-col gap-[14px]">
+        <div className="hidden lg:flex flex-1 overflow-auto px-6 pt-[18px] pb-6 flex-col gap-[14px]">
           {/* Column headers */}
           <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))' }}>
             {COLUMNS.map(([k, label, tn]) => {

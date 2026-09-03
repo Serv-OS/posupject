@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { MobileTable, MobileDock, DockField, Mono } from '../crm/ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Receipt as ReceiptText, Plus, Truck as Car, ChevronRight, Check, X, Download } from 'lucide-react';
 import { gbp2 } from '../../lib/money.js';
@@ -251,7 +252,32 @@ export default function ExpensesPanel({ profile, onNavigate }) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-5 border-b border-bdr flex items-center justify-between flex-wrap gap-3">
+      <div className="lg:hidden flex-1 min-h-0 flex flex-col">
+        <div className="px-[18px] pt-3 pb-2.5">
+          <div className="font-display text-[23px] font-extrabold text-paper">Expenses</div>
+          <Mono className="!tracking-[.18em] uppercase">{list.length} claims · {gbp2(list.reduce((s, r) => s + Number(r.total || 0), 0))}</Mono>
+        </div>
+        <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
+          <MobileTable storageKey="expenses.mobile" rows={list} onRow={(r) => onNavigate?.('expense', r.id)} empty="No claims yet."
+            columns={[
+              { key: 'what', label: 'Claim', pinned: true, render: (r) => r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim') },
+              { key: 'number', label: 'Number', mono: true, render: (r) => `EXP-${r.expense_number}` },
+              { key: 'date', label: 'Date', render: (r) => fmtD(r.expense_date) },
+              { key: 'total', label: 'Total', align: 'right', mono: true, render: (r) => gbp2(r.total) },
+              { key: 'status', label: 'Status', render: (r) => String(r.status || '').replace(/_/g, ' ') },
+              { key: 'type', label: 'Type', render: (r) => r.type || 'expense' },
+              { key: 'who', label: 'Submitted by', render: (r) => r.submitter?.display_name || '—' },
+              { key: 'paid_by', label: 'Paid by', render: (r) => String(r.paid_by || r.payer || '—').replace(/_/g, ' ') },
+            ]}
+            card={(r) => {
+              const st = r.status || 'draft';
+              const chip = st === 'rejected' ? { text: 'Rejected', tone: 'coral' } : st === 'submitted' ? { text: 'Awaiting approval', tone: 'amber' } : st === 'approved' ? { text: 'Approved', tone: 'primary' } : st === 'paid' ? { text: 'Paid', tone: 'primary' } : { text: st.replace(/_/g, ' '), tone: 'muted' };
+              return { title: r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim'), amount: gbp2(r.total), chip, meta: [`EXP-${r.expense_number}`, fmtD(r.expense_date), r.submitter?.display_name].filter(Boolean).join(' · ') };
+            }} />
+        </div>
+        {typeof newExpense === 'function' && <MobileDock><DockField onClick={newExpense}>New claim, or scan a receipt</DockField></MobileDock>}
+      </div>
+      <div className="hidden lg:flex px-6 py-5 border-b border-bdr items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2.5">
           <ReceiptText size={20} className="text-ember" />
           <div>
@@ -271,7 +297,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="hidden lg:block flex-1 overflow-y-auto p-6">
         <div className="max-w-3xl mx-auto space-y-4">
           {tab === 'payrun' && approver && (
             <>

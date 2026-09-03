@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { MobileTable, MobileDock, DockField, Mono } from './ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download } from 'lucide-react';
 import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor } from '../../lib/money';
@@ -241,7 +242,35 @@ export default function InvoicesPanel({ profile, onNavigate }) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-5 border-b border-bdr flex items-center justify-between flex-wrap gap-3">
+      <div className="lg:hidden flex-1 min-h-0 flex flex-col">
+        <div className="px-[18px] pt-3 pb-2.5">
+          <div className="font-display text-[23px] font-extrabold text-paper">Invoices</div>
+          <Mono className="!tracking-[.18em] uppercase">{filtered.length} shown · {invoices.filter(i => invStatus(i) === 'overdue').length} overdue</Mono>
+        </div>
+        <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
+          <MobileTable storageKey="invoices.mobile" rows={filtered} onRow={(inv) => onNavigate?.('invoice', inv.id)} empty="No invoices yet — raise your first one."
+            columns={[
+              { key: 'customer', label: 'Customer', pinned: true, render: (inv) => partiesOf(inv).company || inv.label || '—' },
+              { key: 'number', label: 'Number', mono: true, render: (inv) => `INV-${inv.invoice_number}` },
+              { key: 'site', label: 'Site', render: (inv) => partiesOf(inv).site || '—' },
+              { key: 'due', label: 'Due', render: (inv) => fmtD(inv.due_date) },
+              { key: 'total', label: 'Total', align: 'right', mono: true, render: (inv) => money(inv.total, inv.currency) },
+              { key: 'status', label: 'Status', render: (inv) => invStatus(inv) },
+              { key: 'issued', label: 'Issued', render: (inv) => fmtD(inv.issue_date) },
+              { key: 'currency', label: 'Currency', render: (inv) => curOf(inv) },
+              { key: 'po', label: 'PO', render: (inv) => inv.po_number || '—' },
+              { key: 'recurring', label: 'Recurring', render: (inv) => (inv.recurring_id ? 'yes' : '—') },
+              { key: 'viewed', label: 'Viewed', render: (inv) => (inv.viewed_at ? fmtD(inv.viewed_at) : '—') },
+            ]}
+            card={(inv) => {
+              const st = invStatus(inv); const { company, site } = partiesOf(inv);
+              const chip = st === 'overdue' ? { text: 'Overdue', tone: 'coral' } : st === 'paid' ? { text: 'Paid', tone: 'primary' } : st === 'draft' ? { text: 'Draft', tone: 'muted' } : { text: `Due ${fmtD(inv.due_date)}`, tone: 'amber' };
+              return { title: company || inv.label || '—', amount: money(inv.total, inv.currency), chip, tone: st === 'overdue' ? 'coral' : undefined, meta: [`INV-${inv.invoice_number}`, site, inv.recurring_id ? 'recurring' : null].filter(Boolean).join(' · ') };
+            }} />
+        </div>
+        {canWrite && <MobileDock><DockField onClick={() => (typeof newInvoice === 'function' ? newInvoice() : null)}>New invoice</DockField></MobileDock>}
+      </div>
+      <div className="hidden lg:flex px-6 py-5 border-b border-bdr items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2.5">
           <Receipt size={20} className="text-ember" />
           <div>
@@ -265,7 +294,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="hidden lg:block flex-1 overflow-y-auto p-6">
         <div className="max-w-[1100px] mx-auto space-y-5">
 
           {/* Headline */}

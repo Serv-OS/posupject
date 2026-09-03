@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { EditSheet } from './ui.jsx';
 import { currencyForCountry } from '../../lib/region';
 import { defaultTaxRateFor } from '../../lib/money';
 import { DealTradingCard } from './TradingCard.jsx';
@@ -193,8 +194,31 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
 
       {/* Card grid */}
       <div className="flex-1 overflow-y-auto p-6">
-        {editing ? (
+        {editing ? (<>
           <div className="max-w-3xl">
+            {/* Phone (23): the same fields in the same order, as a full-screen sheet. */}
+            <div className="lg:hidden">
+              <EditSheet title="Edit deal" values={draft} onChange={set} onCancel={() => setEditing(false)} onSave={save}
+                sections={[
+                { title: 'Deal', fields: [
+                  { key: 'name', label: 'Name' },
+                  { key: 'company_id', label: 'Company', type: 'select', options: companies.map(c => [c.id, c.name]) },
+                  { key: 'stage', label: 'Stage', type: 'select', options: STAGES.map(s => [s, STAGE_LABELS[s]]) },
+                  { key: 'source', label: 'Source' }, { key: 'expected_close_date', label: 'Expected close', type: 'date' },
+                  { key: 'owner_id', label: 'Owner', type: 'select', options: [['', 'Unassigned'], ...members.map(m => [m.id, m.display_name || m.email])] },
+                ] },
+                { title: 'Revenue breakdown', summary: 'one-time, ARR, total', fields: [
+                  { key: 'hardware_value', label: 'Hardware (one-time)', type: 'number', parse: (v) => (v ? parseFloat(v) : null) },
+                  { key: 'services_value', label: 'Services (one-time)', type: 'number', parse: (v) => (v ? parseFloat(v) : null) },
+                  { key: 'saas_arr', label: 'SaaS ARR', type: 'number', parse: (v) => (v ? parseFloat(v) : null) },
+                  { key: 'payments_arr', label: 'Payments ARR', type: 'number', parse: (v) => (v ? parseFloat(v) : null) },
+                  { key: 'value', label: 'Total deal value', type: 'number', parse: (v) => (v ? parseFloat(v) : null), placeholder: 'Or enter a flat total' },
+                ] },
+                { title: 'Outcome & notes', fields: [{ key: 'lost_reason', label: 'Lost reason' }, { key: 'notes', label: 'Notes', type: 'textarea' }] },
+              ]} />
+            </div>
+          </div>
+          <div className="hidden lg:block max-w-3xl">
             <Card title="Edit Deal">
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={label}>Name</label><input className={input} value={draft.name || ''} onChange={e => set('name', e.target.value)} /></div>
@@ -226,7 +250,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
               </div>
             </Card>
           </div>
-        ) : (
+        </>) : (
           <div className="grid grid-cols-12 gap-4 max-w-[1400px]">
 
             {/* LEFT: Key Info + Company + Locations */}
