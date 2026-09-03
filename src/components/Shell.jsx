@@ -488,9 +488,10 @@ export default function Shell({ session }) {
           <NotificationBell profile={profile} onNavigate={navigateTo} />
         </div>
       </div>
-      {isMobile && view !== 'inbox' && <div className="fixed top-0 inset-x-0 z-50 pointer-events-none [&>*]:pointer-events-auto"><OfflineBanner onView={() => setView('inbox')} /></div>}
-      <main className={`flex-1 min-w-0 overflow-hidden ${WORK_VIEWS.has(view) ? 'work' : ''}`}>
-        {renderMain()}
+      <main className={`flex-1 min-w-0 overflow-hidden flex flex-col ${WORK_VIEWS.has(view) ? 'work' : ''}`}>
+        {/* The offline banner sits above the page and pushes it down (18); the Inbox draws its own. */}
+        {isMobile && view !== 'inbox' && <OfflineBanner onView={() => setView('inbox')} />}
+        <div className="flex-1 min-h-0">{renderMain()}</div>
       </main>
       </div>
       <AskPanel open={askOpen} onClose={() => setAskOpen(false)} scope={askScope} />

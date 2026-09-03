@@ -19,8 +19,9 @@ function App() {
   const nav = () => {};
   return (
     <div className="work" style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--scene-bg)' }}>
-      {v !== 'inbox' && <div className="fixed top-0 inset-x-0 z-50 pointer-events-none [&>*]:pointer-events-auto"><OfflineBanner onView={() => { location.hash = 'inbox'; }} /></div>}
-      <main className="work" style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
+      <main className="work flex flex-col" style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+        {v !== 'inbox' && <OfflineBanner onView={() => { location.hash = 'inbox'; }} />}
+        <div className="flex-1 min-h-0">
         {v === 'today' && <TodayPanel profile={P} onNavigate={nav} />}
         {v === 'task' && <TaskDetail taskId="t3" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'project' && <ProjectDetail projectId="p1" profile={P} onClose={nav} onSelectTask={nav} onNavigate={nav} />}
@@ -29,6 +30,7 @@ function App() {
         {v === 'quote' && <QuoteBuilder quoteId="q1" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'inbox' && <MobileInbox profile={P} onNavigate={nav} />}
         {v === 'site' && <LocationDetail locationId="l1" profile={P} onClose={nav} onNavigate={nav} onCreateLead={nav} />}
+        </div>
       </main>
       <MobileNav profile={P} view={v === 'project' ? 'projects' : v === 'site' ? 'locations' : v} onGo={(k) => { location.hash = k === 'locations' ? 'site' : k; }} />
       <QuickAddCommand profile={P} onNavigate={nav} />
