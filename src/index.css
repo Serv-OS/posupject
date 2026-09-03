@@ -317,6 +317,14 @@ body {
   main:not(:has([data-ticket-screen])) {
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch;
+    /* Clear the fixed tab bar and the home indicator, or the last row of every
+       list sits underneath the nav and cannot be tapped. */
+    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+  /* The ticket screen keeps its own docked layout, so it clears the bar itself
+     rather than inheriting padding that would push its reply box off-screen. */
+  main:has([data-ticket-screen]) {
+    padding-bottom: calc(56px + env(safe-area-inset-bottom));
   }
   main:not(:has([data-ticket-screen])) .h-full {
     height: auto !important;

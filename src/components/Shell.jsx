@@ -73,6 +73,7 @@ import TemplatesPanel from './crm/TemplatesPanel.jsx';
 import MyWork from './crm/MyWork.jsx';
 import TodayPanel from './crm/TodayPanel.jsx';
 import WorkBoard from './crm/WorkBoard.jsx';
+import MobileNav from './MobileNav.jsx';
 import InboxPanel from './crm/InboxPanel.jsx';
 import CalendarPanel from './crm/CalendarPanel.jsx';
 import ChatPanel from './crm/ChatPanel.jsx';
@@ -477,6 +478,8 @@ export default function Shell({ session }) {
           onClose={() => setOpenItem(null)}
         />
       )}
+      <MobileNav profile={profile} view={view} onGo={(k) => setView(k)} />
+
     </div>
   );
 }
