@@ -222,11 +222,67 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
       </div>
 
       {/* Progress bar */}
-      {tasks.length > 0 && (
-        <div className="px-6 py-2 border-b border-bdr">
-          <div className="h-2 bg-ink rounded-full overflow-hidden">
-            <div className="h-full bg-ember rounded-full transition-all" style={{ width: `${pct}%` }} />
+      {/* Three segments, not one. A single "45% done" bar cannot tell you the
+          difference between a project moving and a project stuck: done, in
+          progress and blocked are three different answers to "how is it going",
+          and blocked is the one worth acting on. */}
+      {tasks.length > 0 && (() => {
+        const inProg = tasks.filter(t => t.status === 'in_progress').length;
+        const blocked = tasks.filter(t => t.status === 'blocked').length;
+        const w = (n) => `${(n / tasks.length) * 100}%`;
+        return (
+          <div className="px-6 py-2 border-b border-bdr">
+            <div className="h-2 bg-ink rounded-full overflow-hidden flex">
+              <div className="h-full bg-ember transition-all" title={`${doneTasks.length} done`} style={{ width: w(doneTasks.length) }} />
+              <div className="h-full bg-uv transition-all" title={`${inProg} in progress`} style={{ width: w(inProg) }} />
+              <div className="h-full bg-red-500 transition-all" title={`${blocked} blocked`} style={{ width: w(blocked) }} />
+            </div>
+            <div className="flex items-center gap-3 mt-1 text-[10px] text-dim">
+              <span>{doneTasks.length} done</span>
+              {inProg > 0 && <span className="text-uv-deep">{inProg} in progress</span>}
+              {blocked > 0 && <span className="text-red-600">{blocked} blocked</span>}
+              {(() => {
+                // "What is next" is the first unblocked, unfinished task in
+                // phase order — the single most useful line on the page.
+                const order = project.phases || [];
+                const next = [...openTasks].filter(t => t.status !== 'blocked').sort((a, b) => {
+                  const ia = order.indexOf(a.phase), ib = order.indexOf(b.phase);
+                  return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || (a.sort_order || 0) - (b.sort_order || 0);
+                })[0];
+                return next ? <span className="ml-auto text-muted truncate max-w-[280px]">Next up: {next.title}</span> : null;
+              })()}
+            </div>
           </div>
+        );
+      })()}
+
+      {/* Phase cards. Only where a project uses them — flat by default. */}
+      {(project.phases || []).length > 0 && (
+        <div className="px-6 py-3 border-b border-bdr flex gap-2 overflow-x-auto">
+          {project.phases.map(ph => {
+            const inPhase = tasks.filter(t => t.phase === ph);
+            const done = inPhase.filter(t => t.status === 'done').length;
+            const blocked = inPhase.filter(t => t.status === 'blocked').length;
+            const pctPh = inPhase.length ? Math.round((done / inPhase.length) * 100) : 0;
+            const state = inPhase.length === 0 ? 'empty' : done === inPhase.length ? 'done' : blocked ? 'blocked' : 'active';
+            return (
+              <div key={ph} className={`shrink-0 w-44 p-3 rounded-xl border ${
+                state === 'done' ? 'bg-emerald-50 border-emerald-200'
+                : state === 'blocked' ? 'bg-red-50 border-red-200'
+                : state === 'active' ? 'bg-card border-ember/30' : 'bg-card border-bdr opacity-60'}`}>
+                <div className="text-xs font-semibold text-paper truncate">{ph}</div>
+                <div className="text-[10px] text-dim mt-0.5">
+                  {inPhase.length === 0 ? 'Nothing yet' : `${done}/${inPhase.length} done`}
+                  {blocked > 0 && <span className="text-red-600"> · {blocked} blocked</span>}
+                </div>
+                {inPhase.length > 0 && (
+                  <div className="h-1 mt-1.5 rounded-full bg-bdr overflow-hidden">
+                    <div className="h-full bg-ember" style={{ width: `${pctPh}%` }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
