@@ -73,6 +73,8 @@ import TemplatesPanel from './crm/TemplatesPanel.jsx';
 import MyWork from './crm/MyWork.jsx';
 import TodayPanel from './crm/TodayPanel.jsx';
 import WorkBoard from './crm/WorkBoard.jsx';
+import Timeline from './crm/Timeline.jsx';
+import WorkCalendar from './crm/WorkCalendar.jsx';
 import MobileNav from './MobileNav.jsx';
 import QuickAddCommand from './crm/QuickAddCommand.jsx';
 import InboxPanel from './crm/InboxPanel.jsx';
@@ -258,7 +260,14 @@ export default function Shell({ session }) {
   const renderMain = () => {
     switch (view) {
       case 'work':
-        return <WorkBoard profile={profile} onNavigate={navigateTo} />;
+      case 'work_board':
+        return <WorkBoard profile={profile} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} initialTab="board" />;
+      case 'people':
+        return <WorkBoard profile={profile} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} initialTab="people" />;
+      case 'work_timeline':
+        return <Timeline profile={profile} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} />;
+      case 'work_calendar':
+        return <WorkCalendar profile={profile} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} />;
       case 'today':
         return <TodayPanel profile={profile} onNavigate={navigateTo} />;
       // Kept reachable on purpose while the redesign settles: if Today has a
@@ -402,11 +411,11 @@ export default function Shell({ session }) {
       case 'form_detail':
         return <FormBuilder formId={detailId} profile={profile} onClose={() => setView('forms')} onNavigate={navigateTo} />;
       case 'tasks':
-        return <TaskList profile={profile} onSelect={(id) => { setView('task_detail'); setDetailId(id); }} />;
+        return <TaskList profile={profile} onSelect={(id) => { setView('task_detail'); setDetailId(id); }} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} />;
       case 'task_detail':
         return <TaskDetail taskId={detailId} profile={profile} onClose={() => setView('tasks')} onNavigate={navigateTo} />;
       case 'projects':
-        return <ProjectList profile={profile} onSelect={(id) => { setView('project_detail'); setDetailId(id); }} />;
+        return <ProjectList profile={profile} onSelect={(id) => { setView('project_detail'); setDetailId(id); }} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} />;
       case 'project_templates':
         return <ProjectTemplates profile={profile} />;
       case 'project_detail':
@@ -443,6 +452,7 @@ export default function Shell({ session }) {
           onSignOut={signOut}
           onRefresh={load}
           theme={theme}
+          onNavigate={navigateTo}
         />
       </div>
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">

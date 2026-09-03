@@ -1,171 +1,349 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { workloadRows, STALL_DAYS } from '../../lib/workload';
-import { priorityLabel } from '../../lib/priority';
 import { useStickyState } from '../../lib/stickyState';
+import { workloadRows, STALL_DAYS, isStalled } from '../../lib/workload';
+import { dueBucket } from '../../lib/taskGrouping';
+import { PRIORITY_LABEL } from '../../lib/priority';
+import { startOfWeek, addDays, dayKey } from '../../lib/planning';
+import {
+  Avatar, Tag, Pill, MetaLabel, Mono, PageTitle, Segmented, LabelledPill, Card, SkeletonList, EmptyState, hair, dueLabel, fmtHM,
+} from './ui.jsx';
 
-// Screens 03 and 07 behind one destination, because they answer the same
-// question from two directions: where is everything, and who is carrying it.
+// Screens 03 and 07.
 //
-// Status changes were the fiddly part, so the board writes status on drop and
-// the row keeps a four-item popover for people not dragging. The in-progress
-// limit is advisory on purpose: the header turns amber and nothing is blocked.
-// A hard limit on someone else's day is a rule you route around, not a help.
+// Board: the four existing status values as columns, so a drag is a single
+// field write and no data migrates. Swimlanes by project (or assignee, or
+// none). Dropping into Blocked opens the same blocker prompt as the list.
+// The in-progress limit is advisory — over it the header turns amber and
+// nothing is prevented. Dropping a card onto an avatar reassigns it.
+//
+// People: load is a COUNT, not an estimate — overdue, in progress, to do — with
+// the bar scaled against the busiest person so it needs no configuration. The
+// capacity words are thresholds only: over capacity when anything is overdue
+// or more than eight are open. Nudge posts an activity entry and a
+// notification against the task; it does not email. Unassigned is always a
+// row, so work cannot hide.
 
-const COLUMNS = [
-  ['todo', 'To do'], ['in_progress', 'In progress'], ['blocked', 'Blocked'], ['done', 'Done'],
-];
-const WIP_ADVISORY = 5;
+const COLUMNS = [['todo', 'To do', 'muted'], ['in_progress', 'In progress', 'amber'], ['blocked', 'Blocked', 'coral'], ['done', 'Done', 'primary']];
+const WIP_LIMIT = 6;
+const MAX_OPEN = 8;
 
-export default function WorkBoard({ profile, onNavigate }) {
-  const [items, setItems] = useState([]);
+export default function WorkBoard({ profile, onNavigate, initialTab }) {
+  const [tasks, setTasks] = useState([]);
   const [members, setMembers] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [deals, setDeals] = useState([]);
+  const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useStickyState('work.tab', 'board');
+  const [lanes, setLanes] = useStickyState('board.lanes', 'project');
+  const [windowMode, setWindowMode] = useStickyState('people.window', 'week');
+  const [lanesMenu, setLanesMenu] = useState(false);
+  const [windowMenu, setWindowMenu] = useState(false);
   const [drag, setDrag] = useState(null);
   const [err, setErr] = useState('');
+  const canWrite = profile.role === 'owner' || profile.role === 'editor';
+  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = useCallback(async () => {
-    const [w, m] = await Promise.all([
-      supabase.from('work_items').select('*').order('due_at', { ascending: true, nullsFirst: false }),
-      supabase.from('profiles').select('id, email, display_name'),
+    const weekAgo = addDays(new Date(), -7).toISOString();
+    const [t, m, p, c, l, d, te] = await Promise.all([
+      supabase.from('tasks').select('*').is('parent_task_id', null).order('sort_order'),
+      supabase.from('profiles').select('id, email, display_name, role'),
+      supabase.from('crm_projects').select('*').eq('status', 'active').order('name'),
+      supabase.from('companies').select('id, name'),
+      supabase.from('locations').select('id, name, company_id'),
+      supabase.from('deals').select('id, name, company_id'),
+      supabase.from('time_entries').select('profile_id, subject_id, duration_seconds, started_at').gte('started_at', startOfWeek(new Date()).toISOString()),
     ]);
-    setItems(w.data || []); setMembers(m.data || []); setLoading(false);
+    setTasks(t.data || []); setMembers(m.data || []); setProjects(p.data || []);
+    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setEntries(te.data || []);
+    setLoading(false);
   }, []);
   useEffect(() => {
     load();
-    const ch = supabase.channel('workboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, load).subscribe();
+    const ch = supabase.channel('workboard').on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, load).subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [load]);
 
-  const nameOf = (id) => { const m = members.find(x => x.id === id); return m ? (m.display_name || m.email?.split('@')[0]) : 'Unassigned'; };
-  const go = (w) => onNavigate?.(w.type, w.source_id);
+  const nameOf = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email.split('@')[0]) : ''; };
+  const customerOf = (p) => {
+    if (!p?.subject_type || !p?.subject_id) return null;
+    if (p.subject_type === 'company') return companies.find(x => x.id === p.subject_id)?.name;
+    if (p.subject_type === 'location') { const l = locations.find(x => x.id === p.subject_id); return companies.find(x => x.id === l?.company_id)?.name || l?.name; }
+    if (p.subject_type === 'deal') { const dl = deals.find(x => x.id === p.subject_id); return companies.find(x => x.id === dl?.company_id)?.name || dl?.name; }
+    return null;
+  };
+  const trackedFor = (t) => entries.filter(e => e.subject_id === t.id).reduce((s, e) => s + (e.duration_seconds || 0), 0);
 
-  // Only tasks can be moved from here. A ticket's stage means something its own
-  // screen enforces (SLA clocks, customer replies), and a board that silently
-  // rewrote it would be editing a record it does not understand.
-  const setStatus = async (item, status) => {
-    if (item.type !== 'task' || item.status === status) return;
-    setErr('');
-    const before = items;
-    // Optimistic: the row moves now, and puts itself back if the write fails.
-    setItems(cur => cur.map(x => (x.source_id === item.source_id ? { ...x, status } : x)));
-    const { error } = await supabase.from('tasks').update({
-      status,
-      completed_at: status === 'done' ? new Date().toISOString() : null,
-    }).eq('id', item.source_id);
-    if (error) { setItems(before); setErr(error.message); return; }
+  // ── Writes ─────────────────────────────────────────────────────────────────
+  const patch = async (id, p) => {
+    const before = tasks; setErr('');
+    setTasks(ts => ts.map(t => (t.id === id ? { ...t, ...p } : t)));
+    const { error } = await supabase.from('tasks').update(p).eq('id', id);
+    if (error) { setTasks(before); setErr(error.message); return false; }
+    return true;
+  };
+  const setStatus = async (t, status) => {
+    if (t.status === status) return;
+    const p = { status, completed_at: status === 'done' ? new Date().toISOString() : null };
+    if (status === 'blocked') { const why = prompt('What is it waiting on?', t.blocked_reason || ''); if (why === null) return; p.blocked_reason = why.trim() || null; }
+    else if (t.status === 'blocked') p.blocked_reason = null;
+    await patch(t.id, p);
+  };
+  const reassign = (t, ownerId) => patch(t.id, { owner_id: ownerId });
+  const nudge = async (t) => {
+    const who = t.owner_id;
+    const { error } = await supabase.from('crm_activities').insert({ type: 'note', subject_type: 'task', subject_id: t.id, actor_id: profile.id,
+      subject: 'Nudge', body: `${profile.display_name || 'Someone'} nudged this — no movement in ${STALL_DAYS}+ days.`, occurred_at: new Date().toISOString(), direction: 'outbound', is_internal: true });
+    if (error) { setErr(error.message); return; }
+    if (who && who !== profile.id) await supabase.from('notifications').insert({ recipient_id: who, actor_id: profile.id, type: 'system', title: 'Nudge', body: `“${t.title}” has not moved in ${STALL_DAYS}+ days.`, entity_type: 'task', link_id: t.id });
+    alert('Nudged.');
+    load();
+  };
+  const assignUnassigned = async (list) => {
+    const name = prompt('Assign to (name):'); if (!name?.trim()) return;
+    const m = members.find(x => (x.display_name || x.email).toLowerCase().startsWith(name.trim().toLowerCase()));
+    if (!m) { alert('No one by that name.'); return; }
+    const { error } = await supabase.from('tasks').update({ owner_id: m.id }).in('id', list.map(t => t.id));
+    if (error) { setErr(error.message); return; }
     load();
   };
 
-  const week = Date.now() - 7 * 86400000;
-  const columns = useMemo(() => COLUMNS.map(([key, label]) => {
-    let list = items.filter(i => i.status === key);
-    // Done is a record of the week, not an archive that grows for ever.
-    if (key === 'done') list = list.filter(i => new Date(i.updated_at).getTime() >= week);
-    return { key, label, list };
-  }), [items]);
+  // ── Board data ─────────────────────────────────────────────────────────────
+  const weekAgo = addDays(new Date(), -7).getTime();
+  const counts = useMemo(() => ({
+    todo: tasks.filter(t => t.status === 'todo').length,
+    in_progress: tasks.filter(t => t.status === 'in_progress').length,
+    blocked: tasks.filter(t => t.status === 'blocked').length,
+    doneWeek: tasks.filter(t => t.status === 'done' && t.completed_at && new Date(t.completed_at).getTime() >= weekAgo).length,
+  }), [tasks, weekAgo]);
+  const swimlanes = useMemo(() => {
+    if (lanes === 'none') return [{ key: 'all', title: null, tasks }];
+    if (lanes === 'assignee') {
+      const ids = [...new Set(tasks.map(t => t.owner_id))];
+      return ids.map(id => ({ key: id || 'none', title: id ? nameOf(id) : 'Unassigned', tasks: tasks.filter(t => t.owner_id === id) }))
+        .sort((a, b) => (a.key === 'none') - (b.key === 'none') || a.title.localeCompare(b.title));
+    }
+    const rows = projects.map(p => ({ key: p.id, title: p.name, customer: customerOf(p), due: p.due_date, tasks: tasks.filter(t => t.project_id === p.id) })).filter(r => r.tasks.length);
+    const loose = tasks.filter(t => !projects.some(p => p.id === t.project_id));
+    if (loose.length) rows.push({ key: 'none', title: 'No project', tasks: loose });
+    return rows;
+  }, [lanes, tasks, projects, members, companies, locations, deals]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const rows = useMemo(() => workloadRows(items, members), [items, members]);
+  // ── People data ────────────────────────────────────────────────────────────
+  const peopleRows = useMemo(() => {
+    const today = dayKey(new Date()), weekEnd = dayKey(addDays(startOfWeek(new Date()), 7));
+    const inWindow = windowMode === 'week'
+      ? tasks.filter(t => t.status !== 'done' && (t.status === 'in_progress' || (t.due_date && t.due_date < weekEnd)))
+      : tasks.filter(t => t.status !== 'done');
+    const items = inWindow.map(t => ({ ...t, due_at: t.due_date ? t.due_date + 'T00:00:00' : null, source_id: t.id, type: 'task' }));
+    return workloadRows(items, members).map(r => {
+      const projectsN = new Set(r.items.map(i => i.project_id).filter(Boolean)).size;
+      const trackedWeek = r.id ? entries.filter(e => e.profile_id === r.id).reduce((s, e) => s + (e.duration_seconds || 0), 0) : 0;
+      const capacity = r.overdue > 0 || r.total > MAX_OPEN ? 'over' : r.total >= 3 ? 'balanced' : 'room';
+      const untouched = r.items.filter(i => isStalled(i)).length;
+      const waiting = r.blocked;
+      return { ...r, projectsN, trackedWeek, capacity, untouched, waiting, role: members.find(m => m.id === r.id)?.role };
+    });
+  }, [tasks, members, entries, windowMode]);
+  const stalled = useMemo(() => tasks.filter(t => t.status !== 'done' && isStalled(t)).sort((a, b) => new Date(a.updated_at) - new Date(b.updated_at)), [tasks]);
+  const unassignedN = tasks.filter(t => t.status !== 'done' && !t.owner_id).length;
+  const openN = tasks.filter(t => t.status !== 'done').length;
+
+  const tone = (k) => k === 'amber' ? 'rgb(var(--c-amber-deep))' : k === 'coral' ? 'rgb(var(--c-coral-deep))' : k === 'primary' ? 'rgb(var(--c-primary-deep))' : 'rgb(var(--c-muted))';
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-6 py-4 border-b border-bdr flex items-center gap-3 flex-wrap">
-        <div className="text-xl font-bold text-paper">Work</div>
-        <div className="flex items-center gap-0.5 bg-card rounded-xl p-0.5">
-          {[['board', 'Board'], ['people', 'People']].map(([k, lbl]) => (
-            <button key={k} onClick={() => setTab(k)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${tab === k ? 'bg-ember text-white' : 'text-muted hover:text-paper'}`}>{lbl}</button>
-          ))}
+    <div className="h-full flex flex-col" style={{ background: 'var(--scene)' }}>
+      {tab === 'board' ? (
+        <div className="px-6 pt-5 flex items-center gap-4 flex-wrap">
+          <PageTitle>Board</PageTitle>
+          <Segmented value="board" options={[['list', 'List'], ['board', 'Board'], ['calendar', 'Calendar']]} onChange={(v) => { if (v === 'list') onNavigate?.('tasks'); if (v === 'calendar') onNavigate?.('work_calendar'); }} />
+          <span className="relative">
+            <LabelledPill label="Swimlanes:" value={lanes === 'project' ? 'Project' : lanes === 'assignee' ? 'Assignee' : 'None'} onClick={() => setLanesMenu(v => !v)} />
+            {lanesMenu && (
+              <div className="absolute left-0 top-full mt-1 z-40 min-w-[140px] menu-surface rounded-[10px] py-1" onMouseLeave={() => setLanesMenu(false)}>
+                {[['project', 'Project'], ['assignee', 'Assignee'], ['none', 'None']].map(([k, l]) => <button key={k} onClick={() => { setLanes(k); setLanesMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${lanes === k ? 'font-semibold' : ''}`}>{l}</button>)}
+              </div>
+            )}
+          </span>
+          <Mono className="hidden lg:inline">Drag between columns to set status · drag onto an avatar to reassign</Mono>
+          {canWrite && (
+            <span className="flex items-center gap-1 ml-auto" title="Drop a card here to reassign">
+              {members.map(m => (
+                <span key={m.id} onDragOver={e => { if (drag) e.preventDefault(); }} onDrop={() => { if (drag) { reassign(drag, m.id); setDrag(null); } }}
+                  className={`rounded-full transition ${drag ? 'ring-2 ring-ember/40 ring-offset-1' : ''}`}><Avatar id={m.id} name={m.display_name || m.email} size={26} /></span>
+              ))}
+            </span>
+          )}
+          <button onClick={() => setTab('people')} className="text-[13px] text-muted hover:text-paper">People →</button>
         </div>
-        {err && <span className="text-xs text-red-600">Could not save: {err}</span>}
-      </div>
+      ) : (
+        <div className="px-6 pt-5 flex items-start gap-4 flex-wrap">
+          <div className="flex-1 min-w-0">
+            <PageTitle className="mb-1">People</PageTitle>
+            <MetaLabel>{members.length} people · {openN} open task{openN === 1 ? '' : 's'} · {unassignedN} unassigned</MetaLabel>
+          </div>
+          <span className="relative">
+            <LabelledPill label="Window:" value={windowMode === 'week' ? 'This week' : 'All open'} onClick={() => setWindowMenu(v => !v)} />
+            {windowMenu && (
+              <div className="absolute right-0 top-full mt-1 z-40 min-w-[140px] menu-surface rounded-[10px] py-1" onMouseLeave={() => setWindowMenu(false)}>
+                {[['week', 'This week'], ['all', 'All open']].map(([k, l]) => <button key={k} onClick={() => { setWindowMode(k); setWindowMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${windowMode === k ? 'font-semibold' : ''}`}>{l}</button>)}
+              </div>
+            )}
+          </span>
+          <button onClick={() => setTab('board')} className="text-[13px] text-muted hover:text-paper">Board →</button>
+        </div>
+      )}
+      {err && <div className="px-6 pt-2 text-[12px]" style={{ color: 'rgb(var(--c-coral-deep))' }}>Could not save: {err} <button className="underline ml-1" onClick={() => setErr('')}>dismiss</button></div>}
 
-      {loading ? (
-        <div className="p-6 grid grid-cols-4 gap-3">
-          {[0, 1, 2, 3].map(i => <div key={i} className="h-64 rounded-2xl bg-card/60 animate-pulse" />)}
-        </div>
-      ) : tab === 'board' ? (
-        <div className="flex-1 overflow-auto p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 min-w-0">
-            {columns.map(col => {
-              const over = col.key === 'in_progress' && col.list.length > WIP_ADVISORY;
+      {loading ? <div className="p-6"><SkeletonList rows={4} /></div> : tab === 'board' ? (
+        <div className="flex-1 overflow-auto px-6 pt-[18px] pb-6 flex flex-col gap-[14px]">
+          {/* Column headers */}
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))' }}>
+            {COLUMNS.map(([k, label, tn]) => {
+              const over = k === 'in_progress' && counts.in_progress > WIP_LIMIT;
               return (
-                <div key={col.key}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={() => { if (drag) setStatus(drag, col.key); setDrag(null); }}
-                  className="glass-card rounded-2xl overflow-hidden flex flex-col min-h-[200px]">
-                  <div className={`px-4 py-2.5 border-b border-bdr flex items-center gap-2 ${over ? 'bg-amber/10' : ''}`}>
-                    <span className={`text-[11px] font-bold ${over ? 'text-amber' : 'text-paper'}`}>{col.label}</span>
-                    <span className="text-[10px] text-dim font-mono">{col.list.length}</span>
-                    {col.key === 'done' && <span className="text-[10px] text-dim">this week</span>}
-                    {over && <span className="ml-auto text-[10px] text-amber">over {WIP_ADVISORY}</span>}
-                  </div>
-                  <div className="p-2 space-y-2 flex-1">
-                    {col.list.length === 0 && <div className="py-6 text-center text-[11px] text-dim italic">Nothing here</div>}
-                    {col.list.map(w => (
-                      <div key={`${w.type}-${w.source_id}`}
-                        draggable={w.type === 'task'}
-                        onDragStart={() => setDrag(w)}
-                        onDragEnd={() => setDrag(null)}
-                        onClick={() => go(w)}
-                        title={w.type === 'task' ? 'Drag to change status' : `Open the ${w.type} to change its stage`}
-                        className={`p-2.5 rounded-xl bg-card border border-bdr hover:border-ember/30 transition ${w.type === 'task' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}>
-                        <div className="flex items-start gap-1.5 mb-1">
-                          <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-ink-soft text-dim border border-bdr shrink-0">{w.type}</span>
-                          <span className="text-xs text-paper flex-1 min-w-0 line-clamp-2">{w.title}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-[10px] text-dim">
-                          <span className="truncate flex-1">{w.subtitle || nameOf(w.owner_id)}</span>
-                          <span>{priorityLabel(w.priority)}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                <div key={k} className="flex items-center gap-2">
+                  <MetaLabel tone={over ? 'amber' : tn === 'muted' ? 'muted' : tn}>{label}</MetaLabel>
+                  <Mono size={10}>{k === 'done' ? `this week ${counts.doneWeek}` : counts[k]}</Mono>
+                  {k === 'in_progress' && <Tag tone="amber" className="!text-[10px] !px-1.5">limit {WIP_LIMIT}{over ? ' · over' : ''}</Tag>}
                 </div>
               );
             })}
           </div>
-        </div>
-      ) : (
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="max-w-4xl space-y-3">
-            {rows.map(r => (
-              <div key={r.id || 'none'} className="glass-card rounded-2xl p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className={`text-sm font-semibold ${r.id ? 'text-paper' : 'text-muted italic'}`}>{r.name}</span>
-                  <span className="text-[11px] text-dim font-mono">{r.total} open</span>
-                  {r.overdue > 0 && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-100 text-red-700">{r.overdue} overdue</span>}
-                  {r.blocked > 0 && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber/15 text-amber">{r.blocked} blocked</span>}
-                </div>
-                {/* Scaled against the busiest person, so the bars compare. */}
-                {/* Blocked gets its own segment. Without it, someone whose work
-                    is ENTIRELY blocked drew an empty bar and read as having
-                    nothing on — the exact opposite of the truth, and on this
-                    data that was Duncan with two blocked items. */}
-                <div className="h-2.5 rounded-full bg-bdr overflow-hidden flex" style={{ width: `${Math.max(4, r.scale * 100)}%` }}>
-                  {r.overdue > 0 && <span className="h-full bg-red-500" title={`${r.overdue} overdue`} style={{ width: `${(r.overdue / r.total) * 100}%` }} />}
-                  {r.blocked > 0 && <span className="h-full bg-amber" title={`${r.blocked} blocked`} style={{ width: `${(r.blocked / r.total) * 100}%` }} />}
-                  {r.inProgress > 0 && <span className="h-full bg-ember" title={`${r.inProgress} in progress`} style={{ width: `${(r.inProgress / r.total) * 100}%` }} />}
-                  {r.todo > 0 && <span className="h-full bg-slate-300" title={`${r.todo} to do`} style={{ width: `${(r.todo / r.total) * 100}%` }} />}
-                </div>
-                {r.stalled.length > 0 && (
-                  <div className="mt-2.5 pt-2.5 border-t border-bdr">
-                    <div className="text-[10px] font-mono uppercase tracking-wider text-dim mb-1">
-                      No movement in {STALL_DAYS}+ days ({r.stalled.length})
-                    </div>
-                    {r.stalled.slice(0, 3).map(w => (
-                      <button key={`${w.type}-${w.source_id}`} onClick={() => go(w)}
-                        className="w-full text-left text-xs text-muted hover:text-paper truncate py-0.5">
-                        {w.title}
-                      </button>
-                    ))}
+          {tasks.length === 0 && <EmptyState title="Nothing to do yet" body="Tasks appear here in four columns as soon as there are any." primary={canWrite ? 'Add a task' : null} onPrimary={() => onNavigate?.('tasks')} />}
+          {swimlanes.map(lane => {
+            const gl = lane.due ? dueLabel(lane.due, 'todo') : null;
+            const daysTo = lane.due ? Math.round((new Date(lane.due + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000) : null;
+            const doneAll = lane.tasks.filter(t => t.status === 'done');
+            const doneWeek = doneAll.filter(t => t.completed_at && new Date(t.completed_at).getTime() >= weekAgo);
+            return (
+              <Card key={lane.key} className="p-[14px] flex flex-col gap-2.5">
+                {lane.title && (
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-[14px] font-bold text-paper truncate cursor-pointer" onClick={() => lanes === 'project' && lane.key !== 'none' && onNavigate?.('project', lane.key)}>{lane.title}</span>
+                    {lane.customer && <Tag>{lane.customer}</Tag>}
+                    {gl && (daysTo <= 14
+                      ? <Mono tone="coral" bold>Go live {new Date(lane.due + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</Mono>
+                      : <Mono>Due {new Date(lane.due + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</Mono>)}
                   </div>
                 )}
-              </div>
-            ))}
-          </div>
+                <div className="grid gap-3 items-start" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))' }}>
+                  {COLUMNS.map(([k]) => {
+                    const list = k === 'done' ? doneWeek : lane.tasks.filter(t => t.status === k);
+                    return (
+                      <div key={k} onDragOver={e => { if (drag) e.preventDefault(); }} onDrop={() => { if (drag) { setStatus(drag, k); setDrag(null); } }}
+                        className={`flex flex-col gap-2 min-h-[44px] rounded-[12px] transition ${drag ? 'outline-dashed outline-1 outline-[var(--dash-line)]' : ''}`}>
+                        {list.map(t => {
+                          const due = dueLabel(t.due_date, t.status);
+                          const tr = trackedFor(t);
+                          const isDone = t.status === 'done';
+                          return (
+                            <div key={t.id} draggable={canWrite && !isDone} onDragStart={() => setDrag(t)} onDragEnd={() => setDrag(null)}
+                              onClick={() => onNavigate?.('task', t.id)}
+                              className={`rounded-[12px] px-3 py-[11px] cursor-pointer border ${canWrite && !isDone ? 'active:cursor-grabbing' : ''}`}
+                              style={isDone
+                                ? { background: 'var(--panel-bg)', borderColor: 'var(--hair)' }
+                                : { background: 'var(--surface-solid)', boxShadow: 'var(--shadow-tile)',
+                                    borderColor: t.status === 'blocked' ? 'rgb(var(--c-coral) / .35)' : t.status === 'in_progress' ? 'rgb(var(--c-primary) / .35)' : 'var(--ink-line)' }}>
+                              <div className={`text-[13px] ${isDone ? 'text-dim line-through' : 'font-medium text-paper'}`}>{t.title}</div>
+                              {!isDone && t.status === 'blocked' && t.blocked_reason && <div className="text-[11px] mt-0.5" style={{ color: 'rgb(var(--c-coral-deep))' }}>{t.blocked_reason}</div>}
+                              {!isDone && (
+                                <div className="flex items-center gap-1.5 mt-1.5">
+                                  {t.priority && <Pill tone={t.priority === 'P0' || t.priority === 'P1' ? 'coral' : 'ink'} className="!px-[7px] !py-[2px] !rounded-[5px] !border-0">{PRIORITY_LABEL[t.priority]}</Pill>}
+                                  {tr > 0 ? <Mono size={10} tone="primary">{fmtHM(tr)}</Mono>
+                                    : t.due_date ? <Mono size={10} tone={due.tone === 'coral' ? 'coral' : 'dim'}>{due.tone === 'coral' ? `-${due.text.replace(/ days? late/, '')}d` : due.text}</Mono> : null}
+                                  <span className="ml-auto"><Avatar id={t.owner_id} name={nameOf(t.owner_id)} size={20} /></span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {k === 'todo' && canWrite && lanes === 'project' && lane.key !== 'none' && (
+                          <button onClick={() => onNavigate?.('project', lane.key)} className="text-left text-[13px] text-dim px-3 py-2.5 rounded-[12px] border border-dashed hover:text-paper" style={{ borderColor: 'var(--dash-line)' }}>+ Add task</button>
+                        )}
+                        {k === 'done' && doneAll.length > doneWeek.length && <Mono size={10}>+ {doneAll.length - doneWeek.length} completed earlier</Mono>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto px-6 pt-[18px] pb-6 flex flex-col gap-3">
+          {peopleRows.filter(r => r.id).map(r => {
+            const w = (n) => `${r.total ? (n / r.total) * 100 * r.scale : 0}%`;
+            const cap = r.capacity === 'over' ? ['Over capacity', 'rgb(var(--c-coral))', 'Reassign · View tasks']
+              : r.capacity === 'balanced' ? ['Balanced', 'rgb(var(--c-primary-deep))', 'Assign work'] : ['Has room', 'rgb(var(--c-muted))', 'Assign work'];
+            return (
+              <Card key={r.id} className="px-[18px] py-4 grid gap-[18px] items-center" style={{ gridTemplateColumns: '190px minmax(0,1fr) 150px' }}>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Avatar id={r.id} name={r.name} size={34} />
+                  <div className="min-w-0"><div className="text-[15px] font-semibold text-paper truncate">{r.name}</div><div className="text-[11px] text-dim capitalize">{r.role || 'member'}</div></div>
+                </div>
+                <div className="min-w-0">
+                  <div className="flex h-[26px] rounded-[8px] overflow-hidden border" style={{ borderColor: 'var(--ink-line)' }}>
+                    {r.overdue > 0 && <div className="flex items-center justify-center text-[11px] font-bold px-1 truncate" style={{ width: w(r.overdue), background: 'rgb(var(--c-coral))', color: 'var(--on-accent)' }}>{r.overdue} overdue</div>}
+                    {r.blocked > 0 && <div className="flex items-center justify-center text-[11px] font-bold px-1 truncate" style={{ width: w(r.blocked), background: 'rgb(var(--c-coral) / .55)', color: 'var(--on-accent)' }}>{r.blocked} blocked</div>}
+                    {r.inProgress > 0 && <div className="flex items-center justify-center text-[11px] font-bold px-1 truncate" style={{ width: w(r.inProgress), background: 'rgb(var(--c-amber))', color: 'rgb(var(--c-ink))' }}>{r.inProgress} doing</div>}
+                    {r.todo > 0 && <div className="flex items-center justify-center text-[11px] font-semibold px-1 truncate" style={{ width: w(r.todo), background: 'rgb(var(--c-primary) / .35)' }}>{r.todo} to do</div>}
+                    <div className="flex-1" style={{ background: 'var(--ink-soft)' }} />
+                  </div>
+                  <div className="text-[12px] text-muted mt-1.5 truncate">
+                    {r.total} open{r.projectsN ? ` across ${r.projectsN} project${r.projectsN === 1 ? '' : 's'}` : ''}
+                    {r.trackedWeek ? ` · ${fmtHM(r.trackedWeek)} tracked this week` : ''}
+                    {r.waiting ? ` · ${r.waiting} waiting` : ''}{r.untouched && !r.waiting ? ` · ${r.untouched} untouched ${STALL_DAYS}+ days` : ''}
+                    {!r.total ? ' · nothing dated this week' : ''}
+                  </div>
+                </div>
+                <div>
+                  <div className="font-mono text-[11px] font-bold" style={{ color: cap[1] }}>{cap[0]}</div>
+                  <div className="text-[12px] text-muted">
+                    {r.capacity === 'over'
+                      ? <><button onClick={() => { setTab('board'); setLanes('assignee'); }} className="hover:text-paper">Reassign</button> · <button onClick={() => onNavigate?.('tasks')} className="hover:text-paper">View tasks</button></>
+                      : <button onClick={() => onNavigate?.('tasks')} className="hover:text-paper">Assign work</button>}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+          {(() => {
+            const u = peopleRows.find(r => !r.id);
+            return (
+              <Card panel className="px-[18px] py-4 grid gap-[18px] items-center border-dashed" style={{ gridTemplateColumns: '190px minmax(0,1fr) 150px', borderStyle: 'dashed', borderColor: 'var(--dash-line)' }}>
+                <div className="flex items-center gap-2.5">
+                  <Avatar id={null} size={34} />
+                  <div><div className="text-[15px] font-semibold text-paper">Unassigned</div><div className="text-[11px] text-dim">Needs an owner</div></div>
+                </div>
+                <div className="text-[13px] text-paper-soft truncate">{u?.items?.length ? u.items.map(i => i.title).join(' · ') : 'Nothing waiting for an owner.'}</div>
+                <div>{u?.items?.length > 0 && canWrite && <button onClick={() => assignUnassigned(u.items)} className="text-[12px] font-semibold" style={{ color: 'rgb(var(--c-primary-deep))' }}>Assign {u.items.length === 2 ? 'both' : 'all'}</button>}</div>
+              </Card>
+            );
+          })()}
+          <Card className="px-[18px] py-4">
+            <div className="font-mono text-[9px] font-bold tracking-[.18em] uppercase text-dim mb-2.5">Stalled — no movement in {STALL_DAYS} days or more</div>
+            {stalled.length === 0 && <div className="text-[13px] text-dim">Everything has moved recently.</div>}
+            <div className="flex flex-col gap-2.5">
+              {stalled.slice(0, 8).map(t => {
+                const days = Math.floor((Date.now() - new Date(t.updated_at).getTime()) / 86400000);
+                const p = projects.find(x => x.id === t.project_id);
+                return (
+                  <div key={t.id} className="flex items-center gap-2.5 text-[14px]">
+                    <Avatar id={t.owner_id} name={nameOf(t.owner_id)} size={22} />
+                    <span className="text-paper truncate cursor-pointer" onClick={() => onNavigate?.('task', t.id)}>{t.title}</span>
+                    {t.status === 'blocked' ? <Tag tone="coral">Blocked</Tag> : p ? <Tag tone="uv">{p.name}</Tag> : null}
+                    <Mono tone="coral" bold>{days} days</Mono>
+                    {canWrite && <button onClick={() => nudge(t)} className="text-[12px] font-semibold ml-auto" style={{ color: 'rgb(var(--c-primary-deep))' }}>Nudge</button>}
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
         </div>
       )}
     </div>

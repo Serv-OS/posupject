@@ -1,410 +1,350 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-
-import { PRIORITY_LABEL, priorityLabel } from '../../lib/priority';
-import { groupTasks } from '../../lib/taskGrouping';
+import { groupTasks, dueBucket } from '../../lib/taskGrouping';
 import { useStickyState } from '../../lib/stickyState';
-const STATUS_STYLES = {
-  todo: 'bg-blue-100 text-blue-700 border border-blue-200',
-  in_progress: 'bg-orange-100 text-orange-700 border border-orange-200',
-  blocked: 'bg-red-100 text-red-700 border border-red-200',
-  done: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
-};
-const PRIORITY_STYLES = {
-  P0: 'bg-red-100 text-red-700 border border-red-200',
-  P1: 'bg-orange-100 text-orange-700 border border-orange-200',
-  P2: 'bg-blue-100 text-blue-700 border border-blue-200',
-  P3: 'bg-slate-100 text-slate-600 border border-slate-200',
-};
+import { parseQuickAdd, quickAddRow } from '../../lib/quickAdd';
+import {
+  Avatar, Check, StatusPill, PriorityPill, Tag, LinkChip, SectionLabel, MetaLabel, Mono, PageTitle,
+  PrimaryBtn, GhostBtn, Segmented, LabelledPill, FilterPill, Card, DashedAdd, DarkBar, SkeletonList, EmptyState,
+  StatusMenu, hair, dueLabel, fmtShort, fmtHM,
+} from './ui.jsx';
 
-export default function TaskList({ profile, onSelect }) {
+// Screen 02 — the grouped list.
+//
+// One grouping control. The group header always carries progress, so a project
+// reads as a unit inside a flat list. Rows are one line by default; the second
+// line appears only when there is something to say (a blocker, subtasks, a
+// linked record). Status pills are buttons: click opens the four-item popover,
+// 1–4 sets it on the focused row, j/k move. Selection is a hover checkbox on
+// the left edge, and the dark bar is the only multi-select UI.
+
+const GROUPS = [['project', 'Project'], ['assignee', 'Assignee'], ['due', 'Due date'], ['priority', 'Priority']];
+const DEFAULT_FILTERS = { search: '', status: 'open', assignee: 'all', overdueOnly: false };
+const SUBJECT_LABEL = { company: 'Company', location: 'Site', deal: 'Deal', onboarding: 'Onboarding', ticket: 'Ticket' };
+
+export default function TaskList({ profile, onSelect, onNavigate }) {
   const [allTasks, setAllTasks] = useState([]);
   const [members, setMembers] = useState([]);
   const [projects, setProjects] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
   const [deals, setDeals] = useState([]);
-  const [onboardings, setOnboardings] = useState([]);
+  const [tickets, setTickets] = useState([]);
+  const [attachCounts, setAttachCounts] = useState({});
+  const [tracked, setTracked] = useState({});
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState({ status: 'open', assignee: 'all', search: '' });
-  // One grouping control, remembered — a list you regroup on every visit is a
-  // list you stop trusting.
-  const [groupBy, setGroupBy] = useStickyState('tasks.groupBy', 'due');
+  const [filters, setFilters] = useStickyState('tasks.filters', DEFAULT_FILTERS);
+  const [groupBy, setGroupBy] = useStickyState('tasks.groupBy', 'project');
   const [collapsed, setCollapsed] = useState({});
-  const [expanded, setExpanded] = useState({});
-  const [showCreate, setShowCreate] = useState(false);
-  const [title, setTitle] = useState('');
-  const [newDescription, setNewDescription] = useState('');
-  const [priority, setPriority] = useState('P2');
-  const [assignee, setAssignee] = useState('');
-  const [dueDate, setDueDate] = useState('');
-  const [projectId, setProjectId] = useState('');
-
+  const [sel, setSel] = useState(() => new Set());
+  const [focus, setFocus] = useState(null);
+  const [menuFor, setMenuFor] = useState(null);
+  const [groupMenu, setGroupMenu] = useState(false);
+  const [addText, setAddText] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [err, setErr] = useState('');
+  const addRef = useRef(null);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
+  const f = { ...DEFAULT_FILTERS, ...(filters || {}) };
+  const setF = (patch) => { setFilters({ ...f, ...patch }); setSel(new Set()); };
 
   useEffect(() => { load(); }, []);
-
   const load = async () => {
-    setLoading(true);
-    const [t, m, p, c, l, d, ob] = await Promise.all([
+    const [t, m, p, c, l, d, tk] = await Promise.all([
       supabase.from('tasks').select('*').order('sort_order'),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('crm_projects').select('*').order('name'),
       supabase.from('companies').select('id, name'),
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
-      supabase.from('onboardings').select('id, company_id, deal_id, location_id'),
+      supabase.from('tickets').select('id, ticket_number, subject'),
     ]);
-    setAllTasks(t.data || []);
-    setMembers(m.data || []);
-    setProjects(p.data || []);
-    setCompanies(c.data || []);
-    setLocations(l.data || []);
-    setDeals(d.data || []);
-    setOnboardings(ob.data || []);
+    setAllTasks(t.data || []); setMembers(m.data || []); setProjects(p.data || []);
+    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setTickets(tk.data || []);
     setLoading(false);
-  };
-
-  // Build parent/child lookup
-  const childMap = useMemo(() => {
-    const map = {};
-    allTasks.forEach(t => {
-      if (t.parent_task_id) {
-        if (!map[t.parent_task_id]) map[t.parent_task_id] = [];
-        map[t.parent_task_id].push(t);
-      }
-    });
-    return map;
-  }, [allTasks]);
-
-  // Top-level tasks only for the main list
-  const topLevelTasks = useMemo(() => allTasks.filter(t => !t.parent_task_id), [allTasks]);
-
-  const filtered = useMemo(() => {
-    let result = topLevelTasks;
-    if (filter.status === 'open') result = result.filter(t => t.status !== 'done');
-    else if (filter.status !== 'all') result = result.filter(t => t.status === filter.status);
-    if (filter.assignee === 'me') result = result.filter(t => t.owner_id === profile.id);
-    if (filter.assignee === 'unassigned') result = result.filter(t => !t.owner_id);
-    if (filter.search) {
-      const q = filter.search.toLowerCase();
-      result = result.filter(t => t.title.toLowerCase().includes(q));
+    // The second line's extras. Two cheap queries, not one per row.
+    const ids = (t.data || []).map(x => x.id);
+    if (ids.length) {
+      const [a, te] = await Promise.all([
+        supabase.from('attachments').select('subject_id').eq('subject_type', 'task').in('subject_id', ids),
+        supabase.from('time_entries').select('subject_id, duration_seconds').eq('subject_type', 'task').in('subject_id', ids),
+      ]);
+      const ac = {}; for (const r of a.data || []) ac[r.subject_id] = (ac[r.subject_id] || 0) + 1;
+      const tr = {}; for (const r of te.data || []) tr[r.subject_id] = (tr[r.subject_id] || 0) + (r.duration_seconds || 0);
+      setAttachCounts(ac); setTracked(tr);
     }
-    return result;
-  }, [topLevelTasks, filter, profile.id]);
-
-  const ownerName = (id) => {
-    const m = members.find(u => u.id === id);
-    return m ? (m.display_name || m.email.split('@')[0]) : '';
   };
 
-  const projectName = (id) => projects.find(p => p.id === id)?.name || '';
-
-  // Resolve what a task or its project is linked to
-  const getTaskContext = (task) => {
-    const badges = [];
-
-    // Direct subject link on the task
-    const resolveSubject = (type, id) => {
+  // ── Lookups ────────────────────────────────────────────────────────────────
+  const nameOf = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email.split('@')[0]) : ''; };
+  const childMap = useMemo(() => { const m = {}; for (const t of allTasks) if (t.parent_task_id) (m[t.parent_task_id] ||= []).push(t); return m; }, [allTasks]);
+  const topLevel = useMemo(() => allTasks.filter(t => !t.parent_task_id), [allTasks]);
+  const linkOf = (t) => {
+    const resolve = (type, id) => {
       if (!type || !id) return null;
-      if (type === 'company') { const c = companies.find(x => x.id === id); return c ? { label: 'Company', name: c.name } : null; }
-      if (type === 'location') { const l = locations.find(x => x.id === id); return l ? { label: 'Location', name: l.name, companyId: l.company_id } : null; }
-      if (type === 'deal') { const d = deals.find(x => x.id === id); return d ? { label: 'Deal', name: d.name, companyId: d.company_id } : null; }
-      if (type === 'onboarding') {
-        // Show the venue the job is for: install location, else deal, else company.
-        const o = onboardings.find(x => x.id === id);
-        if (!o) return { label: 'Onboarding', name: '' };
-        const loc = locations.find(x => x.id === o.location_id);
-        const dl = deals.find(x => x.id === o.deal_id);
-        const name = loc?.name || dl?.name || companies.find(x => x.id === o.company_id)?.name || '';
-        return { label: 'Onboarding', name, companyId: o.company_id || dl?.company_id || loc?.company_id };
-      }
-      if (type === 'ticket') return { label: 'Ticket', name: '' };
-      return null;
+      if (type === 'company') { const c = companies.find(x => x.id === id); return c ? { label: 'Company', name: c.name, tone: 'ink' } : null; }
+      if (type === 'location') { const l = locations.find(x => x.id === id); return l ? { label: 'Site', name: l.name, tone: 'ink', companyId: l.company_id } : null; }
+      if (type === 'deal') { const dl = deals.find(x => x.id === id); return dl ? { label: 'Deal', name: dl.name, tone: 'primary', companyId: dl.company_id } : null; }
+      if (type === 'ticket') { const tk = tickets.find(x => x.id === id); return tk ? { label: 'Ticket', name: `#${tk.ticket_number}`, tone: 'primary' } : null; }
+      return { label: SUBJECT_LABEL[type] || type, name: '', tone: 'ink' };
     };
-
-    // Check task's own subject
-    let subject = resolveSubject(task.subject_type, task.subject_id);
-
-    // If no direct subject, check the project's subject
-    if (!subject && task.project_id) {
-      const proj = projects.find(p => p.id === task.project_id);
-      if (proj) subject = resolveSubject(proj.subject_type, proj.subject_id);
-    }
-
-    if (subject) {
-      badges.push({ type: 'link', label: subject.label, name: subject.name });
-      // Resolve company from location/deal
-      if (subject.companyId) {
-        const c = companies.find(x => x.id === subject.companyId);
-        if (c) badges.push({ type: 'company', name: c.name });
-      }
-    }
-
-    return badges;
+    return resolve(t.subject_type, t.subject_id);
+  };
+  const projectCustomer = (p) => {
+    if (!p?.subject_type || !p?.subject_id) return null;
+    if (p.subject_type === 'company') return companies.find(x => x.id === p.subject_id)?.name;
+    if (p.subject_type === 'location') { const l = locations.find(x => x.id === p.subject_id); return companies.find(x => x.id === l?.company_id)?.name || l?.name; }
+    if (p.subject_type === 'deal') { const dl = deals.find(x => x.id === p.subject_id); return companies.find(x => x.id === dl?.company_id)?.name || dl?.name; }
+    return null;
   };
 
-  const create = async (e) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-    const { data } = await supabase.from('tasks').insert({
-      title: title.trim(),
-      description: newDescription.trim() || null,
-      priority,
-      owner_id: assignee || null,
-      due_date: dueDate || null,
-      project_id: projectId || null,
-    }).select().single();
-    setTitle(''); setNewDescription(''); setPriority('P2'); setAssignee(''); setDueDate(''); setProjectId('');
-    setShowCreate(false);
-    if (data) onSelect(data.id);
-    else load();
+  // ── Filtering ──────────────────────────────────────────────────────────────
+  const filtered = useMemo(() => {
+    let r = topLevel;
+    if (f.status === 'open') r = r.filter(t => t.status !== 'done');
+    else if (f.status !== 'all') r = r.filter(t => t.status === f.status);
+    if (f.assignee === 'me') r = r.filter(t => t.owner_id === profile.id);
+    if (f.assignee === 'unassigned') r = r.filter(t => !t.owner_id);
+    if (f.overdueOnly) r = r.filter(t => dueBucket(t) === 'overdue' && t.status !== 'done');
+    if (f.search) { const q = f.search.toLowerCase(); r = r.filter(t => t.title.toLowerCase().includes(q)); }
+    return r;
+  }, [topLevel, f.status, f.assignee, f.overdueOnly, f.search, profile.id]);
+  const groups = useMemo(() => groupTasks(filtered, groupBy, { projects, members }), [filtered, groupBy, projects, members]);
+  const visibleRows = useMemo(() => groups.flatMap(g => collapsed[g.key] ? [] : (g.sub ? g.sub.flatMap(s => s.tasks) : g.tasks)), [groups, collapsed]);
+
+  const counts = useMemo(() => ({
+    open: topLevel.filter(t => t.status !== 'done').length,
+    overdue: topLevel.filter(t => t.status !== 'done' && dueBucket(t) === 'overdue').length,
+    blocked: topLevel.filter(t => t.status === 'blocked').length,
+    done: topLevel.filter(t => t.status === 'done').length,
+  }), [topLevel]);
+  const filtersActive = f.status !== 'open' || f.assignee !== 'all' || f.overdueOnly || !!f.search;
+  const filterWords = [f.status !== 'open' && (f.status === 'all' ? 'all statuses' : f.status.replace('_', ' ')),
+    f.assignee === 'me' && 'assigned to me', f.assignee === 'unassigned' && 'unassigned', f.overdueOnly && 'overdue only', f.search && `matching “${f.search}”`].filter(Boolean).join(', ');
+
+  // ── Writes: optimistic, put back on failure ────────────────────────────────
+  const patch = async (id, p) => {
+    const before = allTasks;
+    setAllTasks(ts => ts.map(t => (t.id === id ? { ...t, ...p } : t)));
+    const { error } = await supabase.from('tasks').update(p).eq('id', id);
+    if (error) { setAllTasks(before); setErr(error.message); }
+  };
+  const toggleDone = (t) => patch(t.id, t.status === 'done' ? { status: 'todo', completed_at: null } : { status: 'done', completed_at: new Date().toISOString() });
+  const setStatus = async (t, status) => {
+    const p = { status, completed_at: status === 'done' ? new Date().toISOString() : null };
+    if (status === 'blocked') { const why = prompt('What is it waiting on?', t.blocked_reason || ''); if (why === null) return; p.blocked_reason = why.trim() || null; }
+    else if (t.status === 'blocked') p.blocked_reason = null;
+    setMenuFor(null);
+    await patch(t.id, p);
+  };
+  const addTask = async () => {
+    const text = addText.trim(); if (!text) return;
+    const parsed = parseQuickAdd(text, { members, projects });
+    const { error } = await supabase.from('tasks').insert(quickAddRow(parsed, profile.id));
+    if (error) { setErr(error.message); return; }
+    setAddText(''); load();
   };
 
-  const toggleDone = async (e, task) => {
-    e.stopPropagation();
-    const newStatus = task.status === 'done' ? 'todo' : 'done';
-    await supabase.from('tasks').update({
-      status: newStatus,
-      completed_at: newStatus === 'done' ? new Date().toISOString() : null,
-    }).eq('id', task.id);
-    load();
+  // Bulk actions — the dark bar.
+  const selected = allTasks.filter(t => sel.has(t.id));
+  const bulk = async (p) => {
+    const ids = [...sel]; if (!ids.length) return;
+    const { error } = await supabase.from('tasks').update(p).in('id', ids);
+    if (error) { setErr(error.message); return; }
+    setSel(new Set()); load();
   };
+  const bulkAssign = () => { const name = prompt('Assign to (name):'); if (name === null) return; const m = members.find(x => (x.display_name || x.email).toLowerCase().startsWith(name.toLowerCase())); if (!m && name.trim()) { alert('No one by that name.'); return; } bulk({ owner_id: m?.id || null }); };
+  const bulkDue = () => { const d = prompt('Due date (YYYY-MM-DD), blank to clear:'); if (d === null) return; bulk({ due_date: d.trim() || null }); };
+  const bulkPhase = () => { const ph = prompt('Move to phase (name), blank to clear:'); if (ph === null) return; bulk({ phase: ph.trim() || null }); };
+  const bulkStatus = () => { const s = prompt('Status: todo, in_progress, blocked, done'); if (!s) return; if (!['todo', 'in_progress', 'blocked', 'done'].includes(s.trim())) return; bulk({ status: s.trim(), completed_at: s.trim() === 'done' ? new Date().toISOString() : null }); };
+  const bulkDelete = async () => { if (!confirm(`Delete ${sel.size} task${sel.size === 1 ? '' : 's'}? This cannot be undone.`)) return; const { error } = await supabase.from('tasks').delete().in('id', [...sel]); if (error) { setErr(error.message); return; } setSel(new Set()); load(); };
 
-  const toggleExpand = (e, taskId) => {
-    e.stopPropagation();
-    setExpanded(prev => ({ ...prev, [taskId]: !prev[taskId] }));
-  };
+  // Keyboard: j/k move, 1–4 set status, Enter opens, x toggles selection.
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey) return;
+      if (!visibleRows.length) return;
+      const i = focus ? visibleRows.findIndex(t => t.id === focus) : -1;
+      if (e.key === 'j') { e.preventDefault(); setFocus(visibleRows[Math.min(i + 1, visibleRows.length - 1)].id); }
+      else if (e.key === 'k') { e.preventDefault(); setFocus(visibleRows[Math.max(i - 1, 0)].id); }
+      else if (e.key === 'Enter' && focus) { e.preventDefault(); onSelect?.(focus); }
+      else if (e.key === 'x' && focus) { e.preventDefault(); setSel(s => { const n = new Set(s); n.has(focus) ? n.delete(focus) : n.add(focus); return n; }); }
+      else if (['1', '2', '3', '4'].includes(e.key) && focus && canWrite) { const t = visibleRows.find(x => x.id === focus); if (t) setStatus(t, ['todo', 'in_progress', 'blocked', 'done'][Number(e.key) - 1]); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visibleRows, focus, canWrite]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isOverdue = (t) => t.due_date && t.status !== 'done' && new Date(t.due_date) < new Date();
-
-  const subtaskSummary = (taskId) => {
-    const kids = childMap[taskId] || [];
-    if (!kids.length) return null;
-    const done = kids.filter(k => k.status === 'done').length;
-    return { total: kids.length, done };
-  };
-
-  const input = "w-full px-3 py-2 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
-
-  const renderTask = (t, depth = 0) => {
-    const kids = childMap[t.id] || [];
-    const hasKids = kids.length > 0;
-    const isExpanded = expanded[t.id];
-    const sub = subtaskSummary(t.id);
-    const context = depth === 0 ? getTaskContext(t) : [];
-
-    return (
-      <div key={t.id}>
-        <div
-          onClick={() => onSelect(t.id)}
-          className={`px-6 py-3 border-b border-bdr hover:bg-card/50 cursor-pointer transition flex items-center gap-3`}
-          style={{ paddingLeft: `${24 + depth * 28}px` }}>
-
-          {/* Expand/collapse toggle */}
-          {hasKids ? (
-            <button onClick={(e) => toggleExpand(e, t.id)}
-              className="w-5 h-5 flex items-center justify-center text-muted hover:text-paper shrink-0 text-xs transition"
-              title={isExpanded ? 'Collapse subtasks' : 'Expand subtasks'}>
-              <span className={`inline-block transition-transform ${isExpanded ? 'rotate-90' : ''}`}>&#x25B6;</span>
-            </button>
-          ) : (
-            <div className="w-5 shrink-0" />
-          )}
-
-          {/* Checkbox */}
-          {canWrite && (
-            <button onClick={(e) => toggleDone(e, t)}
-              className={`w-5 h-5 rounded border-2 shrink-0 flex items-center justify-center transition ${
-                t.status === 'done' ? 'bg-emerald-100 border-emerald-500 text-emerald-600' : 'border-slate-300 hover:border-ember'
-              }`}>
-              {t.status === 'done' && <span className="text-xs">&#x2713;</span>}
-            </button>
-          )}
-
-          {/* Title + meta */}
-          <div className="flex-1 min-w-0">
-            <div className={`text-sm ${t.status === 'done' ? 'text-dim line-through' : 'text-paper'}`}>
-              {t.title}
-            </div>
-            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-              {projectName(t.project_id) && (
-                <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] rounded bg-purple-50 text-purple-700 border border-purple-200">
-                  {'\u{1F4C1}'} {projectName(t.project_id)}
-                </span>
-              )}
-              {context.map((b, i) => (
-                <span key={i} className={`inline-flex items-center px-1.5 py-0.5 text-[10px] rounded ${
-                  b.type === 'company' ? 'bg-slate-100 text-slate-600 border border-slate-200' : 'bg-ember/10 text-ember-deep border border-ember/20'
-                }`}>
-                  {b.type === 'company' ? '\u{1F3E2}' : ''} {b.label ? `${b.label}: ` : ''}{b.name}
-                </span>
-              ))}
-              {sub && !isExpanded && (
-                <span className="text-[10px] text-muted">
-                  {sub.done}/{sub.total} subtasks
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Subtask progress pill */}
-          {sub && (
-            <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${
-              sub.done === sub.total ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
-            }`}>
-              {sub.done}/{sub.total}
-            </span>
-          )}
-
-          <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border ${PRIORITY_STYLES[t.priority]}`}>{priorityLabel(t.priority)}</span>
-          <span className={`px-1.5 py-0.5 text-[9px] font-bold uppercase rounded ${STATUS_STYLES[t.status]}`}>{t.status.replace('_', ' ')}</span>
-          {t.due_date && (
-            <span className={`text-xs ${isOverdue(t) ? 'text-red-600 font-bold' : 'text-dim'}`}>
-              {new Date(t.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-            </span>
-          )}
-          {t.owner_id && (
-            <span className="w-6 h-6 rounded-full bg-ember text-white text-[10px] font-bold flex items-center justify-center shrink-0"
-              title={ownerName(t.owner_id)}>
-              {ownerName(t.owner_id)[0]?.toUpperCase() || '?'}
-            </span>
-          )}
-        </div>
-
-        {/* Subtasks (indented, collapsible) */}
-        {hasKids && isExpanded && (
-          <div className="bg-ink-soft/50">
-            {kids.map(kid => renderTask(kid, depth + 1))}
-          </div>
-        )}
-      </div>
-    );
-  };
+  const firstProject = groupBy === 'project' ? projects.find(p => p.id === groups[0]?.key) : null;
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-6 py-4 border-b border-bdr flex items-center justify-between">
-        <div>
-          <div className="text-lg font-bold text-paper">Tasks</div>
-          <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">
-            {topLevelTasks.filter(t => t.status !== 'done').length} open / {topLevelTasks.filter(t => t.status === 'done').length} done
-            {allTasks.length !== topLevelTasks.length && ` / ${allTasks.length - topLevelTasks.length} subtasks`}
-          </div>
+    <div className="h-full flex flex-col" style={{ background: 'var(--scene)' }}>
+      {/* Header */}
+      <div className="px-6 pt-5 flex items-start gap-4">
+        <div className="flex-1 min-w-0">
+          <PageTitle className="mb-1">Tasks</PageTitle>
+          <MetaLabel>{counts.open} open · {counts.overdue} overdue · {counts.blocked} blocked · {counts.done} done</MetaLabel>
         </div>
-        {canWrite && (
-          <button onClick={() => setShowCreate(true)}
-            className="px-3 py-1.5 bg-ember text-white text-sm font-semibold rounded hover:bg-ember-deep transition">
-            + Add task
-          </button>
-        )}
+        <div className="flex gap-2 items-center shrink-0">
+          <GhostBtn onClick={() => onNavigate?.('project_templates')}>Import from template</GhostBtn>
+          {canWrite && <PrimaryBtn onClick={() => { setAdding(true); setTimeout(() => addRef.current?.focus(), 30); }}>New task</PrimaryBtn>}
+        </div>
       </div>
 
-      <div className="px-6 py-3 border-b border-bdr flex items-center gap-2 flex-wrap">
-        <div className="flex items-center gap-1 mr-1">
-          <span className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim">Group</span>
-          {[['due', 'Due'], ['project', 'Project'], ['assignee', 'Assignee'], ['priority', 'Priority']].map(([k, lbl]) => (
-            <button key={k} onClick={() => setGroupBy(k)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${groupBy === k ? 'bg-ember text-white' : 'text-muted hover:text-paper'}`}>
-              {lbl}
-            </button>
-          ))}
+      {/* Toolbar */}
+      <div className="px-6 pt-4 flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-[10px] border w-[230px]" style={{ background: 'var(--panel-bg)', borderColor: 'var(--bdr)' }}>
+          <input value={f.search} onChange={e => setF({ search: e.target.value })} placeholder="Search tasks…"
+            className="flex-1 min-w-0 bg-transparent text-[13px] text-paper placeholder-dim focus:outline-none" />
         </div>
-        <input value={filter.search} onChange={e => setFilter({ ...filter, search: e.target.value })}
-          placeholder="Search tasks..."
-          className="px-3 py-1.5 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember w-56" />
-        <select value={filter.status} onChange={e => setFilter({ ...filter, status: e.target.value })}
-          className="px-2 py-1.5 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember">
-          <option value="open">Open</option>
-          <option value="all">All</option>
-          <option value="todo">To do</option>
-          <option value="in_progress">In progress</option>
-          <option value="blocked">Blocked</option>
-          <option value="done">Done</option>
-        </select>
-        <select value={filter.assignee} onChange={e => setFilter({ ...filter, assignee: e.target.value })}
-          className="px-2 py-1.5 bg-card border border-bdr rounded text-sm text-paper focus:outline-none focus:border-ember">
-          <option value="all">Everyone</option>
-          <option value="me">My tasks</option>
-          <option value="unassigned">Unassigned</option>
-        </select>
+        <Segmented value="list" options={[['list', 'List'], ['board', 'Board'], ['calendar', 'Calendar']]}
+          onChange={(v) => { if (v === 'board') onNavigate?.('work_board'); if (v === 'calendar') onNavigate?.('work_calendar'); }} />
+        <span className="relative">
+          <LabelledPill label="Group:" value={GROUPS.find(g => g[0] === groupBy)?.[1] || 'Project'} onClick={() => setGroupMenu(v => !v)} />
+          {groupMenu && (
+            <div className="absolute left-0 top-full mt-1 z-40 min-w-[160px] menu-surface rounded-[10px] py-1">
+              {GROUPS.map(([k, l]) => <button key={k} onClick={() => { setGroupBy(k); setGroupMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${groupBy === k ? 'font-semibold' : ''}`}>{l}</button>)}
+            </div>
+          )}
+        </span>
+        <FilterPill on={f.status !== 'open'} tone="ink" onClick={() => setF({ status: f.status === 'open' ? 'all' : 'open' })}>{f.status === 'open' ? 'Open' : f.status === 'all' ? 'All' : f.status.replace('_', ' ')}</FilterPill>
+        <FilterPill on={f.assignee !== 'all'} tone="ink" onClick={() => setF({ assignee: f.assignee === 'all' ? 'me' : f.assignee === 'me' ? 'unassigned' : 'all' })}>{f.assignee === 'all' ? 'Everyone' : f.assignee === 'me' ? 'Mine' : 'Unassigned'}</FilterPill>
+        <FilterPill on={f.overdueOnly} onClick={() => setF({ overdueOnly: !f.overdueOnly })}>Overdue only</FilterPill>
+        {filtersActive && <button onClick={() => setF(DEFAULT_FILTERS)} className="text-[12px] text-dim hover:text-paper">Clear</button>}
+        <Mono className="ml-auto">Saved view: {GROUPS.find(g => g[0] === groupBy)?.[1]}{filtersActive ? ' · filtered' : ''}</Mono>
       </div>
 
-      {showCreate && (
-        <div className="px-6 py-3 border-b border-bdr max-h-[70vh] overflow-y-auto">
-          <form onSubmit={create} className="space-y-2">
-            <div className="flex gap-2">
-              <input className={input + ' flex-1'} value={title} onChange={e => setTitle(e.target.value)}
-                placeholder="Task title" autoFocus />
-              <select className="px-2 py-2 bg-card border border-bdr rounded text-sm text-paper" value={priority} onChange={e => setPriority(e.target.value)}>
-                <option value="P0">{PRIORITY_LABEL.P0}</option><option value="P1">{PRIORITY_LABEL.P1}</option>
-                <option value="P2">{PRIORITY_LABEL.P2}</option><option value="P3">{PRIORITY_LABEL.P3}</option>
-              </select>
+      {/* Dashed add row */}
+      {canWrite && (
+        <div className="px-6 pt-[14px]">
+          {adding ? (
+            <div className="flex items-center gap-2.5 px-[14px] py-[9px] rounded-[12px] border" style={{ background: 'var(--surface-solid)', borderColor: 'rgb(var(--c-primary) / .5)' }}>
+              <span className="text-[18px] leading-none text-dim">+</span>
+              <input ref={addRef} autoFocus value={addText} onChange={e => setAddText(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTask(); } if (e.key === 'Escape') { setAdding(false); setAddText(''); } }}
+                placeholder="Add a task — @person #project !priority fri"
+                className="flex-1 min-w-0 bg-transparent text-[14px] text-paper placeholder-dim focus:outline-none" />
+              <button onClick={addTask} disabled={!addText.trim()} className="text-[13px] font-semibold disabled:opacity-40" style={{ color: 'rgb(var(--c-primary-deep))' }}>Add</button>
+              <button onClick={() => { setAdding(false); setAddText(''); }} className="text-[13px] text-dim">Cancel</button>
             </div>
-            <textarea className={input + ' resize-none'} rows={2} value={newDescription} onChange={e => setNewDescription(e.target.value)}
-              placeholder="Description / details (optional)" />
-            <div className="flex gap-2">
-              <select className={input + ' w-40'} value={assignee} onChange={e => setAssignee(e.target.value)}>
-                <option value="">Unassigned</option>
-                {members.map(m => <option key={m.id} value={m.id}>{m.display_name || m.email}</option>)}
-              </select>
-              <input type="date" className={input + ' w-40'} value={dueDate} onChange={e => setDueDate(e.target.value)} />
-              <select className={input + ' w-48'} value={projectId} onChange={e => setProjectId(e.target.value)}>
-                <option value="">No project</option>
-                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <button type="submit" className="px-4 py-2 bg-ember text-white text-sm font-semibold rounded shrink-0">Create</button>
-              <button type="button" onClick={() => setShowCreate(false)}
-                className="px-3 py-2 text-sm text-muted border border-bdr rounded shrink-0">Cancel</button>
-            </div>
-          </form>
+          ) : (
+            <DashedAdd onClick={() => { setAdding(true); setTimeout(() => addRef.current?.focus(), 30); }}>
+              Add a task{firstProject ? ` to ${firstProject.name}` : ''} — <span className="font-mono text-[13px]">@peter mon !high</span>
+            </DashedAdd>
+          )}
         </div>
       )}
+      {err && <div className="px-6 pt-2 text-[12px]" style={{ color: 'rgb(var(--c-coral-deep))' }}>Could not save: {err} <button className="underline ml-1" onClick={() => setErr('')}>dismiss</button></div>}
 
-      <div className="flex-1 overflow-y-auto">
-        {loading && <div className="px-6 py-8 text-center text-dim text-sm">Loading...</div>}
-        {!loading && groupTasks(filtered, groupBy, { projects, members }).map(g => {
-          const hidden = collapsed[g.key];
-          return (
-            <div key={g.key}>
-              {/* The header carries progress so a project reads as a unit even
-                  inside a flat list — the whole point of screen 02. */}
-              <button onClick={() => setCollapsed(c => ({ ...c, [g.key]: !c[g.key] }))}
-                className="w-full px-6 py-2 flex items-center gap-2.5 bg-card/40 border-y border-bdr hover:bg-card/60 transition text-left">
-                <span className={`text-dim text-[10px] transition-transform ${hidden ? '' : 'rotate-90'}`}>&#9654;</span>
-                <span className="text-[11px] font-bold text-paper">{g.label}</span>
-                <span className="text-[10px] text-dim font-mono">{g.progress.done}/{g.progress.total}</span>
-                {g.progress.blocked > 0 && (
-                  <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-100 text-red-700">{g.progress.blocked} blocked</span>
-                )}
-                <span className="ml-auto flex items-center gap-2">
-                  <span className="w-24 h-1.5 rounded-full bg-bdr overflow-hidden">
-                    <span className="block h-full bg-ember" style={{ width: `${g.progress.pct}%` }} />
-                  </span>
-                  <span className="text-[10px] text-dim font-mono tabular-nums w-9 text-right">{g.progress.pct}%</span>
-                </span>
-              </button>
-              {!hidden && (g.sub
-                ? g.sub.map(sub => (
-                    <div key={sub.key}>
-                      <div className="px-6 py-1.5 pl-11 flex items-center gap-2 bg-card/20">
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-dim">{sub.label}</span>
-                        <span className="text-[10px] text-dim font-mono">{sub.progress.done}/{sub.progress.total}</span>
+      {/* Groups */}
+      <div className="flex-1 overflow-y-auto px-6 pt-4 pb-6 flex flex-col gap-[14px]">
+        {loading && <SkeletonList rows={4} />}
+        {!loading && topLevel.length === 0 && (
+          <EmptyState title="Nothing to do yet"
+            body="Add the first task, or start from a template if this is a job you run often — onboarding, install, monthly close."
+            primary={canWrite ? 'Add a task' : null} secondary="Use a template"
+            onPrimary={() => { setAdding(true); setTimeout(() => addRef.current?.focus(), 30); }} onSecondary={() => onNavigate?.('project_templates')} />
+        )}
+        {!loading && topLevel.length > 0 && filtered.length === 0 && (
+          <EmptyState title="No tasks match" body={`${filterWords.charAt(0).toUpperCase() + filterWords.slice(1)}. ${counts.open} open task${counts.open === 1 ? ' is' : 's are'} hidden by these filters.`}
+            secondary="Clear filters" onSecondary={() => setF(DEFAULT_FILTERS)} />
+        )}
+        {!loading && groups.map(g => {
+          const proj = groupBy === 'project' && g.key !== '__none' ? projects.find(p => p.id === g.key) : null;
+          const customer = proj ? projectCustomer(proj) : null;
+          const hidden = !!collapsed[g.key];
+          const due = proj?.due_date ? dueLabel(proj.due_date, proj.status === 'completed' ? 'done' : 'todo') : null;
+          const rowsOf = (list) => list.map(t => renderRow(t));
+          const renderRow = (t) => {
+            const kids = childMap[t.id] || [];
+            const link = linkOf(t);
+            const due = dueLabel(t.due_date, t.status);
+            const isDone = t.status === 'done', isBlocked = t.status === 'blocked', isActive = t.status === 'in_progress';
+            const extras = [];
+            if (kids.length) extras.push(`${kids.filter(k => k.status === 'done').length}/${kids.length} subtasks`);
+            if (attachCounts[t.id]) extras.push(`${attachCounts[t.id]} attachment${attachCounts[t.id] === 1 ? '' : 's'}`);
+            if (tracked[t.id]) extras.push(`${fmtHM(tracked[t.id])} tracked`);
+            const second = isBlocked ? (t.blocked_reason ? `Blocked by ${t.blocked_reason}` : 'Blocked') : null;
+            const focused = focus === t.id;
+            return (
+              <div key={t.id}>
+                <div onMouseEnter={() => setFocus(t.id)}
+                  className="group relative flex items-center gap-3 pl-4 pr-4 py-[11px] border-b"
+                  style={{ borderColor: 'var(--ink-soft)', borderLeft: isBlocked ? '3px solid rgb(var(--c-coral))' : '3px solid transparent',
+                    background: isActive || focused ? 'rgb(var(--c-primary) / .05)' : 'transparent' }}>
+                  {/* Hover checkbox on the left edge — the only selection control. */}
+                  <input type="checkbox" checked={sel.has(t.id)} onChange={() => setSel(s => { const n = new Set(s); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return n; })}
+                    className={`absolute -left-[2px] top-1/2 -translate-y-1/2 accent-ember w-[14px] h-[14px] transition-opacity ${sel.has(t.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                    style={{ marginLeft: -12 }} />
+                  <Check done={isDone} active={isActive} onClick={() => canWrite && toggleDone(t)} disabled={!canWrite} />
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onSelect?.(t.id)}>
+                    <div className={`text-[15px] truncate ${isDone ? 'text-dim line-through' : 'text-paper font-medium'}`}>{t.title}</div>
+                    {(second || link || extras.length > 0) && (
+                      <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+                        {second && <span className="text-[11px] truncate" style={{ color: 'rgb(var(--c-coral))' }}>{second}</span>}
+                        {link && <Tag tone={link.tone}>{link.label}{link.name ? ` ${link.name}` : ''}</Tag>}
+                        {extras.length > 0 && <span className="text-[11px] text-dim truncate">{extras.join(' · ')}</span>}
                       </div>
-                      {sub.tasks.map(t => renderTask(t))}
+                    )}
+                  </div>
+                  <Mono tone={due.tone === 'coral' ? 'coral' : due.tone === 'primary' ? 'primary' : 'dim'} bold={due.tone === 'coral' || due.tone === 'primary'}>{due.text}</Mono>
+                  <PriorityPill priority={t.priority} />
+                  <span className="relative">
+                    <StatusPill status={t.status} onClick={canWrite ? () => setMenuFor(menuFor === t.id ? null : t.id) : undefined} />
+                    {menuFor === t.id && <StatusMenu current={t.status} onPick={(s) => setStatus(t, s)} onClose={() => setMenuFor(null)} />}
+                  </span>
+                  <Avatar id={t.owner_id} name={nameOf(t.owner_id)} />
+                </div>
+                {kids.map(k => (
+                  <div key={k.id} className="flex items-center gap-3 pl-[46px] pr-4 py-2 border-b" style={{ borderColor: 'var(--ink-soft)' }}>
+                    <Check size={16} done={k.status === 'done'} onClick={() => canWrite && toggleDone(k)} disabled={!canWrite} />
+                    <span className={`flex-1 text-[13px] cursor-pointer ${k.status === 'done' ? 'text-dim line-through' : 'text-paper-soft'}`} onClick={() => onSelect?.(k.id)}>{k.title}</span>
+                    <Mono size={10}>Subtask</Mono>
+                  </div>
+                ))}
+              </div>
+            );
+          };
+          const total = g.tasks.length, doneN = g.progress.done;
+          return (
+            <Card key={g.key}>
+              <div className="px-4 py-3 flex items-center gap-2.5 border-b" style={hair}>
+                <button onClick={() => setCollapsed(c => ({ ...c, [g.key]: !c[g.key] }))} className="text-[11px] text-dim">{hidden ? '▸' : '▾'}</button>
+                <span className="text-[15px] font-bold text-paper truncate">{g.label}</span>
+                {customer && <Tag>{customer}</Tag>}
+                <div className="w-[110px] h-[6px] rounded-full overflow-hidden shrink-0" style={{ background: 'var(--ink-line)' }}>
+                  <div className="h-full" style={{ width: `${g.progress.pct}%`, background: 'rgb(var(--c-primary))' }} />
+                </div>
+                <Mono tone="muted">{doneN}/{total} done</Mono>
+                {g.progress.blocked > 0 && <Mono tone="coral" bold>{g.progress.blocked} blocked</Mono>}
+                {due && proj?.status === 'active' && (() => {
+                  // Within a fortnight the go-live is the thing to read; further out it is a date.
+                  const days = Math.round((new Date(proj.due_date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
+                  const soon = days <= 14;
+                  return <Mono tone={soon ? 'coral' : 'dim'} bold={soon}>{soon ? `Go live ${fmtShort(proj.due_date)}` : `Due ${fmtShort(proj.due_date)}`}</Mono>;
+                })()}
+              </div>
+              {!hidden && (g.sub
+                ? g.sub.map(s => (
+                    <div key={s.key}>
+                      <div className="px-4 pt-[9px] pb-1"><SectionLabel>{s.key === '__nophase' ? 'Unphased' : `Phase — ${s.label}`}</SectionLabel></div>
+                      {rowsOf(s.tasks)}
                     </div>
                   ))
-                : g.tasks.map(t => renderTask(t)))}
-            </div>
+                : rowsOf(g.tasks))}
+            </Card>
           );
         })}
-        {!loading && filtered.length === 0 && (
-          <div className="px-6 py-8 text-center text-dim text-sm">
-            {filter.search || filter.status !== 'open' || filter.assignee !== 'all'
-              ? 'No tasks match your filters.' : 'No tasks yet.'}
-          </div>
-        )}
       </div>
+
+      {sel.size > 0 && canWrite && (
+        <div className="px-6 pb-4 sticky bottom-0">
+          <DarkBar count={sel.size} onClear={() => setSel(new Set())}
+            actions={[['Assign', bulkAssign], ['Due date', bulkDue], ['Move to phase', bulkPhase], ['Status', bulkStatus], ['Delete', bulkDelete, true]]} />
+        </div>
+      )}
+      {selected.length === 0 && null}
     </div>
   );
 }
