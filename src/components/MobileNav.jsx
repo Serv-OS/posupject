@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Home, MapPin, Mail, LayoutGrid, Search, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { CORE, COLLAPSIBLE } from './Sidebar.jsx';
@@ -51,12 +51,17 @@ export default function MobileNav({ profile, view, onGo }) {
   const results = useMemo(() => { const s = q.trim().toLowerCase(); if (!s) return null; return all.filter(d => d.label.toLowerCase().includes(s) || d.group.toLowerCase().includes(s)); }, [q, all]);
 
   // Hold to pin: a long press on any row.
+  // Hold to pin. The long press has to swallow the click that follows it, or the
+  // hub navigates away and closes before anyone sees the pin land.
+  const longRef = useRef(false);
   const press = (key) => {
     let t; return {
-      onTouchStart: () => { t = setTimeout(() => { togglePin(key); if (navigator.vibrate) navigator.vibrate(10); }, 550); },
-      onTouchEnd: () => clearTimeout(t), onTouchMove: () => clearTimeout(t),
+      onTouchStart: () => { longRef.current = false; t = setTimeout(() => { longRef.current = true; togglePin(key); if (navigator.vibrate) navigator.vibrate(10); }, 550); },
+      onTouchEnd: () => clearTimeout(t), onTouchMove: () => clearTimeout(t), onTouchCancel: () => clearTimeout(t),
+      onContextMenu: (e) => e.preventDefault(),
     };
   };
+  const guard = (fn) => (e) => { if (longRef.current) { longRef.current = false; e.preventDefault(); return; } fn(); };
 
   return (
     <>
@@ -73,12 +78,12 @@ export default function MobileNav({ profile, view, onGo }) {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(56px+env(safe-area-inset-bottom))] flex flex-col gap-[14px]">
+          <div className="flex-1 overflow-y-auto px-[14px] flex flex-col gap-[14px] [&>*]:shrink-0" style={{ paddingBottom: 'calc(var(--tabbar-h) + env(safe-area-inset-bottom))' }}>
             {results ? (
               <div className="rounded-[16px] border overflow-hidden" style={{ background: 'var(--card-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-card)' }}>
                 {results.length === 0 && <div className="px-[15px] py-6 text-center text-[14px] text-dim">Nothing matches “{q}”.</div>}
                 {results.map((d, i) => (
-                  <button key={d.key} onClick={() => go(d.key)} className={`w-full min-h-[48px] px-[15px] flex items-center gap-2.5 text-left ${i < results.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
+                  <button key={d.key} onClick={guard(() => go(d.key))} {...press(d.key)} className={`w-full min-h-[48px] px-[15px] flex items-center gap-2.5 text-left ${i < results.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
                     <d.Icon size={17} className="text-dim shrink-0" /><span className="text-[15px] text-paper flex-1">{d.label}</span><span className="text-[11px] text-dim">{d.group}</span>
                   </button>
                 ))}
@@ -88,7 +93,7 @@ export default function MobileNav({ profile, view, onGo }) {
                 <button onClick={() => setOpenSection(null)} className="text-[13px] text-dim mb-2">&larr; All sections</button>
                 <div className="rounded-[16px] border overflow-hidden" style={{ background: 'var(--card-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-card)' }}>
                   {sections.find(s => s.id === openSection)?.items.map(([key, label, Icon], i, arr) => (
-                    <button key={key} onClick={() => go(key)} {...press(key)} className={`w-full min-h-[48px] px-[15px] flex items-center gap-2.5 text-left ${i < arr.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
+                    <button key={key} onClick={guard(() => go(key))} {...press(key)} className={`w-full min-h-[48px] px-[15px] flex items-center gap-2.5 text-left ${i < arr.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
                       <Icon size={17} className="text-dim shrink-0" /><span className="text-[15px] text-paper flex-1">{label}</span>
                       {pinned.includes(key) && <span className="text-[11px]" style={{ color: 'rgb(var(--c-primary-deep))' }}>pinned</span>}
                     </button>
@@ -98,10 +103,10 @@ export default function MobileNav({ profile, view, onGo }) {
             ) : (
               <>
                 <div>
-                  <div className="font-mono text-[10px] font-bold tracking-[.18em] uppercase text-dim px-1.5 pb-2">Pinned — hold any item to pin</div>
+                  <div className="font-mono text-[10px] font-bold tracking-[.18em] uppercase text-dim px-1.5 pb-2">Pinned — hold any row to pin it here</div>
                   <div className="grid gap-[9px]" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
                     {pinned.map(k => byKey[k]).filter(Boolean).map(d => (
-                      <button key={d.key} onClick={() => go(d.key)} {...press(d.key)} className="rounded-[14px] border px-2.5 py-[14px] flex flex-col items-center justify-center gap-[7px] active:opacity-80"
+                      <button key={d.key} onClick={guard(() => go(d.key))} {...press(d.key)} className="rounded-[14px] border px-2.5 py-[14px] flex flex-col items-center justify-center gap-[7px] active:opacity-80"
                         style={{ background: 'var(--card-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-card)' }}>
                         <span className="w-5 h-5 rounded-[6px] flex items-center justify-center" style={{ background: 'rgb(var(--c-primary) / .35)' }}><d.Icon size={13} /></span>
                         <span className="text-[12px] font-semibold text-paper text-center leading-tight">{d.label}</span>
@@ -114,7 +119,7 @@ export default function MobileNav({ profile, view, onGo }) {
                     <div className="font-mono text-[10px] font-bold tracking-[.18em] uppercase text-dim px-1.5 pb-2">Recent</div>
                     <div className="rounded-[16px] border overflow-hidden" style={{ background: 'var(--card-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-card)' }}>
                       {recents.map(k => byKey[k]).filter(Boolean).map((d, i, arr) => (
-                        <button key={d.key} onClick={() => go(d.key)} className={`w-full px-[15px] py-[13px] flex items-center gap-2.5 text-left text-[15px] text-paper ${i < arr.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
+                        <button key={d.key} onClick={guard(() => go(d.key))} {...press(d.key)} className={`w-full px-[15px] py-[13px] flex items-center gap-2.5 text-left text-[15px] text-paper ${i < arr.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
                           {d.label}<span className="text-[11px] text-dim">{d.group}</span>
                         </button>
                       ))}

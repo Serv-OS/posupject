@@ -6,7 +6,7 @@ import { priorityLabel } from '../../lib/priority';
 import QuickAddRow from './QuickAddRow.jsx';
 import {
   Avatar, TypeChip, StatusPill, MetaLabel, Mono, PageTitle, LensPill, Card, SkeletonList, EmptyState, PrimaryBtn, GhostBtn, SolidChipBtn,
-  MobileDock, DockField, useSwipeRow, StatusMenu, hair, dueLabel, fmtRel,
+  MobileDock, DockField, useSwipeRow, StatusMenu, MobileSheet, SheetRow, STATUS_LABEL, STATUS_ORDER, hair, dueLabel, fmtRel,
 } from './ui.jsx';
 import { getRunning, fmtClock } from '../../lib/timer';
 
@@ -40,6 +40,8 @@ export default function TodayPanel({ profile, onNavigate }) {
     return () => { window.removeEventListener('timer-changed', refresh); clearInterval(t); };
   }, [profile.id]);
   const [menuFor, setMenuFor] = useState(null);
+  // Swipe-left on a phone opens a sheet: a dropdown inside the row is clipped by it.
+  const [statusFor, setStatusFor] = useState(null);
 
   const load = useCallback(async () => {
     const [w, m, p] = await Promise.all([
@@ -173,7 +175,8 @@ export default function TodayPanel({ profile, onNavigate }) {
                 <Card>
                   {g.tasks.map((w, i) => (
                     <Row key={w.id} w={w} last={i === g.tasks.length - 1} late={g.key === 'overdue'} go={go} approve={approve} nameOf={nameOf} isApprover={isApprover}
-                      trailing={trailing} menuFor={menuFor} setMenuFor={setMenuFor} onStatus={(s) => setTaskStatus(w, s)} onComplete={() => setTaskStatus(w, 'done')} />
+                      trailing={trailing} menuFor={menuFor} setMenuFor={setMenuFor} onStatus={(s) => setTaskStatus(w, s)} onComplete={() => setTaskStatus(w, 'done')}
+                      openStatus={() => setStatusFor(w)} />
                   ))}
                 </Card>
               </div>
@@ -215,6 +218,13 @@ export default function TodayPanel({ profile, onNavigate }) {
           <div className="lg:hidden text-[12px] text-dim px-1.5 -mt-2">Swipe right to complete · swipe left for status</div>
         </div>
       </div>
+      {statusFor && (
+        <MobileSheet title={statusFor.title} sub="Set status" onClose={() => setStatusFor(null)}>
+          {STATUS_ORDER.map(st => (
+            <SheetRow key={st} active={statusFor.status === st} onClick={() => { setTaskStatus(statusFor, st); setStatusFor(null); }}>{STATUS_LABEL[st]}</SheetRow>
+          ))}
+        </MobileSheet>
+      )}
       <MobileDock>
         <DockField onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))}>Add task, note or photo</DockField>
       </MobileDock>
@@ -224,8 +234,8 @@ export default function TodayPanel({ profile, onNavigate }) {
 
 // One row, swipeable on a phone: right completes, left opens status. On
 // desktop the checkbox and the pill do those jobs, so mouse drags are ignored.
-function Row({ w, last, late, go, approve, nameOf, isApprover, trailing, menuFor, setMenuFor, onStatus, onComplete }) {
-  const { dx, handlers } = useSwipeRow(() => w.type === 'task' && onComplete(), () => w.type === 'task' && setMenuFor(w.id));
+function Row({ w, last, late, go, approve, nameOf, isApprover, trailing, menuFor, setMenuFor, onStatus, onComplete, openStatus }) {
+  const { dx, handlers } = useSwipeRow(() => w.type === 'task' && onComplete(), () => w.type === 'task' && openStatus());
   const revealRight = dx > 24, revealLeft = dx < -24;
   return (
     <div className="relative overflow-hidden" style={{ borderBottom: last ? 'none' : '1px solid var(--hair)' }}>
@@ -257,7 +267,6 @@ function Row({ w, last, late, go, approve, nameOf, isApprover, trailing, menuFor
             ? <span className="inline-flex mt-2 sm:mt-0"><SolidChipBtn onClick={() => go(w)}>Triage</SolidChipBtn></span>
             : <span className="relative hidden sm:inline-flex"><StatusPill status={w.status} caret={false} onClick={w.type === 'task' ? () => setMenuFor(menuFor === w.id ? null : w.id) : undefined} />
                 {menuFor === w.id && <StatusMenu current={w.status} onPick={onStatus} onClose={() => setMenuFor(null)} />}</span>}
-        {w.type === 'task' && menuFor === w.id && <span className="sm:hidden relative block"><StatusMenu current={w.status} onPick={onStatus} onClose={() => setMenuFor(null)} align="right" /></span>}
         <span className="hidden sm:inline-flex"><Avatar id={w.owner_id} name={nameOf(w.owner_id)} /></span>
       </div>
     </div>

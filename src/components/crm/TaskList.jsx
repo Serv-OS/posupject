@@ -6,7 +6,7 @@ import { parseQuickAdd, quickAddRow } from '../../lib/quickAdd';
 import {
   Avatar, Check, StatusPill, PriorityPill, Tag, LinkChip, SectionLabel, MetaLabel, Mono, PageTitle,
   PrimaryBtn, GhostBtn, Segmented, LabelledPill, FilterPill, Card, DashedAdd, DarkBar, SkeletonList, EmptyState,
-  StatusMenu, hair, dueLabel, fmtShort, fmtHM,
+  StatusMenu, useLongPress, hair, dueLabel, fmtShort, fmtHM,
 } from './ui.jsx';
 
 // Screen 02 — the grouped list.
@@ -37,6 +37,8 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
   const [groupBy, setGroupBy] = useStickyState('tasks.groupBy', 'project');
   const [collapsed, setCollapsed] = useState({});
   const [sel, setSel] = useState(() => new Set());
+  // Hold a row to start selecting; on a phone there is no hover to reveal the box.
+  const holdSelect = useLongPress((id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }));
   const [focus, setFocus] = useState(null);
   const [menuFor, setMenuFor] = useState(null);
   const [groupMenu, setGroupMenu] = useState(false);
@@ -269,13 +271,13 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
             const focused = focus === t.id;
             return (
               <div key={t.id}>
-                <div onMouseEnter={() => setFocus(t.id)}
+                <div onMouseEnter={() => setFocus(t.id)} {...holdSelect(t.id)}
                   className="group relative flex items-center gap-3 pl-4 pr-4 py-[11px] border-b"
                   style={{ borderColor: 'var(--ink-soft)', borderLeft: isBlocked ? '3px solid rgb(var(--c-coral))' : '3px solid transparent',
                     background: isActive || focused ? 'rgb(var(--c-primary) / .05)' : 'transparent' }}>
                   {/* Hover checkbox on the left edge — the only selection control. */}
                   <input type="checkbox" checked={sel.has(t.id)} onChange={() => setSel(s => { const n = new Set(s); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return n; })}
-                    className={`absolute -left-[2px] top-1/2 -translate-y-1/2 accent-ember w-[14px] h-[14px] transition-opacity ${sel.has(t.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                    className={`absolute -left-[2px] top-1/2 -translate-y-1/2 accent-ember w-[14px] h-[14px] transition-opacity ${sel.has(t.id) || sel.size > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                     style={{ marginLeft: -12 }} />
                   <Check done={isDone} active={isActive} onClick={() => canWrite && toggleDone(t)} disabled={!canWrite} />
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onSelect?.(t.id)}>
@@ -339,7 +341,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
       </div>
 
       {sel.size > 0 && canWrite && (
-        <div className="px-6 pb-4 sticky bottom-0">
+        <div className="px-[14px] lg:px-6 pb-4 sticky z-30" style={{ bottom: 'calc(var(--tabbar-h) + env(safe-area-inset-bottom))' }}>
           <DarkBar count={sel.size} onClear={() => setSel(new Set())}
             actions={[['Assign', bulkAssign], ['Due date', bulkDue], ['Move to phase', bulkPhase], ['Status', bulkStatus], ['Delete', bulkDelete, true]]} />
         </div>

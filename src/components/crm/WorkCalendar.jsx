@@ -100,13 +100,13 @@ export default function WorkCalendar({ profile, onNavigate }) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden px-6 pb-6">
+      <div className="flex-1 lg:overflow-hidden px-[14px] lg:px-6 pb-6">
         {loading ? <SkeletonList rows={4} /> : (
-          <Card className="h-full flex flex-col">
+          <Card className="lg:h-full flex flex-col">
             <div className="grid border-b" style={{ gridTemplateColumns: `repeat(${dayNames.length}, minmax(0,1fr))`, borderColor: 'var(--ink-line)' }}>
               {dayNames.map((d, i) => <div key={d} className={`px-3 py-[9px] font-mono text-[9px] font-bold tracking-[.18em] uppercase text-dim ${i ? 'border-l' : ''}`} style={hair}>{d}</div>)}
             </div>
-            <div className="flex-1 overflow-y-auto grid" style={{ gridTemplateColumns: `repeat(${dayNames.length}, minmax(0,1fr))`, gridAutoRows: mode === 'week' ? '1fr' : 'minmax(110px, 1fr)' }}>
+            <div className="flex-1 lg:overflow-y-auto grid" style={{ gridTemplateColumns: `repeat(${dayNames.length}, minmax(0,1fr))`, gridAutoRows: mode === 'week' ? '1fr' : 'minmax(110px, 1fr)' }}>
               {grid.flat().map((cell, i) => {
                 const items = byDay[cell.key] || [];
                 const isToday = cell.key === today;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useStickyState } from '../../lib/stickyState';
+import { useIsMobile } from '../../lib/useMedia';
 import {
   Avatar, Tag, MetaLabel, Mono, PageTitle, PrimaryBtn, GhostBtn, Segmented, LabelledPill, FilterPill,
   Card, SkeletonList, EmptyState, hair, fmtShort, dueLabel,
@@ -29,6 +30,9 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
   const [onboardings, setOnboardings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useStickyState('projects.view', 'table');
+  // A 7-column table cannot be read on a phone: cards are the phone view (spec 14).
+  const isMobile = useIsMobile();
+  const effView = isMobile ? 'cards' : view;
   const [groupBy, setGroupBy] = useStickyState('projects.groupBy', 'template');
   const [search, setSearch] = useState('');
   const [behindOnly, setBehindOnly] = useStickyState('projects.behind', false);
@@ -176,7 +180,7 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
           )}
         </span>
         <FilterPill on={status !== 'active'} tone="ink" onClick={() => setStatus(status === 'active' ? 'all' : status === 'all' ? 'completed' : 'active')}>{status === 'active' ? 'Active' : status === 'all' ? 'All' : status}</FilterPill>
-        <span className="ml-auto"><Segmented value={view} options={[['table', 'Table'], ['cards', 'Cards']]} onChange={setView} /></span>
+        <span className="ml-auto hidden lg:inline-flex"><Segmented value={view} options={[['table', 'Table'], ['cards', 'Cards']]} onChange={setView} /></span>
       </div>
 
       {showCreate && (
@@ -212,7 +216,7 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
             secondary="Clear filters" onSecondary={() => { setSearch(''); setBehindOnly(false); setOwner(''); setStatus('active'); }} />
         )}
 
-        {!loading && filtered.length > 0 && view === 'table' && (
+        {!loading && filtered.length > 0 && effView === 'table' && (
           <Card>
             {groups.map(g => {
               const hidden = !!collapsed[g.key];
@@ -267,7 +271,7 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
           </Card>
         )}
 
-        {!loading && filtered.length > 0 && view === 'cards' && (
+        {!loading && filtered.length > 0 && effView === 'cards' && (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map(p => {
               const s = stats[p.id]; const cust = customerOf(p);

@@ -127,6 +127,9 @@ body.dark {
 
 html, body, #root { height: 100%; }
 
+/* The phone tab bar's real height. Everything that has to clear it reads this. */
+:root { --tabbar-h: 64px; }
+
 /* Phones: --app-vh is the visual viewport height, published by main.jsx. It
    shrinks when the keyboard opens, so bottom-docked UI (the ticket reply box)
    stays above it instead of being covered. Falls back to 100% without JS. */
@@ -364,12 +367,12 @@ body {
     -webkit-overflow-scrolling: touch;
     /* Clear the fixed tab bar and the home indicator, or the last row of every
        list sits underneath the nav and cannot be tapped. */
-    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   }
   /* The ticket screen keeps its own docked layout, so it clears the bar itself
      rather than inheriting padding that would push its reply box off-screen. */
   main:has([data-ticket-screen]) {
-    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   }
   main:not(:has([data-ticket-screen])) .h-full {
     height: auto !important;

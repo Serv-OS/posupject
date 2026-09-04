@@ -370,7 +370,7 @@ export function MobileDock({ children }) {
     <>
       <div className="lg:hidden h-[76px] shrink-0" aria-hidden />
       <div className="lg:hidden fixed inset-x-0 z-30 px-[14px] pt-[10px] pb-[8px]"
-        style={{ bottom: 'calc(56px + env(safe-area-inset-bottom))', background: 'linear-gradient(180deg, transparent, var(--scene) 30%)' }}>
+        style={{ bottom: 'calc(var(--tabbar-h) + env(safe-area-inset-bottom))', background: 'linear-gradient(180deg, transparent, var(--scene) 30%)' }}>
         {children}
       </div>
     </>
@@ -452,10 +452,13 @@ import { createPortal as _createPortal } from 'react-dom';
 
 /** Bottom sheet: dims the page, slides a card up from the tab bar. */
 export function MobileSheet({ title, sub, onClose, children, footer, tall }) {
+  // --app-vh is the VISUAL viewport, so the sheet docks above the on-screen keyboard
+  // instead of being laid out behind it against the layout viewport.
   return _createPortal(
-    <div className="fixed inset-0 z-[70] flex flex-col justify-end bg-black/40" onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} className={`rounded-t-[20px] border-t flex flex-col ${tall ? 'h-[88vh]' : 'max-h-[80vh]'}`}
-        style={{ background: 'var(--raised-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-pop)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    <div className="fixed inset-x-0 top-0 z-[70] flex flex-col justify-end bg-black/40" onClick={onClose} style={{ height: 'var(--app-vh, 100%)' }}>
+      <div onClick={e => e.stopPropagation()} className="rounded-t-[20px] border-t flex flex-col"
+        style={{ background: 'var(--raised-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-pop)', paddingBottom: 'env(safe-area-inset-bottom)',
+          [tall ? 'height' : 'maxHeight']: `calc(var(--app-vh, 100vh) * ${tall ? 0.88 : 0.8})` }}>
         <div className="mx-auto mt-2 w-9 h-1 rounded-full" style={{ background: 'var(--ink-line)' }} />
         {(title || sub) && (
           <div className="px-[18px] pt-3 pb-2.5 border-b" style={{ borderColor: 'var(--hair)' }}>
@@ -564,7 +567,9 @@ export function MobileTable({ storageKey, rows, columns, card, onRow, rowKey = (
                 </div>
                 <div className="flex items-center gap-2 mt-1 min-w-0">
                   {c.chip && <Pill tone={c.chip.tone}>{c.chip.text}</Pill>}
-                  <span className="text-[12px] text-muted truncate">{c.meta || shown.map(col => cell(col, r)).filter(v => v != null && v !== '—').map((v, j) => <span key={j}>{j ? ' · ' : ''}{v}</span>)}</span>
+                  {/* The chosen columns ARE the card's second line — that is what makes
+                      "Columns" mean something in Cards mode; meta is the fallback. */}
+                  <span className="text-[12px] text-muted truncate">{shown.length ? shown.map(col => cell(col, r)).filter(v => v != null && v !== '—').map((v, j) => <span key={j}>{j ? ' · ' : ''}{v}</span>) : c.meta}</span>
                 </div>
               </div>
             );
@@ -626,7 +631,7 @@ export function EditSheet({ title, sections, values, onChange, onCancel, onSave,
   const set = (f, raw) => onChange(f.key, f.parse ? f.parse(raw) : (raw === '' ? null : raw));
   const inputCls = 'w-full bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none';
   return _createPortal(
-    <div className="fixed inset-0 z-[70] flex flex-col" style={{ background: 'var(--scene-bg)' }}>
+    <div className="fixed inset-x-0 top-0 z-[70] flex flex-col" style={{ background: 'var(--scene-bg)', height: 'var(--app-vh, 100%)' }}>
       <div className="px-[18px] pt-3 pb-3 border-b flex items-center gap-3" style={{ borderColor: 'var(--hair)', background: 'var(--panel-bg)' }}>
         <button type="button" onClick={onCancel} className="text-[14px] text-muted">Cancel</button>
         <div className="flex-1 min-w-0 text-center">
