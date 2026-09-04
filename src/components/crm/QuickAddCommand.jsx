@@ -90,7 +90,7 @@ export default function QuickAddCommand({ profile, onNavigate, context }) {
     setDone({ id: data.id, title: data.title });
   };
   const newProject = async () => {
-    const name = prompt('Project name');
+    const name = prompt('New internal project — name it (link a customer from the project’s Edit)');
     if (!name?.trim()) return;
     const { data, error } = await supabase.from('crm_projects').insert({ name: name.trim(), owner_id: profile.id }).select('id').single();
     if (error) { alert(error.message); return; }

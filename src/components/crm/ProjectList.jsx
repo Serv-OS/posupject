@@ -21,6 +21,7 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [tickets, setTickets] = useState([]);
   const [members, setMembers] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -37,13 +38,16 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
   const [collapsed, setCollapsed] = useState({});
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
+  const [err, setErr] = useState('');
+  // What the project is for. Internal means no customer record behind it.
+  const [subj, setSubj] = useState({ type: 'internal', id: '' });
   const [groupMenu, setGroupMenu] = useState(false);
   const [ownerMenu, setOwnerMenu] = useState(false);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   useEffect(() => { load(); }, []);
   const load = async () => {
-    const [p, t, tp, m, c, l, d, ob] = await Promise.all([
+    const [p, t, tp, m, c, l, d, ob, tk] = await Promise.all([
       supabase.from('crm_projects').select('*').order('created_at', { ascending: false }),
       supabase.from('tasks').select('id, project_id, status, phase, title, due_date, sort_order').is('parent_task_id', null),
       supabase.from('project_templates').select('id, name'),
@@ -52,9 +56,10 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
       supabase.from('onboardings').select('id, company_id, deal_id, location_id'),
+      supabase.from('tickets').select('id, ticket_number, subject, company_id, location_id'),
     ]);
     setProjects(p.data || []); setTasks(t.data || []); setTemplates(tp.data || []); setMembers(m.data || []);
-    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setOnboardings(ob.data || []);
+    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setOnboardings(ob.data || []); setTickets(tk.data || []);
     setLoading(false);
   };
 
@@ -62,14 +67,15 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
 
   // Customer is the identity of a templated project.
   const customerOf = (p) => {
-    if (!p.subject_type || !p.subject_id) return { name: null, company: null };
-    if (p.subject_type === 'company') { const c = companies.find(x => x.id === p.subject_id); return { name: c?.name, company: null }; }
-    if (p.subject_type === 'location') { const l = locations.find(x => x.id === p.subject_id); const c = companies.find(x => x.id === l?.company_id); return { name: l?.name, company: c?.name }; }
-    if (p.subject_type === 'deal') { const dl = deals.find(x => x.id === p.subject_id); const c = companies.find(x => x.id === dl?.company_id); return { name: dl?.name, company: c?.name }; }
+    if (!p.subject_type || !p.subject_id) return { name: null, company: null, key: '__internal' };
+    if (p.subject_type === 'ticket') { const tk = tickets.find(x => x.id === p.subject_id); const l = locations.find(x => x.id === tk?.location_id); const c = companies.find(x => x.id === (tk?.company_id || l?.company_id)); return { name: tk ? `Ticket #${tk.ticket_number} — ${tk.subject}` : 'Ticket', company: c?.name, key: c?.id || `ticket:${p.subject_id}` }; }
+    if (p.subject_type === 'company') { const c = companies.find(x => x.id === p.subject_id); return { name: c?.name, company: null, key: p.subject_id }; }
+    if (p.subject_type === 'location') { const l = locations.find(x => x.id === p.subject_id); const c = companies.find(x => x.id === l?.company_id); return { name: l?.name, company: c?.name, key: c?.id || `location:${p.subject_id}` }; }
+    if (p.subject_type === 'deal') { const dl = deals.find(x => x.id === p.subject_id); const c = companies.find(x => x.id === dl?.company_id); return { name: dl?.name, company: c?.name, key: c?.id || `deal:${p.subject_id}` }; }
     if (p.subject_type === 'onboarding') {
       const o = onboardings.find(x => x.id === p.subject_id); const l = locations.find(x => x.id === o?.location_id); const dl = deals.find(x => x.id === o?.deal_id);
       const c = companies.find(x => x.id === (o?.company_id || dl?.company_id || l?.company_id));
-      return { name: l?.name || dl?.name || c?.name, company: c?.name };
+      return { name: l?.name || dl?.name || c?.name, company: c?.name, key: c?.id || `onboarding:${p.subject_id}` };
     }
     return { name: null, company: null };
   };
@@ -104,13 +110,14 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
   const groups = useMemo(() => {
     const m = new Map();
     for (const p of filtered) {
-      const key = groupBy === 'template' ? (p.template_id || '__none') : groupBy === 'owner' ? (p.owner_id || '__none') : '__all';
+      const cust = customerOf(p);
+      const key = groupBy === 'template' ? (p.template_id || '__none') : groupBy === 'owner' ? (p.owner_id || '__none') : groupBy === 'customer' ? (cust.key || '__internal') : '__all';
       if (!m.has(key)) m.set(key, []);
       m.get(key).push(p);
     }
     return [...m.entries()].map(([key, list]) => {
       const tpl = groupBy === 'template' && key !== '__none' ? templates.find(t => t.id === key) : null;
-      const label = groupBy === 'template' ? (tpl?.name || (key === '__none' ? 'Internal' : 'Template')) : groupBy === 'owner' ? (nameOf(key) || 'Unassigned') : 'All projects';
+      const label = groupBy === 'template' ? (tpl?.name || (key === '__none' ? 'No template' : 'Template')) : groupBy === 'owner' ? (nameOf(key) || 'Unassigned') : groupBy === 'customer' ? (key === '__internal' ? 'Internal' : (cust.company || cust.name || 'Customer')) : 'All projects';
       const behind = list.filter(p => stats[p.id]?.behind).length;
       const dues = [...new Set(list.map(p => p.due_date).filter(Boolean))];
       const taskCount = tpl ? Math.round(list.reduce((s, p) => s + (stats[p.id]?.total || 0), 0) / Math.max(1, list.length)) : null;
@@ -123,10 +130,12 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
   const templatesInUse = new Set(projects.filter(p => p.status === 'active' && p.template_id).map(p => p.template_id)).size;
 
   const create = async (e) => {
-    e.preventDefault(); if (!name.trim()) return;
-    const { data, error } = await supabase.from('crm_projects').insert({ name: name.trim(), owner_id: profile.id }).select().single();
-    if (error) { alert(error.message); return; }
-    setName(''); setShowCreate(false);
+    e.preventDefault(); if (!name.trim() || (subj.type !== 'internal' && !subj.id)) return;
+    setErr('');
+    const row = { name: name.trim(), owner_id: profile.id, subject_type: subj.type !== 'internal' && subj.id ? subj.type : null, subject_id: subj.type !== 'internal' && subj.id ? subj.id : null };
+    const { data, error } = await supabase.from('crm_projects').insert(row).select().single();
+    if (error) { setErr(error.message); return; }
+    setName(''); setSubj({ type: 'internal', id: '' }); setShowCreate(false);
     if (data) onSelect(data.id); else load();
   };
 
@@ -148,10 +157,10 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search customer or project…" className="flex-1 min-w-0 bg-transparent text-[13px] text-paper placeholder-dim focus:outline-none" />
         </div>
         <span className="relative">
-          <LabelledPill label="Group:" value={groupBy === 'template' ? 'Template' : groupBy === 'owner' ? 'Owner' : 'None'} onClick={() => setGroupMenu(v => !v)} />
+          <LabelledPill label="Group:" value={groupBy === 'template' ? 'Template' : groupBy === 'owner' ? 'Owner' : groupBy === 'customer' ? 'Customer' : 'None'} onClick={() => setGroupMenu(v => !v)} />
           {groupMenu && (
             <div className="absolute left-0 top-full mt-1 z-40 min-w-[150px] menu-surface rounded-[10px] py-1" onMouseLeave={() => setGroupMenu(false)}>
-              {[['template', 'Template'], ['owner', 'Owner'], ['none', 'None']].map(([k, l]) => <button key={k} onClick={() => { setGroupBy(k); setGroupMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${groupBy === k ? 'font-semibold' : ''}`}>{l}</button>)}
+              {[['template', 'Template'], ['customer', 'Customer'], ['owner', 'Owner'], ['none', 'None']].map(([k, l]) => <button key={k} onClick={() => { setGroupBy(k); setGroupMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${groupBy === k ? 'font-semibold' : ''}`}>{l}</button>)}
             </div>
           )}
         </span>
@@ -170,10 +179,25 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
       </div>
 
       {showCreate && (
-        <form onSubmit={create} className="px-6 pt-3 flex gap-2">
-          <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Project name" className="flex-1 px-3 py-2 rounded-[10px] text-[14px] text-paper placeholder-dim focus:outline-none border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
-          <PrimaryBtn type="submit" disabled={!name.trim()}>Create</PrimaryBtn>
-          <GhostBtn onClick={() => setShowCreate(false)}>Cancel</GhostBtn>
+        <form onSubmit={create} className="px-6 pt-3 flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Project name" className="flex-1 px-3 py-2 rounded-[10px] text-[14px] text-paper placeholder-dim focus:outline-none border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+            <PrimaryBtn type="submit" disabled={!name.trim() || (subj.type !== 'internal' && !subj.id)}>Create</PrimaryBtn>
+            <GhostBtn onClick={() => setShowCreate(false)}>Cancel</GhostBtn>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Segmented value={subj.type} options={[['internal', 'Internal'], ['company', 'Company'], ['location', 'Site'], ['deal', 'Deal']]} onChange={(t) => setSubj({ type: t, id: '' })} />
+            {subj.type !== 'internal' && (
+              <select value={subj.id} onChange={e => setSubj(x => ({ ...x, id: e.target.value }))} className="px-3 py-2 rounded-[10px] text-[13px] text-paper border min-w-[260px]" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>
+                <option value="">Pick a {subj.type === 'location' ? 'site' : subj.type}…</option>
+                {(subj.type === 'company' ? companies : subj.type === 'location' ? locations : deals).map(r => (
+                  <option key={r.id} value={r.id}>{r.name}{subj.type !== 'company' && r.company_id ? ` — ${companies.find(c => c.id === r.company_id)?.name || ''}` : ''}</option>
+                ))}
+              </select>
+            )}
+            <Mono>{subj.type === 'internal' ? 'No customer behind it: ours to run' : 'The project takes its customer from this record'}</Mono>
+            {err && <span className="text-[12px]" style={{ color: 'rgb(var(--c-coral-deep))' }}>{err}</span>}
+          </div>
         </form>
       )}
 
@@ -215,7 +239,7 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
                             style={{ ...hair, ...colStyle, borderLeft: s.behind ? '3px solid rgb(var(--c-coral))' : '3px solid transparent' }}>
                             <div className="min-w-0">
                               <div className="text-[14px] font-semibold text-paper truncate">{cust.name || p.name}</div>
-                              <div className="text-[11px] text-dim truncate">{cust.company || (cust.name ? p.name : nameOf(p.owner_id) ? `Owner ${nameOf(p.owner_id)}` : '')}</div>
+                              <div className="text-[11px] text-dim truncate">{cust.company || (cust.name ? p.name : `Internal${nameOf(p.owner_id) ? ` · owner ${nameOf(p.owner_id)}` : ''}`)}</div>
                             </div>
                             <div className="flex items-center gap-[9px]">
                               <div className="flex-1 h-[7px] rounded-full overflow-hidden" style={{ background: 'var(--ink-soft)' }}>

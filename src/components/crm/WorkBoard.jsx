@@ -6,7 +6,7 @@ import { dueBucket } from '../../lib/taskGrouping';
 import { PRIORITY_LABEL } from '../../lib/priority';
 import { startOfWeek, addDays, dayKey } from '../../lib/planning';
 import {
-  Avatar, Tag, Pill, MetaLabel, Mono, PageTitle, Segmented, LabelledPill, Card, SkeletonList, EmptyState, hair, dueLabel, fmtHM,
+  Avatar, Tag, Pill, MetaLabel, Mono, PageTitle, Segmented, LabelledPill, LensPill, Card, SkeletonList, EmptyState, hair, dueLabel, fmtHM,
 } from './ui.jsx';
 import { MobileSheet, SheetRow, useLongPress } from './ui.jsx';
 
@@ -44,6 +44,12 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
   const [lanesMenu, setLanesMenu] = useState(false);
   const [windowMenu, setWindowMenu] = useState(false);
   const [drag, setDrag] = useState(null);
+  // Scope (owner's call, 3 Sep): the global board must stay usable at a thousand projects.
+  // Mine/Team lens, an optional single project, and at most LANE_CAP lanes otherwise.
+  const [lens, setLens] = useStickyState('board.lens', 'mine');
+  const [rawProjectFilter, setProjectFilter] = useStickyState('board.project', '');
+  const [projectMenu, setProjectMenu] = useState(false);
+  const [projectQ, setProjectQ] = useState('');
   const [mCol, setMCol] = useState('in_progress');
   const [moving, setMoving] = useState(null);
   const [moveReason, setMoveReason] = useState('');
@@ -56,7 +62,8 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
   const load = useCallback(async () => {
     const weekAgo = addDays(new Date(), -7).toISOString();
     const [t, m, p, c, l, d, te] = await Promise.all([
-      supabase.from('tasks').select('*').is('parent_task_id', null).order('sort_order'),
+      // Open work, plus what was finished this week. Old done tasks never load.
+      supabase.from('tasks').select('*').is('parent_task_id', null).or(`status.neq.done,completed_at.gte.${weekAgo}`).order('sort_order'),
       supabase.from('profiles').select('id, email, display_name, role'),
       supabase.from('crm_projects').select('*').eq('status', 'active').order('name'),
       supabase.from('companies').select('id, name'),
@@ -76,6 +83,7 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
 
   const nameOf = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email.split('@')[0]) : ''; };
   const customerOf = (p) => {
+    if (p.subject_type === 'ticket') return 'Support ticket';
     if (!p?.subject_type || !p?.subject_id) return null;
     if (p.subject_type === 'company') return companies.find(x => x.id === p.subject_id)?.name;
     if (p.subject_type === 'location') { const l = locations.find(x => x.id === p.subject_id); return companies.find(x => x.id === l?.company_id)?.name || l?.name; }
@@ -120,24 +128,49 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
 
   // ── Board data ─────────────────────────────────────────────────────────────
   const weekAgo = addDays(new Date(), -7).getTime();
+  // A remembered project that is no longer active (completed, cancelled, deleted) falls back to All.
+  const projectFilter = rawProjectFilter && projects.some(p => p.id === rawProjectFilter) ? rawProjectFilter : '';
+  const scoped = useMemo(() => tasks.filter(t =>
+    (!projectFilter || t.project_id === projectFilter) &&
+    (lens !== 'mine' || t.owner_id === profile.id || !t.owner_id)
+  ), [tasks, projectFilter, lens, profile.id]);
   const counts = useMemo(() => ({
-    todo: tasks.filter(t => t.status === 'todo').length,
-    in_progress: tasks.filter(t => t.status === 'in_progress').length,
-    blocked: tasks.filter(t => t.status === 'blocked').length,
-    doneWeek: tasks.filter(t => t.status === 'done' && t.completed_at && new Date(t.completed_at).getTime() >= weekAgo).length,
-  }), [tasks, weekAgo]);
+    todo: scoped.filter(t => t.status === 'todo').length,
+    in_progress: scoped.filter(t => t.status === 'in_progress').length,
+    blocked: scoped.filter(t => t.status === 'blocked').length,
+    doneWeek: scoped.filter(t => t.status === 'done' && t.completed_at && new Date(t.completed_at).getTime() >= weekAgo).length,
+  }), [scoped, weekAgo]);
+  const LANE_CAP = 20;
   const swimlanes = useMemo(() => {
-    if (lanes === 'none') return [{ key: 'all', title: null, tasks }];
+    if (lanes === 'none') return [{ key: 'all', title: null, tasks: scoped }];
     if (lanes === 'assignee') {
-      const ids = [...new Set(tasks.map(t => t.owner_id))];
-      return ids.map(id => ({ key: id || 'none', title: id ? nameOf(id) : 'Unassigned', tasks: tasks.filter(t => t.owner_id === id) }))
+      const ids = [...new Set(scoped.map(t => t.owner_id))];
+      return ids.map(id => ({ key: id || 'none', title: id ? nameOf(id) : 'Unassigned', tasks: scoped.filter(t => t.owner_id === id) }))
         .sort((a, b) => (a.key === 'none') - (b.key === 'none') || a.title.localeCompare(b.title));
     }
-    const rows = projects.map(p => ({ key: p.id, title: p.name, customer: customerOf(p), due: p.due_date, tasks: tasks.filter(t => t.project_id === p.id) })).filter(r => r.tasks.length);
-    const loose = tasks.filter(t => !projects.some(p => p.id === t.project_id));
-    if (loose.length) rows.push({ key: 'none', title: 'No project', tasks: loose });
-    return rows;
-  }, [lanes, tasks, projects, members, companies, locations, deals]); // eslint-disable-line react-hooks/exhaustive-deps
+    const all = projects.filter(p => !projectFilter || p.id === projectFilter)
+      .map(p => ({ key: p.id, title: p.name, customer: customerOf(p), due: p.due_date, updated: p.updated_at, tasks: scoped.filter(t => t.project_id === p.id) }));
+    // A picked project always shows, even with nothing in it yet: that is where its first task starts.
+    const rows = all.filter(r => r.tasks.length || r.key === projectFilter)
+      .sort((x, y) => (x.due || '9999').localeCompare(y.due || '9999') || String(y.updated).localeCompare(String(x.updated)));
+    // Empty projects (mine, or everyone's under Team) fill the remaining room, newest first: a project
+    // you just made is on the board with its "+ Add task" cell before it has a single task.
+    const empty = projectFilter ? [] : all.filter(r => !r.tasks.length && (lens !== 'mine' || projects.find(p => p.id === r.key)?.owner_id === profile.id))
+      .sort((x, y) => String(y.updated).localeCompare(String(x.updated)));
+    const shown = projectFilter ? rows : rows.slice(0, LANE_CAP).concat(empty.slice(0, Math.max(0, LANE_CAP - Math.min(rows.length, LANE_CAP))));
+    const loose = scoped.filter(t => !projects.some(p => p.id === t.project_id));
+    if (loose.length && !projectFilter) shown.push({ key: 'none', title: 'No project', tasks: loose });
+    return shown;
+  }, [lanes, scoped, projects, members, companies, locations, deals, projectFilter, lens, profile.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const laneNote = useMemo(() => {
+    if (lanes !== 'project' || projectFilter) return null;
+    const active = projects.length;
+    const withWork = projects.filter(p => scoped.some(t => t.project_id === p.id)).length;
+    const shown = swimlanes.filter(l => l.key !== 'none').length;
+    const hidden = Math.max(0, active - shown);
+    if (!hidden) return null;
+    return `${hidden} more project${hidden === 1 ? '' : 's'} not shown${withWork > LANE_CAP ? ' (some with work)' : ''} — pick one under Project, or search Projects`;
+  }, [lanes, projectFilter, projects, scoped, swimlanes]);
 
   // ── People data ────────────────────────────────────────────────────────────
   const peopleRows = useMemo(() => {
@@ -172,6 +205,14 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
             </div>
             <button onClick={() => setTab('people')} className="text-[13px] text-muted pt-2">People →</button>
           </div>
+          <div className="mt-2 flex items-center gap-1.5">
+            <LensPill on={lens === 'mine'} onClick={() => setLens('mine')}>Mine</LensPill>
+            <LensPill on={lens === 'team'} onClick={() => setLens('team')}>Team</LensPill>
+            <select value={projectFilter} onChange={e => setProjectFilter(e.target.value)} className="flex-1 min-w-0 px-2.5 py-[7px] rounded-full border text-[12px] text-paper" style={{ background: 'var(--panel-bg)', borderColor: 'var(--bdr)' }}>
+              <option value="">All projects</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
           <div className="mt-2.5 -mx-[4px] flex gap-1.5 overflow-x-auto [scrollbar-width:none] px-[4px]">
             {COLUMNS.map(([k, label]) => {
               const on = mCol === k; const n = k === 'done' ? counts.doneWeek : counts[k];
@@ -197,7 +238,27 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
               </div>
             )}
           </span>
-          <Mono className="hidden lg:inline">Drag between columns to set status · drag onto an avatar to reassign</Mono>
+          <span className="flex items-center gap-1">
+            <LensPill on={lens === 'mine'} onClick={() => setLens('mine')}>Mine</LensPill>
+            <LensPill on={lens === 'team'} onClick={() => setLens('team')}>Team</LensPill>
+          </span>
+          <span className="relative">
+            <LabelledPill label="Project:" value={projectFilter ? (projects.find(p => p.id === projectFilter)?.name || '…') : 'All'} onClick={() => { setProjectMenu(v => !v); setProjectQ(''); }} />
+            {projectMenu && (
+              <div className="absolute left-0 top-full mt-1 z-40 w-[300px] menu-surface rounded-[10px] py-1" onMouseLeave={() => setProjectMenu(false)}>
+                <div className="px-2 pb-1"><input autoFocus value={projectQ} onChange={e => setProjectQ(e.target.value)} placeholder="Search projects…" className="w-full px-2.5 py-1.5 rounded-[8px] border bg-transparent text-[13px] text-paper placeholder-dim focus:outline-none" style={{ borderColor: 'var(--ink-line)' }} /></div>
+                <button onClick={() => { setProjectFilter(''); setProjectMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${!projectFilter ? 'font-semibold' : ''}`}>All projects</button>
+                <div className="max-h-64 overflow-y-auto">
+                  {projects.filter(p => !projectQ.trim() || `${p.name} ${customerOf(p) || ''}`.toLowerCase().includes(projectQ.trim().toLowerCase())).slice(0, 50).map(p => (
+                    <button key={p.id} onClick={() => { setProjectFilter(p.id); setProjectMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${projectFilter === p.id ? 'font-semibold' : ''}`}>
+                      <span className="block truncate">{p.name}</span>{customerOf(p) && <span className="block text-[11px] text-dim truncate">{customerOf(p)}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </span>
+          <Mono className="hidden xl:inline">Drag between columns to set status · drag onto an avatar to reassign</Mono>
           {canWrite && (
             <span className="flex items-center gap-1 ml-auto" title="Drop a card here to reassign">
               {members.map(m => (
@@ -237,7 +298,7 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
             setMCol(COLUMNS[j][0]);
           }}>
           {(() => {
-            const list = tasks.filter(t => t.status === mCol && (mCol !== 'done' || (t.completed_at && new Date(t.completed_at).getTime() >= weekAgo)));
+            const list = scoped.filter(t => t.status === mCol && (mCol !== 'done' || (t.completed_at && new Date(t.completed_at).getTime() >= weekAgo)));
             if (list.length === 0) return <Card className="px-4 py-6 text-center text-[14px] text-dim">Nothing {COLUMNS.find(([k]) => k === mCol)[1].toLowerCase()}.</Card>;
             return list.map(t => {
               const due = dueLabel(t.due_date, t.status); const tr = trackedFor(t); const p = projects.find(x => x.id === t.project_id);
@@ -293,7 +354,12 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
               );
             })}
           </div>
-          {tasks.length === 0 && <EmptyState title="Nothing to do yet" body="Tasks appear here in four columns as soon as there are any." primary={canWrite ? 'Add a task' : null} onPrimary={() => onNavigate?.('tasks')} />}
+          {scoped.length === 0 && !projectFilter && <EmptyState title={lens === 'mine' ? 'Nothing of yours on the board' : 'Nothing to do yet'} body={lens === 'mine' ? 'Switch to Team to see everyone, or pick a project.' : 'Tasks appear here in four columns as soon as there are any.'} primary={canWrite ? 'Add a task' : null} onPrimary={() => onNavigate?.('tasks')} />}
+          {scoped.length === 0 && projectFilter && lanes !== 'project' && (
+            <EmptyState title="Nothing in this project yet" body="Add its first task, or switch Swimlanes to Project to see the lane." primary={canWrite ? 'Add a task' : null}
+              onPrimary={() => { try { sessionStorage.setItem('project.openAdd', projectFilter); } catch { /* fine */ } onNavigate?.('project', projectFilter); }} />
+          )}
+          {laneNote && <Mono>{laneNote}</Mono>}
           {swimlanes.map(lane => {
             const gl = lane.due ? dueLabel(lane.due, 'todo') : null;
             const daysTo = lane.due ? Math.round((new Date(lane.due + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000) : null;
@@ -342,9 +408,8 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
                           );
                         })}
                         {k === 'todo' && canWrite && lanes === 'project' && lane.key !== 'none' && (
-                          <button onClick={() => onNavigate?.('project', lane.key)} className="text-left text-[13px] text-dim px-3 py-2.5 rounded-[12px] border border-dashed hover:text-paper" style={{ borderColor: 'var(--dash-line)' }}>+ Add task</button>
+                          <button onClick={() => { try { sessionStorage.setItem('project.openAdd', lane.key); } catch { /* fine */ } onNavigate?.('project', lane.key); }} className="text-left text-[13px] text-dim px-3 py-2.5 rounded-[12px] border border-dashed hover:text-paper" style={{ borderColor: 'var(--dash-line)' }}>+ Add task</button>
                         )}
-                        {k === 'done' && doneAll.length > doneWeek.length && <Mono size={10}>+ {doneAll.length - doneWeek.length} completed earlier</Mono>}
                       </div>
                     );
                   })}
@@ -384,7 +449,7 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
                   <div className="font-mono text-[11px] font-bold" style={{ color: cap[1] }}>{cap[0]}</div>
                   <div className="text-[12px] text-muted">
                     {r.capacity === 'over'
-                      ? <><button onClick={() => { setTab('board'); setLanes('assignee'); }} className="hover:text-paper">Reassign</button> · <button onClick={() => onNavigate?.('tasks')} className="hover:text-paper">View tasks</button></>
+                      ? <><button onClick={() => { setTab('board'); setLanes('assignee'); setLens('team'); }} className="hover:text-paper">Reassign</button> · <button onClick={() => onNavigate?.('tasks')} className="hover:text-paper">View tasks</button></>
                       : <button onClick={() => onNavigate?.('tasks')} className="hover:text-paper">Assign work</button>}
                   </div>
                 </div>

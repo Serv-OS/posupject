@@ -4,6 +4,7 @@ import '../index.css';
 import TodayPanel from '../components/crm/TodayPanel.jsx';
 import TaskDetail from '../components/crm/TaskDetail.jsx';
 import ProjectDetail from '../components/crm/ProjectDetail.jsx';
+import ProjectList from '../components/crm/ProjectList.jsx';
 import WorkBoard from '../components/crm/WorkBoard.jsx';
 import BillsPanel from '../components/finance/BillsPanel.jsx';
 import QuoteBuilder from '../components/crm/QuoteBuilder.jsx';
@@ -25,6 +26,7 @@ function App() {
         {v === 'today' && <TodayPanel profile={P} onNavigate={nav} />}
         {v === 'task' && <TaskDetail taskId="t3" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'project' && <ProjectDetail projectId="p1" profile={P} onClose={nav} onSelectTask={nav} onNavigate={nav} />}
+        {v === 'projects' && <ProjectList profile={P} onSelect={nav} onNavigate={nav} />}
         {v === 'board' && <WorkBoard profile={P} onNavigate={nav} initialTab="board" />}
         {v === 'bills' && <BillsPanel profile={P} onNavigate={nav} />}
         {v === 'quote' && <QuoteBuilder quoteId="q1" profile={P} onClose={nav} onNavigate={nav} />}

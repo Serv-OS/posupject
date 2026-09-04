@@ -424,13 +424,13 @@ export default function Shell({ session }) {
       case 'tasks':
         return <TaskList profile={profile} onSelect={(id) => { setView('task_detail'); setDetailId(id); }} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} />;
       case 'task_detail':
-        return <TaskDetail taskId={detailId} profile={profile} onClose={() => setView('tasks')} onNavigate={navigateTo} />;
+        return <TaskDetail key={detailId} taskId={detailId} profile={profile} onClose={() => setView('tasks')} onNavigate={navigateTo} />;
       case 'projects':
         return <ProjectList profile={profile} onSelect={(id) => { setView('project_detail'); setDetailId(id); }} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} />;
       case 'project_templates':
         return <ProjectTemplates profile={profile} />;
       case 'project_detail':
-        return <ProjectDetail projectId={detailId} profile={profile}
+        return <ProjectDetail key={detailId} projectId={detailId} profile={profile}
           onClose={() => setView('projects')}
           onSelectTask={(id) => { setView('task_detail'); setDetailId(id); }}
           onNavigate={navigateTo} />;

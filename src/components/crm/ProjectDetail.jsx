@@ -6,8 +6,11 @@ import { parseQuickAdd, quickAddRow } from '../../lib/quickAdd';
 import { PRIORITY_LABEL } from '../../lib/priority';
 import {
   Avatar, Check, Pill, StatusPill, LinkChip, SectionLabel, Mono, PageTitle,
-  PrimaryBtn, GhostBtn, SolidChipBtn, Card, DashedAdd, SkeletonList, MobileDock, DockField, hair, dueLabel, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL,
+  PrimaryBtn, GhostBtn, SolidChipBtn, Card, DashedAdd, SkeletonList, MobileDock, DockField, hair, dueLabel, MetaLabel, Segmented, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL,
 } from './ui.jsx';
+import { weekColumns, rangeLabel, spanPercent, phaseSpans, addDays, startOfWeek } from '../../lib/planning';
+import { useStickyState } from '../../lib/stickyState';
+import { useIsMobile } from '../../lib/useMedia';
 
 // Screen 04 — a project reads as a plan, not a pile.
 //
@@ -38,13 +41,31 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
   const [note, setNote] = useState('');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
-  const [addingTo, setAddingTo] = useState(null);   // phase key the inline add is open for
+  const [addingTo, setAddingTo] = useState(null);
+  // The project's own views (owner's call, 3 Sep): phases, the same tasks as a board, or a timeline.
+  const [view, setView] = useStickyState('project.view', 'phases');
+  const isMobile = useIsMobile();
+  const effView = isMobile ? 'phases' : view;
+  const [drag, setDrag] = useState(null);   // phase key the inline add is open for
   const [addText, setAddText] = useState('');
   const [statusMenu, setStatusMenu] = useState(null); // task id with the status popover open
   const [err, setErr] = useState('');
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
-  useEffect(() => { load(); }, [projectId]);
+  useEffect(() => { load(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Tasks added elsewhere (⌘K, the board, a colleague) appear without leaving the page.
+  useEffect(() => {
+    const ch = supabase.channel(`project-${projectId}-tasks`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `project_id=eq.${projectId}` }, () => load())
+      // Deletes carry only the old row's id, so they are heard unfiltered.
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'tasks' }, () => load())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The board's "+ Add task" lands here with the add row already open.
+  useEffect(() => {
+    try { const want = sessionStorage.getItem('project.openAdd'); if (want) sessionStorage.removeItem('project.openAdd'); if (want === projectId) setAddingTo('__open'); } catch { /* fine */ }
+  }, [projectId]);
 
   const load = async () => {
     const [p, t, m, c, l, d, ob] = await Promise.all([
@@ -100,6 +121,7 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
       const co = companies.find(x => x.id === (o?.company_id || deal?.company_id || loc?.company_id));
       return { type: t, name: loc?.name || deal?.name || co?.name, companyName: co?.name, companyId: co?.id };
     }
+    if (t === 'ticket') return { type: t, name: 'Ticket' };
     return { type: t, name: id.slice(0, 8) };
   }, [project, locations, companies, deals, onboardings]);
 
@@ -167,13 +189,16 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
     await patchTask(t.id, patch);
   };
 
+  const [adding, setAdding] = useState(false);
   const addTask = async (phaseName) => {
     const title = addText.trim();
-    if (!title) return;
+    if (!title || adding) return;
+    setAdding(true);
     const parsed = parseQuickAdd(title, { members, projects: [project], presets: { project_id: projectId, phase: phaseName || null } });
     const row = { ...quickAddRow(parsed, profile.id), project_id: projectId, phase: phaseName || null, sort_order: tasks.length,
       subject_type: project.subject_type || null, subject_id: project.subject_id || null };
     const { error } = await supabase.from('tasks').insert(row);
+    setAdding(false);
     if (error) { setErr(error.message); return; }
     setAddText('');
     load();
@@ -258,6 +283,7 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
           </div>
           {!editing && (
             <div className="hidden lg:flex gap-2 items-center shrink-0">
+              <Segmented value={view} options={[['phases', 'Phases'], ['board', 'Board'], ['timeline', 'Timeline']]} onChange={setView} />
               <GhostBtn onClick={toggleTimer} active={!!timerHere}>
                 {timerHere ? `Pause · ${fmtClock((now - new Date(running.started_at).getTime()) / 1000)}` : 'Start timer'}
               </GhostBtn>
@@ -324,7 +350,12 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
           <div className="px-[14px] lg:px-6 pt-[14px] lg:pt-[18px] pb-4 lg:pb-6 grid gap-[14px] lg:gap-[18px] lg:grid-cols-[minmax(0,1fr)_300px]">
             {/* LEFT — phases */}
             <div className="flex flex-col gap-[14px] min-w-0">
-              {tasks.length === 0 && (
+              {effView === 'board' ? (
+                <ProjectBoard groups={groups} canWrite={canWrite} drag={drag} setDrag={setDrag} onStatus={setStatus} onOpen={(id) => onSelectTask?.(id)} nameOf={nameOf} onAdd={(g) => { setAddingTo(g.name ? g.name : '__none'); setAddText(''); }} />
+              ) : effView === 'timeline' ? (
+                <ProjectTimeline project={project} tasks={tasks} />
+              ) : (<>
+              {tasks.length === 0 && addingTo == null && (
                 <Card className="px-7 py-9 text-center">
                   <div className="font-display text-[20px] font-extrabold text-paper">Nothing to do yet</div>
                   <div className="text-[14px] text-muted mt-1 mb-[18px]">Add the first task, or name a phase if this is a job you run often.</div>
@@ -393,14 +424,15 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                 );
               })}
 
+              </>)}
               {/* Add row: dashed, names the last phase, and offers a new phase. */}
-              {canWrite && tasks.length > 0 && (() => {
+              {canWrite && (addingTo != null || tasks.length > 0) && (() => {
                 const last = groups[groups.length - 1];
-                const target = addingTo ?? last.key;
+                const target = addingTo == null || addingTo === '__open' ? last.key : addingTo;
                 const targetName = target === '__none' ? null : target;
                 const inlineOpen = addingTo != null;
                 return inlineOpen ? (
-                  <div className="hidden lg:flex items-center gap-2.5 px-[14px] py-[9px] rounded-[12px] border" style={{ background: 'var(--surface-solid)', borderColor: 'rgb(var(--c-primary) / .5)' }}>
+                  <div className="flex items-center gap-2.5 px-[14px] py-[9px] rounded-[12px] border" style={{ background: 'var(--surface-solid)', borderColor: 'rgb(var(--c-primary) / .5)' }}>
                     <span className="text-[18px] leading-none text-dim">+</span>
                     <input autoFocus value={addText} onChange={e => setAddText(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTask(targetName); } if (e.key === 'Escape') setAddingTo(null); }}
@@ -516,5 +548,89 @@ function StatusMenu({ task, onPick, onClose }) {
         </button>
       ))}
     </div>
+  );
+}
+
+const BOARD_COLS = [['todo', 'To do', 'muted'], ['in_progress', 'In progress', 'amber'], ['blocked', 'Blocked', 'coral'], ['done', 'Done', 'primary']];
+/** The project as a board: one lane per phase, four status columns, drag a card to change its status. */
+function ProjectBoard({ groups, canWrite, drag, setDrag, onStatus, onOpen, nameOf, onAdd }) {
+  const lanes = groups.filter(g => g.tasks.length || g.name);
+  const all = groups.flatMap(g => g.tasks);
+  if (lanes.length === 0) return <Card className="px-7 py-9 text-center text-[14px] text-dim">Nothing on the board yet. Add a task and it lands in To do.</Card>;
+  return (
+    <div className="flex flex-col gap-[14px]">
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))' }}>
+        {BOARD_COLS.map(([k, label, tone]) => (
+          <div key={k} className="flex items-center gap-2"><MetaLabel tone={tone === 'muted' ? 'muted' : tone}>{label}</MetaLabel><Mono size={10}>{all.filter(t => t.status === k).length}</Mono></div>
+        ))}
+      </div>
+      {lanes.map(g => (
+        <Card key={g.key} className="p-[14px] flex flex-col gap-2.5">
+          {g.label && <div className="flex items-center gap-2"><SectionLabel className="!text-[10px]">{g.label}</SectionLabel><Mono size={10}>{g.tasks.filter(t => t.status === 'done').length}/{g.tasks.length}</Mono></div>}
+          <div className="grid gap-3 items-start" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))' }}>
+            {BOARD_COLS.map(([k]) => (
+              <div key={k} onDragOver={e => { if (drag) e.preventDefault(); }} onDrop={() => { if (drag && drag.status !== k) onStatus(drag, k); setDrag(null); }}
+                className={`flex flex-col gap-2 min-h-[44px] rounded-[12px] transition ${drag ? 'outline-dashed outline-1 outline-[var(--dash-line)]' : ''}`}>
+                {g.tasks.filter(t => t.status === k).map(t => {
+                  const due = dueLabel(t.due_date, t.status); const isDone = t.status === 'done';
+                  return (
+                    <div key={t.id} draggable={canWrite && !isDone} onDragStart={() => setDrag(t)} onDragEnd={() => setDrag(null)} onClick={() => onOpen(t.id)}
+                      className="rounded-[12px] px-3 py-[11px] cursor-pointer border"
+                      style={isDone ? { background: 'var(--panel-bg)', borderColor: 'var(--hair)' } : { background: 'var(--surface-solid)', boxShadow: 'var(--shadow-tile)', borderColor: t.status === 'blocked' ? 'rgb(var(--c-coral) / .35)' : t.status === 'in_progress' ? 'rgb(var(--c-primary) / .35)' : 'var(--ink-line)' }}>
+                      <div className={`text-[13px] ${isDone ? 'text-dim line-through' : 'font-medium text-paper'}`}>{t.title}</div>
+                      {!isDone && t.status === 'blocked' && t.blocked_reason && <div className="text-[11px] mt-0.5" style={{ color: 'rgb(var(--c-coral-deep))' }}>{t.blocked_reason}</div>}
+                      {!isDone && (
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          {t.due_date && <Mono size={10} tone={due.tone === 'coral' ? 'coral' : 'dim'}>{due.text}</Mono>}
+                          <span className="ml-auto"><Avatar id={t.owner_id} name={nameOf(t.owner_id)} size={20} /></span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {k === 'todo' && canWrite && (
+                  <button onClick={() => onAdd(g)} className="text-left text-[13px] text-dim px-3 py-2.5 rounded-[12px] border border-dashed hover:text-paper" style={{ borderColor: 'var(--dash-line)' }}>+ Add task</button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/** The project as a timeline: one derived bar per phase across eight weeks, today marked. */
+function ProjectTimeline({ project, tasks }) {
+  const cols = weekColumns(addDays(startOfWeek(new Date()), -7), 8);
+  const r0 = cols[0].start.getTime(), r1 = cols[cols.length - 1].end.getTime();
+  const spans = phaseSpans(project, tasks);
+  const now = Date.now(); const today = spanPercent(now, now + 1, r0, r1);
+  const fill = { coral: 'rgb(var(--c-coral) / .18)', done: 'var(--ink-soft)', primary: 'rgb(var(--c-primary) / .22)', amber: 'rgb(var(--c-amber) / .2)', none: 'transparent' };
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-2.5 border-b flex items-center gap-2" style={hair}><span className="text-[13px] font-bold text-paper">Timeline</span><Mono>{rangeLabel(cols)}</Mono></div>
+      <div className="grid border-b" style={{ gridTemplateColumns: `200px repeat(${cols.length}, minmax(0,1fr))`, ...hair }}>
+        <div />
+        {cols.map(c => <div key={c.label} className="px-2 py-1.5 font-mono text-[10px] text-dim border-l" style={{ borderColor: 'var(--hair)', background: c.now ? 'rgb(var(--c-primary) / .08)' : undefined }}>{c.label}</div>)}
+      </div>
+      {spans.map((sp, i) => {
+        const pos = spanPercent(sp.start.getTime(), sp.end.getTime(), r0, r1);
+        return (
+          <div key={sp.name} className={`grid ${i < spans.length - 1 ? 'border-b' : ''}`} style={{ gridTemplateColumns: '200px minmax(0,1fr)', ...hair }}>
+            <div className="px-4 py-2.5 min-w-0"><div className="text-[13px] text-paper truncate">{sp.name}</div><div className="text-[11px] text-dim">{sp.done}/{sp.count} done{sp.blocked ? ` · ${sp.blocked} blocked` : ''}</div></div>
+            <div className="relative h-[48px]">
+              {today && <div className="absolute inset-y-0 w-px" style={{ left: `${today.left}%`, background: 'rgb(var(--c-primary))' }} />}
+              {pos && (
+                <div className="absolute top-[12px] h-[24px] rounded-[7px] px-2 text-[11px] font-medium flex items-center overflow-hidden whitespace-nowrap"
+                  style={{ left: `${pos.left}%`, width: `${Math.max(pos.width, 2)}%`, background: fill[sp.tone] || fill.none, color: sp.tone === 'coral' ? 'rgb(var(--c-coral-deep))' : 'rgb(var(--c-text))', border: sp.tone === 'none' ? '1px dashed var(--dash-line)' : '1px solid transparent' }}>{sp.label}</div>
+              )}
+              {!pos && <div className="absolute inset-y-0 left-2 flex items-center text-[11px] text-dim">Outside this window</div>}
+            </div>
+          </div>
+        );
+      })}
+      <div className="px-4 py-2 text-[11px] text-dim">Bars come from each phase's task dates. Give tasks a start and a due date to move them.</div>
+    </Card>
   );
 }
