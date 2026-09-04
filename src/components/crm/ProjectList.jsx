@@ -117,7 +117,8 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
     }
     return [...m.entries()].map(([key, list]) => {
       const tpl = groupBy === 'template' && key !== '__none' ? templates.find(t => t.id === key) : null;
-      const label = groupBy === 'template' ? (tpl?.name || (key === '__none' ? 'No template' : 'Template')) : groupBy === 'owner' ? (nameOf(key) || 'Unassigned') : groupBy === 'customer' ? (key === '__internal' ? 'Internal' : (cust.company || cust.name || 'Customer')) : 'All projects';
+      const first = customerOf(list[0]); // every project in a customer group shares the record, so the first names it
+      const label = groupBy === 'template' ? (tpl?.name || (key === '__none' ? 'No template' : 'Template')) : groupBy === 'owner' ? (nameOf(key) || 'Unassigned') : groupBy === 'customer' ? (key === '__internal' ? 'Internal' : (first.company || first.name || 'Customer')) : 'All projects';
       const behind = list.filter(p => stats[p.id]?.behind).length;
       const dues = [...new Set(list.map(p => p.due_date).filter(Boolean))];
       const taskCount = tpl ? Math.round(list.reduce((s, p) => s + (stats[p.id]?.total || 0), 0) / Math.max(1, list.length)) : null;
