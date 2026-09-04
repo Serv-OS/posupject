@@ -6,8 +6,10 @@ import path from 'node:path';
 // the design harness (preview-mobile.html) renders the real components with
 // seeded data and no network. Never set in a real build.
 const stubAlias = process.env.PREVIEW_STUB ? [
-  { find: /^(.*)\/lib\/supabase$/, replacement: path.resolve(__dirname, 'src/__preview__/stub.js') },
-  { find: /^(.*)\/lib\/timer$/, replacement: path.resolve(__dirname, 'src/__preview__/timerStub.js') },
+  { find: /^(.*)\/lib\/supabase(\.js)?$/, replacement: path.resolve(__dirname, 'src/__preview__/stub.js') },
+  // lib modules import their sibling as './supabase'
+  { find: /^\.\/supabase(\.js)?$/, replacement: path.resolve(__dirname, 'src/__preview__/stub.js') },
+  { find: /^(.*)\/lib\/timer(\.js)?$/, replacement: path.resolve(__dirname, 'src/__preview__/timerStub.js') },
 ] : [];
 
 export default defineConfig({

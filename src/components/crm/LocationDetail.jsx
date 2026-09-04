@@ -50,8 +50,8 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
   const fileRef = useRef(null);
   useEffect(() => {
     if (!locationId) return;
-    supabase.from('tickets').select('id, ticket_number, subject, priority, stage, status, sla_due_at, first_response_due_at, resolution_due_at, created_at').eq('location_id', locationId).order('created_at', { ascending: false }).limit(30)
-      .then(r => setTickets((r.data || []).filter(t => !/closed|resolved|done|cancel/i.test(`${t.stage || ''} ${t.status || ''}`))));
+    supabase.from('tickets').select('id, ticket_number, subject, priority, stage, first_response_at, response_due_at, resolution_due_at, resolved_at, closed_at, created_at').eq('location_id', locationId).order('created_at', { ascending: false }).limit(30)
+      .then(r => setTickets((r.data || []).filter(t => !/closed|resolved|done|cancel/i.test(t.stage || ''))));
     supabase.from('associations').select('from_type, from_id, to_type, to_id').or(`and(from_type.eq.location,from_id.eq.${locationId},to_type.eq.contact),and(to_type.eq.location,to_id.eq.${locationId},from_type.eq.contact)`)
       .then(async r => {
         const ids = [...new Set((r.data || []).map(x => (x.from_type === 'contact' ? x.from_id : x.to_id)))];

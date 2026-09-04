@@ -448,10 +448,11 @@ export function fmtHM(seconds) {
 // ── Phone patterns (screens 18, 20, 22, 23) ───────────────────────────────
 
 import { isOnline as _isOnline, pending as _pending } from '../../lib/offlineQueue';
+import { createPortal as _createPortal } from 'react-dom';
 
 /** Bottom sheet: dims the page, slides a card up from the tab bar. */
 export function MobileSheet({ title, sub, onClose, children, footer, tall }) {
-  return (
+  return _createPortal(
     <div className="fixed inset-0 z-[70] flex flex-col justify-end bg-black/40" onClick={onClose}>
       <div onClick={e => e.stopPropagation()} className={`rounded-t-[20px] border-t flex flex-col ${tall ? 'h-[88vh]' : 'max-h-[80vh]'}`}
         style={{ background: 'var(--raised-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-pop)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
@@ -462,10 +463,11 @@ export function MobileSheet({ title, sub, onClose, children, footer, tall }) {
             {sub && <div className="text-[12px] text-dim">{sub}</div>}
           </div>
         )}
-        <div className="flex-1 overflow-y-auto px-[14px] py-3 flex flex-col gap-3">{children}</div>
+        <div className="px-[14px] py-3 flex flex-col gap-3 [&>*]:shrink-0" style={{ flex: '1 1 0%', minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>{children}</div>
         {footer && <div className="px-[14px] py-3 border-t flex gap-2" style={{ borderColor: 'var(--hair)' }}>{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -623,7 +625,7 @@ export function EditSheet({ title, sections, values, onChange, onCancel, onSave,
   const go = (i) => { const f = all[i]; if (!f) return; const sec = sections.find(s => s.fields.includes(f)); setOpen(o => new Set([...o, sec.title])); setTimeout(() => refs.current[f.key]?.focus(), 30); };
   const set = (f, raw) => onChange(f.key, f.parse ? f.parse(raw) : (raw === '' ? null : raw));
   const inputCls = 'w-full bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none';
-  return (
+  return _createPortal(
     <div className="fixed inset-0 z-[70] flex flex-col" style={{ background: 'var(--scene-bg)' }}>
       <div className="px-[18px] pt-3 pb-3 border-b flex items-center gap-3" style={{ borderColor: 'var(--hair)', background: 'var(--panel-bg)' }}>
         <button type="button" onClick={onCancel} className="text-[14px] text-muted">Cancel</button>
@@ -633,7 +635,7 @@ export function EditSheet({ title, sections, values, onChange, onCancel, onSave,
         </div>
         <button type="button" onClick={onSave} disabled={saving} className="text-[14px] font-semibold disabled:opacity-50" style={{ color: 'rgb(var(--c-primary-deep))' }}>{saving ? 'Saving…' : 'Save'}</button>
       </div>
-      <div className="flex-1 overflow-y-auto p-[14px] flex flex-col gap-3 pb-[90px]">
+      <div className="p-[14px] flex flex-col gap-3 pb-[90px] [&>*]:shrink-0" style={{ flex: '1 1 0%', minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {error && <div className="px-[14px] py-2.5 rounded-[12px] text-[13px]" style={{ background: 'rgb(var(--c-coral) / .12)', color: 'rgb(var(--c-coral-deep))' }}>Could not save: {error}</div>}
         {sections.map(s => (
           <Card key={s.title}>
@@ -675,6 +677,7 @@ export function EditSheet({ title, sections, values, onChange, onCancel, onSave,
           <button type="button" onClick={() => go(focus + 1)} disabled={focus >= all.length - 1} className="text-[13px] font-semibold disabled:opacity-40" style={{ color: 'rgb(var(--c-primary-deep))' }}>Next</button>
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }

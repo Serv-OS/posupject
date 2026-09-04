@@ -338,12 +338,12 @@ body {
 }
 
 @media (max-width: 640px) {
-  .grid.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-  .grid.grid-cols-3 { grid-template-columns: minmax(0, 1fr) !important; }
-  .grid.grid-cols-2 { grid-template-columns: minmax(0, 1fr) !important; }
+  main .grid.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  main .grid.grid-cols-3 { grid-template-columns: minmax(0, 1fr) !important; }
+  main .grid.grid-cols-2 { grid-template-columns: minmax(0, 1fr) !important; }
   .max-w-\[1400px\], .max-w-5xl, .max-w-4xl, .max-w-3xl, .max-w-2xl { max-width: 100% !important; }
-  .border-b.flex.items-center { flex-wrap: wrap; row-gap: 0.5rem; }
-  .border-b.flex.items-center > .flex-1 { flex-basis: 100%; }
+  main .border-b.flex.items-center { flex-wrap: wrap; row-gap: 0.5rem; }
+  main .border-b.flex.items-center > .flex-1 { flex-basis: 100%; }
   .work .border-b.flex.items-center { flex-wrap: nowrap; row-gap: 0; }
   .work .border-b.flex.items-center > .flex-1 { flex-basis: 0%; }
   input.w-72, input.w-56, input.w-48 { width: 100% !important; }

@@ -202,6 +202,7 @@ export default function Shell({ session }) {
     else if (type === 'deal') { setView('deal_detail'); setDetailId(id); }
     else if (type === 'onboarding') { setView('onboarding_detail'); setDetailId(id); }
     else if (type === 'ticket') { setView('ticket_detail'); setDetailId(id); }
+    else if (type === 'feature_request') { setView('feature_request_detail'); setDetailId(id); }
     else if (type === 'project') { setView('project_detail'); setDetailId(id); }
     else if (type === 'task') { setView('task_detail'); setDetailId(id); }
     else if (type === 'lead') { if (id) { setView('lead_detail'); setDetailId(id); } else setView('leads'); }
@@ -488,10 +489,10 @@ export default function Shell({ session }) {
           <NotificationBell profile={profile} onNavigate={navigateTo} />
         </div>
       </div>
-      <main className={`flex-1 min-w-0 overflow-hidden flex flex-col ${WORK_VIEWS.has(view) ? 'work' : ''}`}>
+      <main className={`flex-1 min-w-0 overflow-hidden lg:flex lg:flex-col ${WORK_VIEWS.has(view) ? 'work' : ''}`}>
         {/* The offline banner sits above the page and pushes it down (18); the Inbox draws its own. */}
         {isMobile && view !== 'inbox' && <OfflineBanner onView={() => setView('inbox')} />}
-        <div className="flex-1 min-h-0">{renderMain()}</div>
+        <div className="contents lg:block lg:flex-1 lg:min-h-0">{renderMain()}</div>
       </main>
       </div>
       <AskPanel open={askOpen} onClose={() => setAskOpen(false)} scope={askScope} />
@@ -503,7 +504,7 @@ export default function Shell({ session }) {
         />
       )}
       <QuickAddCommand profile={profile} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} context={view === 'project_detail' ? { projectId: detailId } : null} />
-      <MobileNav profile={profile} view={view} onGo={(k) => setView(k)} />
+      <MobileNav profile={profile} view={view} onGo={(k) => { setDetailId(null); setView(k); }} />
 
     </div>
   );

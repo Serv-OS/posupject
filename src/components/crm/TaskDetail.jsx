@@ -4,7 +4,7 @@ import AttachmentsCard from './AttachmentsCard.jsx';
 import { getRunning, startTimer, stopTimer, fmtClock, fmtDuration } from '../../lib/timer';
 import { PRIORITY_LABEL, PRIORITY_SLA } from '../../lib/priority';
 import {
-  Avatar, Check, LinkChip, SectionLabel, Mono, PageTitle, PrimaryBtn, GhostBtn, SolidChipBtn, Card, SkeletonList, MobileDock,
+  Avatar, Check, LinkChip, SectionLabel, Mono, PageTitle, PrimaryBtn, GhostBtn, SolidChipBtn, Card, SkeletonList, MobileDock, MobileSheet, SheetRow,
   hair, dueLabel, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL, initialsOf,
 } from './ui.jsx';
 
@@ -41,6 +41,7 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
   const [descEdit, setDescEdit] = useState(false);
   const [descDraft, setDescDraft] = useState('');
   const [titleEdit, setTitleEdit] = useState(false);
+  const [sheet, setSheet] = useState(false); // the phone's "…"
   const [titleDraft, setTitleDraft] = useState('');
   const [newSub, setNewSub] = useState('');
   const [subOpen, setSubOpen] = useState(false);
@@ -401,10 +402,22 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
             {task.status === 'done'
               ? <button onClick={() => setStatus('todo')} className="flex-1 py-[14px] rounded-[12px] text-[15px] font-semibold border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>Reopen</button>
               : <button onClick={() => setStatus('done')} className="flex-1 py-[14px] rounded-[12px] text-[15px] font-semibold" style={{ background: 'linear-gradient(180deg, rgb(var(--c-primary)), rgb(var(--c-primary-deep)))', color: 'rgb(var(--c-ink))' }}>Complete</button>}
-            <button onClick={() => document.querySelector('input[placeholder^="Write a note"]')?.focus()} className="px-[18px] py-[14px] rounded-[12px] text-[15px] font-semibold border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>Note</button>
-            <button onClick={() => setMenu(v => !v)} className="px-4 py-[14px] rounded-[12px] text-[15px] border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>…</button>
+            <button onClick={() => { const el = document.querySelector('input[placeholder^="Write a note"]'); el?.scrollIntoView({ block: 'center', behavior: 'smooth' }); el?.focus(); }} className="px-[18px] py-[14px] rounded-[12px] text-[15px] font-semibold border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>Note</button>
+            <button onClick={() => setSheet(true)} className="px-4 py-[14px] rounded-[12px] text-[15px] border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>…</button>
           </div>
         </MobileDock>
+      )}
+      {/* The phone's "…": the same actions as the desktop menu, plus the timer,
+          which otherwise had no control below lg. */}
+      {sheet && (
+        <MobileSheet title={task.title} sub={project?.name || 'Task'} onClose={() => setSheet(false)}>
+          <SheetRow onClick={() => { setSheet(false); toggleTimer(); }} sub={timerHere ? 'Stop tracking time on this task' : 'Start tracking time on this task'}>
+            {timerHere ? `Pause · ${fmtClock((now - new Date(running.started_at).getTime()) / 1000)}` : 'Start timer'}
+          </SheetRow>
+          {canWrite && <SheetRow onClick={() => { setSheet(false); setTitleDraft(task.title); setTitleEdit(true); }}>Rename</SheetRow>}
+          {canWrite && <SheetRow onClick={() => { setSheet(false); duplicate(); }} sub="A copy in the same project">Duplicate</SheetRow>}
+          {profile.role === 'owner' && <SheetRow tone="coral" onClick={() => { setSheet(false); deleteTask(); }}>Delete task</SheetRow>}
+        </MobileSheet>
       )}
     </div>
   );

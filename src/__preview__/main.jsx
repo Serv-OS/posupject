@@ -5,6 +5,9 @@ import TodayPanel from '../components/crm/TodayPanel.jsx';
 import TaskDetail from '../components/crm/TaskDetail.jsx';
 import ProjectDetail from '../components/crm/ProjectDetail.jsx';
 import ProjectList from '../components/crm/ProjectList.jsx';
+import TaskList from '../components/crm/TaskList.jsx';
+import Timeline from '../components/crm/Timeline.jsx';
+import WorkCalendar from '../components/crm/WorkCalendar.jsx';
 import WorkBoard from '../components/crm/WorkBoard.jsx';
 import BillsPanel from '../components/finance/BillsPanel.jsx';
 import QuoteBuilder from '../components/crm/QuoteBuilder.jsx';
@@ -20,13 +23,16 @@ function App() {
   const nav = () => {};
   return (
     <div className="work" style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--scene-bg)' }}>
-      <main className="work flex flex-col" style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+      <main className="work flex-1 min-w-0 overflow-hidden lg:flex lg:flex-col">
         {v !== 'inbox' && <OfflineBanner onView={() => { location.hash = 'inbox'; }} />}
-        <div className="flex-1 min-h-0">
+        <div className="contents lg:block lg:flex-1 lg:min-h-0">
         {v === 'today' && <TodayPanel profile={P} onNavigate={nav} />}
         {v === 'task' && <TaskDetail taskId="t3" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'project' && <ProjectDetail projectId="p1" profile={P} onClose={nav} onSelectTask={nav} onNavigate={nav} />}
         {v === 'projects' && <ProjectList profile={P} onSelect={nav} onNavigate={nav} />}
+        {v === 'tasks' && <TaskList profile={P} onNavigate={nav} />}
+        {v === 'timeline' && <Timeline profile={P} onNavigate={nav} />}
+        {v === 'calendar' && <WorkCalendar profile={P} onNavigate={nav} />}
         {v === 'board' && <WorkBoard profile={P} onNavigate={nav} initialTab="board" />}
         {v === 'bills' && <BillsPanel profile={P} onNavigate={nav} />}
         {v === 'quote' && <QuoteBuilder quoteId="q1" profile={P} onClose={nav} onNavigate={nav} />}
