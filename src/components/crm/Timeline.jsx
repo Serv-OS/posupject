@@ -28,6 +28,7 @@ export default function Timeline({ profile, onNavigate }) {
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [onboardings, setOnboardings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [unit, setUnit] = useStickyState('timeline.unit', 'weeks');
   const [rows, setRows] = useStickyState('timeline.rows', 'project');
@@ -37,16 +38,17 @@ export default function Timeline({ profile, onNavigate }) {
 
   useEffect(() => { load(); }, []);
   const load = async () => {
-    const [p, t, m, c, l, d] = await Promise.all([
+    const [p, t, m, c, l, d, ob] = await Promise.all([
       supabase.from('crm_projects').select('*').eq('status', 'active').order('due_date', { ascending: true, nullsFirst: false }),
       supabase.from('tasks').select('id, title, project_id, phase, status, owner_id, due_date, start_date, created_at').is('parent_task_id', null),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('companies').select('id, name'),
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
+      supabase.from('onboardings').select('id, company_id, deal_id, location_id'),
     ]);
     setProjects(p.data || []); setTasks(t.data || []); setMembers(m.data || []);
-    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []);
+    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setOnboardings(ob.data || []);
     setLoading(false);
   };
 
@@ -56,6 +58,11 @@ export default function Timeline({ profile, onNavigate }) {
     if (p.subject_type === 'company') return companies.find(x => x.id === p.subject_id)?.name;
     if (p.subject_type === 'location') { const l = locations.find(x => x.id === p.subject_id); return companies.find(x => x.id === l?.company_id)?.name || l?.name; }
     if (p.subject_type === 'deal') { const dl = deals.find(x => x.id === p.subject_id); return companies.find(x => x.id === dl?.company_id)?.name || dl?.name; }
+    if (p.subject_type === 'onboarding') {
+      const o = onboardings.find(x => x.id === p.subject_id);
+      const l = locations.find(x => x.id === o?.location_id);
+      return l?.name || companies.find(x => x.id === (o?.company_id || l?.company_id))?.name || null;
+    }
     return null;
   };
 

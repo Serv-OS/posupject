@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { groupTasks, DUE_LABEL, dueBucket } from '../../lib/taskGrouping';
 import { useStickyState } from '../../lib/stickyState';
+import { dayKey, addDays } from '../../lib/planning';
 import { priorityLabel } from '../../lib/priority';
 import QuickAddRow from './QuickAddRow.jsx';
 import {
@@ -63,7 +64,18 @@ export default function TodayPanel({ profile, onNavigate }) {
   const nameOf = (id) => { const m = members.find(x => x.id === id); return m ? (m.display_name || m.email?.split('@')[0]) : ''; };
 
   // work_items carries source_id; grouping and rows speak `id` and `due_date`.
-  const asRow = (w) => ({ ...w, id: `${w.type}:${w.source_id}`, due_date: w.due_at ? String(w.due_at).slice(0, 10) : null });
+  const asRow = (w) => {
+    // A deadline carrying a time of day (an SLA) is late the moment it passes.
+    // A plain date is late the day after, and is read off the string: pushing a
+    // date-only value through a Date shifts it a day in half the world's zones.
+    // Approvals and requests carry no deadline at all, so they are never late.
+    const iso = w.due_at ? String(w.due_at) : null;
+    const undated = w.type === 'approval' || w.type === 'request';
+    const midnight = !iso || /T00:00:00(\.\d+)?(Z|\+00:00)?$/.test(iso);
+    let key = iso && !undated ? iso.slice(0, 10) : null;
+    if (key && !midnight && new Date(iso) < Date.now()) key = dayKey(addDays(new Date(), -1));
+    return { ...w, id: `${w.type}:${w.source_id}`, due_date: key, raised_at: undated ? w.due_at : null };
+  };
   const open = useMemo(() => items.filter(w => w.status !== 'done').map(asRow), [items]);
 
   // Approvals and requests have no single owner: they are for whoever can
@@ -71,7 +83,8 @@ export default function TodayPanel({ profile, onNavigate }) {
   const byLens = useMemo(() => {
     if (lens === 'team') return open;
     if (lens === 'requested') return open.filter(w => w.created_by === profile.id && w.owner_id !== profile.id);
-    return open.filter(w => w.owner_id === profile.id || (isApprover && (w.type === 'approval' || w.type === 'request') && !w.owner_id));
+    return open.filter(w => w.owner_id === profile.id
+      || (isApprover && (w.type === 'approval' || w.type === 'request') && !w.owner_id && w.created_by !== profile.id));
   }, [open, lens, profile.id, isApprover]);
   const typeCounts = useMemo(() => { const c = {}; for (const w of byLens) c[w.type] = (c[w.type] || 0) + 1; return c; }, [byLens]);
   const shown = useMemo(() => (type === 'all' ? byLens : byLens.filter(w => w.type === type)), [byLens, type]);
@@ -79,17 +92,19 @@ export default function TodayPanel({ profile, onNavigate }) {
   const groups = useMemo(() => groupTasks(shown, 'due', { projects, members }), [shown, projects, members]);
   const counts = useMemo(() => {
     const c = { overdue: 0, today: 0, week: 0 };
-    for (const w of byLens) { const b = dueBucket(w); if (b === 'overdue') c.overdue++; else if (b === 'today') c.today++; else if (b === 'this_week') c.week++; }
+    for (const w of shown) { const b = dueBucket(w); if (b === 'overdue') c.overdue++; else if (b === 'today') c.today++; else if (b === 'this_week') c.week++; }
     return c;
-  }, [byLens]);
-  const waiting = useMemo(() => open.filter(w => w.status === 'blocked'), [open]);
-  const asked = useMemo(() => open.filter(w => w.created_by === profile.id && w.owner_id && w.owner_id !== profile.id), [open, profile.id]);
+  }, [shown]);
+  // Blocked work that is actually yours, not everything blocked anywhere.
+  const waiting = useMemo(() => byLens.filter(w => w.status === 'blocked'), [byLens]);
+  const asked = useMemo(() => open.filter(w => w.created_by === profile.id && w.owner_id !== profile.id), [open, profile.id]);
 
   const go = (w) => onNavigate?.(w.type === 'approval' ? (w.source_table === 'expenses' ? 'expense' : w.source_table === 'bills' ? 'bill' : 'quote') : w.type === 'request' ? 'feature_request' : w.type, w.source_id);
 
   // The type's primary verb: approve an expense right here.
   const approve = async (w) => {
     if (w.source_table !== 'expenses') { go(w); return; }
+    if (!confirm(`Approve ${w.title}${w.subtitle ? ` (${w.subtitle})` : ''}?`)) return;
     const { error } = await supabase.from('expenses').update({ status: 'approved', approver_id: profile.id, approved_at: new Date().toISOString() }).eq('id', w.source_id);
     if (error) { setErr(error.message); return; }
     load();
@@ -113,6 +128,7 @@ export default function TodayPanel({ profile, onNavigate }) {
       const txt = Math.abs(mins) < 60 ? `${Math.abs(mins)}m` : Math.abs(mins) < 1440 ? `${Math.round(Math.abs(mins) / 60)}h` : `${Math.round(Math.abs(mins) / 1440)}d`;
       return <Mono tone={late ? 'coral' : 'muted'} bold={late}>SLA {late ? '-' : ''}{txt}</Mono>;
     }
+    if (w.raised_at) return <Mono tone="muted">Raised {fmtRel(w.raised_at)}</Mono>;
     if (w.type === 'onboarding' && w.due_date) return <Mono tone={due.tone === 'coral' ? 'coral' : 'muted'} bold={due.tone === 'coral'}>Live {new Date(w.due_date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</Mono>;
     return <Mono tone={due.tone === 'coral' ? 'coral' : due.tone === 'primary' ? 'primary' : 'dim'} bold={due.tone !== 'dim'}>{due.text}</Mono>;
   };
@@ -249,6 +265,8 @@ function Row({ w, last, late, go, approve, nameOf, isApprover, trailing, menuFor
         <div className="flex items-center gap-2 sm:contents">
           <TypeChip type={w.type} />
           <span className="sm:hidden">{trailing(w)}</span>
+          {/* the phone row said nothing about state; the pill is small and it earns its place */}
+          {w.type !== 'approval' && w.type !== 'request' && <span className="sm:hidden ml-auto"><StatusPill status={w.status} caret={false} /></span>}
         </div>
         <div className="flex-1 min-w-0 cursor-pointer mt-1.5 sm:mt-0" onClick={() => go(w)}>
           <div className="text-[15px] font-medium text-paper truncate">{w.title}</div>

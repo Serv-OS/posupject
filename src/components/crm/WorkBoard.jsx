@@ -36,6 +36,7 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [onboardings, setOnboardings] = useState([]);
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useStickyState('work.tab', 'board');
@@ -61,7 +62,7 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
 
   const load = useCallback(async () => {
     const weekAgo = addDays(new Date(), -7).toISOString();
-    const [t, m, p, c, l, d, te] = await Promise.all([
+    const [t, m, p, c, l, d, ob, te] = await Promise.all([
       // Open work, plus what was finished this week. Old done tasks never load.
       supabase.from('tasks').select('*').is('parent_task_id', null).or(`status.neq.done,completed_at.gte.${weekAgo}`).order('sort_order'),
       supabase.from('profiles').select('id, email, display_name, role'),
@@ -69,10 +70,11 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
       supabase.from('companies').select('id, name'),
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
+      supabase.from('onboardings').select('id, company_id, deal_id, location_id'),
       supabase.from('time_entries').select('profile_id, subject_id, duration_seconds, started_at').gte('started_at', startOfWeek(new Date()).toISOString()),
     ]);
     setTasks(t.data || []); setMembers(m.data || []); setProjects(p.data || []);
-    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setEntries(te.data || []);
+    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setOnboardings(ob.data || []); setEntries(te.data || []);
     setLoading(false);
   }, []);
   useEffect(() => {
@@ -88,6 +90,11 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
     if (p.subject_type === 'company') return companies.find(x => x.id === p.subject_id)?.name;
     if (p.subject_type === 'location') { const l = locations.find(x => x.id === p.subject_id); return companies.find(x => x.id === l?.company_id)?.name || l?.name; }
     if (p.subject_type === 'deal') { const dl = deals.find(x => x.id === p.subject_id); return companies.find(x => x.id === dl?.company_id)?.name || dl?.name; }
+    if (p.subject_type === 'onboarding') {
+      const o = onboardings.find(x => x.id === p.subject_id);
+      const l = locations.find(x => x.id === o?.location_id);
+      return l?.name || companies.find(x => x.id === (o?.company_id || l?.company_id))?.name || null;
+    }
     return null;
   };
   const trackedFor = (t) => entries.filter(e => e.subject_id === t.id).reduce((s, e) => s + (e.duration_seconds || 0), 0);
@@ -158,7 +165,8 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
     const empty = projectFilter ? [] : all.filter(r => !r.tasks.length && (lens !== 'mine' || projects.find(p => p.id === r.key)?.owner_id === profile.id))
       .sort((x, y) => String(y.updated).localeCompare(String(x.updated)));
     const shown = projectFilter ? rows : rows.slice(0, LANE_CAP).concat(empty.slice(0, Math.max(0, LANE_CAP - Math.min(rows.length, LANE_CAP))));
-    const loose = scoped.filter(t => !projects.some(p => p.id === t.project_id));
+    // A task whose project is closed is not "no project": it is simply not live work.
+    const loose = scoped.filter(t => !t.project_id);
     if (loose.length && !projectFilter) shown.push({ key: 'none', title: 'No project', tasks: loose });
     return shown;
   }, [lanes, scoped, projects, members, companies, locations, deals, projectFilter, lens, profile.id]); // eslint-disable-line react-hooks/exhaustive-deps

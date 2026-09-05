@@ -280,15 +280,15 @@ export function DashedAdd({ children, onClick, trailing, className = '' }) {
 /** The one multi-select UI: a dark floating bar. */
 export function DarkBar({ count, actions, onClear }) {
   return (
-    <div className="flex items-center gap-3 px-[18px] py-[11px] rounded-[14px]"
+    <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-[18px] py-[9px] sm:py-[11px] rounded-[14px] overflow-x-auto [scrollbar-width:none]"
       style={{ background: 'rgb(var(--c-text))', color: 'var(--on-accent)', boxShadow: 'var(--shadow-pop)' }}>
-      <span className="text-[13px] font-semibold">{count} selected</span>
-      <span className="w-px h-[18px]" style={{ background: 'var(--on-inverse-line)' }} />
+      <span className="text-[13px] font-semibold shrink-0">{count}<span className="hidden sm:inline"> selected</span></span>
+      <span className="w-px h-[18px] shrink-0" style={{ background: 'var(--on-inverse-line)' }} />
       {actions.map(([label, fn, danger]) => (
-        <button key={label} type="button" onClick={fn} className="text-[13px] hover:opacity-100 transition"
+        <button key={label} type="button" onClick={fn} className="text-[13px] shrink-0 min-h-[36px] px-1 hover:opacity-100 transition"
           style={{ color: danger ? 'rgb(var(--c-coral) / .85)' : 'var(--on-inverse-soft)' }}>{label}</button>
       ))}
-      <button type="button" onClick={onClear} className="ml-auto text-[13px]" style={{ color: 'var(--on-inverse-soft)' }}>&times;</button>
+      <button type="button" onClick={onClear} className="ml-auto shrink-0 min-h-[36px] px-2 text-[15px]" style={{ color: 'var(--on-inverse-soft)' }}>&times;</button>
     </div>
   );
 }
@@ -516,13 +516,18 @@ export function OfflineBanner({ onView }) {
 /** Hold to act (pin, select, move). 550ms, cancelled by movement. */
 export function useLongPress(onLong, ms = 550) {
   const t = _useRef(null);
+  const fired = _useRef(false);
   const clear = () => { if (t.current) { clearTimeout(t.current); t.current = null; } };
-  return (arg) => ({
-    onTouchStart: () => { clear(); t.current = setTimeout(() => { onLong(arg); if (navigator.vibrate) navigator.vibrate(10); }, ms); },
+  const handlers = (arg) => ({
+    onTouchStart: () => { clear(); fired.current = false; t.current = setTimeout(() => { fired.current = true; onLong(arg); if (navigator.vibrate) navigator.vibrate(10); }, ms); },
     onTouchEnd: clear, onTouchMove: clear, onTouchCancel: clear,
     // Swallow the menu the long press triggers; never treat a right-click as a hold.
     onContextMenu: (e) => e.preventDefault(),
+    // The click that follows a hold belongs to the hold, not to the row.
+    onClickCapture: (e) => { if (fired.current) { fired.current = false; e.preventDefault(); e.stopPropagation(); } },
   });
+  handlers.fired = fired;
+  return handlers;
 }
 
 /**

@@ -35,11 +35,13 @@ export default function WorkCalendar({ profile, onNavigate }) {
 
   useEffect(() => { load(); }, []);
   const load = async () => {
-    const [t, b] = await Promise.all([
+    const [t, pr, b] = await Promise.all([
       supabase.from('tasks').select('id, title, owner_id, due_date, status, project_id').is('parent_task_id', null).not('due_date', 'is', null).neq('status', 'done'),
+      supabase.from('crm_projects').select('id, status'),
       supabase.from('bookings').select('id, name, company, starts_at, ends_at, status, host_user_id').neq('status', 'cancelled'),
     ]);
-    setTasks(t.data || []); setBookings(b.data || []); setLoading(false);
+    const activeIds = new Set((pr.data || []).filter(x => x.status === 'active').map(x => x.id));
+    setTasks((t.data || []).filter(x => !x.project_id || activeIds.has(x.project_id))); setBookings(b.data || []); setLoading(false);
   };
 
   const grid = useMemo(() => (mode === 'month'
@@ -102,7 +104,34 @@ export default function WorkCalendar({ profile, onNavigate }) {
 
       <div className="flex-1 lg:overflow-hidden px-[14px] lg:px-6 pb-6">
         {loading ? <SkeletonList rows={4} /> : (
-          <Card className="lg:h-full flex flex-col">
+          <>
+          {/* Phone: an agenda. A month grid at 390px leaves four characters per title. */}
+          <Card className="lg:hidden flex flex-col">
+            {grid.flat().filter(c => (byDay[c.key] || []).length).map(cell => {
+              const items = byDay[cell.key] || [];
+              const isToday = cell.key === today;
+              return (
+                <div key={cell.key} className="border-b last:border-b-0" style={hair}>
+                  <div className="px-4 py-2 font-mono text-[10px] font-bold tracking-[.18em] uppercase"
+                    style={{ color: isToday ? 'rgb(var(--c-primary-deep))' : 'rgb(var(--c-dim))', background: isToday ? 'rgb(var(--c-primary) / .06)' : 'transparent' }}>
+                    {cell.date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}{isToday ? ' · today' : ''}
+                  </div>
+                  {items.map(it => {
+                    const c = CHIP[it.kind];
+                    return (
+                      <button key={it.id} onClick={() => (it.task ? onNavigate?.('task', it.task.id) : onNavigate?.('bookings'))}
+                        className="w-full px-4 py-3 flex items-center gap-2.5 text-left border-t first:border-t-0" style={hair}>
+                        <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: c.fg }} />
+                        <span className="flex-1 min-w-0 text-[15px] text-paper truncate">{it.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {grid.flat().every(c => !(byDay[c.key] || []).length) && <div className="px-4 py-8 text-center text-[14px] text-dim">Nothing dated in this {mode}.</div>}
+          </Card>
+          <Card className="hidden lg:flex lg:h-full flex-col">
             <div className="grid border-b" style={{ gridTemplateColumns: `repeat(${dayNames.length}, minmax(0,1fr))`, borderColor: 'var(--ink-line)' }}>
               {dayNames.map((d, i) => <div key={d} className={`px-3 py-[9px] font-mono text-[9px] font-bold tracking-[.18em] uppercase text-dim ${i ? 'border-l' : ''}`} style={hair}>{d}</div>)}
             </div>
@@ -136,6 +165,7 @@ export default function WorkCalendar({ profile, onNavigate }) {
               })}
             </div>
           </Card>
+          </>
         )}
       </div>
     </div>

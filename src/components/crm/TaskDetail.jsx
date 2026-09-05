@@ -30,6 +30,7 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
   const [locations, setLocations] = useState([]);
   const [deals, setDeals] = useState([]);
   const [tickets, setTickets] = useState([]);
+  const [onboardings, setOnboardings] = useState([]);
   const [activities, setActivities] = useState([]);
   const [entries, setEntries] = useState([]);
   const [attachCount, setAttachCount] = useState(0);
@@ -51,7 +52,7 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
 
   useEffect(() => { load(); }, [taskId]);
   const load = async () => {
-    const [t, st, bl, m, p, c, l, d, tk, act, te, att] = await Promise.all([
+    const [t, st, bl, m, p, c, l, d, tk, ob, act, te, att] = await Promise.all([
       supabase.from('tasks').select('*').eq('id', taskId).single(),
       supabase.from('tasks').select('*').eq('parent_task_id', taskId).order('sort_order'),
       supabase.from('tasks').select('id, title, status, phase, due_date, owner_id').eq('depends_on_id', taskId),
@@ -61,12 +62,13 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
       supabase.from('tickets').select('id, ticket_number, subject'),
+      supabase.from('onboardings').select('id, company_id, deal_id, location_id, stage'),
       supabase.from('crm_activities').select('*').eq('subject_type', 'task').eq('subject_id', taskId).order('occurred_at', { ascending: false }).limit(50),
       supabase.from('time_entries').select('*').eq('subject_type', 'task').eq('subject_id', taskId).order('started_at', { ascending: false }),
       supabase.from('attachments').select('id', { count: 'exact', head: true }).eq('subject_type', 'task').eq('subject_id', taskId),
     ]);
     setTask(t.data); setSubtasks(st.data || []); setBlocks(bl.data || []); setMembers(m.data || []); setProjects(p.data || []);
-    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setTickets(tk.data || []);
+    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setTickets(tk.data || []); setOnboardings(ob.data || []);
     setActivities(act.data || []); setEntries(te.data || []); setAttachCount(att.count || 0);
   };
 
@@ -96,10 +98,18 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
       if (type === 'location') { const l = locations.find(x => x.id === id); const c = companies.find(x => x.id === l?.company_id); return l ? { type, label: 'Site', name: l.name, companyId: c?.id, companyName: c?.name } : null; }
       if (type === 'deal') { const dl = deals.find(x => x.id === id); const c = companies.find(x => x.id === dl?.company_id); return dl ? { type, label: 'Deal', name: dl.name, companyId: c?.id, companyName: c?.name } : null; }
       if (type === 'ticket') { const tk = tickets.find(x => x.id === id); return tk ? { type, label: 'Ticket', name: `#${tk.ticket_number}`, ticket: tk } : null; }
+      // Every project here hangs off an onboarding: hop it to the venue.
+      if (type === 'onboarding') {
+        const o = onboardings.find(x => x.id === id);
+        if (!o) return null;
+        const l = locations.find(x => x.id === o.location_id);
+        const c = companies.find(x => x.id === (o.company_id || l?.company_id));
+        return { type: l ? 'location' : 'company', id: l?.id || c?.id, label: l ? 'Site' : 'Company', name: l?.name || c?.name || 'Onboarding', companyId: c?.id, companyName: c?.name };
+      }
       return null;
     };
     return resolve(task?.subject_type, task?.subject_id) || (project ? resolve(project.subject_type, project.subject_id) : null);
-  }, [task, project, companies, locations, deals, tickets]);
+  }, [task, project, companies, locations, deals, tickets, onboardings]);
 
   const feed = useMemo(() => {
     const rows = [];

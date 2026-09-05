@@ -134,9 +134,16 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
     if (f.assignee === 'me') r = r.filter(t => t.owner_id === profile.id);
     if (f.assignee === 'unassigned') r = r.filter(t => !t.owner_id);
     if (f.overdueOnly) r = r.filter(t => dueBucket(t) === 'overdue' && t.status !== 'done');
-    if (f.search) { const q = f.search.toLowerCase(); r = r.filter(t => t.title.toLowerCase().includes(q)); }
+    if (f.search) {
+      // Search what the screen shows: the title, the venue, the project and the owner,
+      // and keep a parent whose subtask matches.
+      const q = f.search.toLowerCase();
+      const hay = (t) => [t.title, projects.find(p => p.id === t.project_id)?.name, projectCustomer(projects.find(p => p.id === t.project_id))?.site,
+        linkOf(t)?.name, nameOf(t.owner_id)].filter(Boolean).join(' ').toLowerCase();
+      r = r.filter(t => hay(t).includes(q) || (childMap[t.id] || []).some(k => k.title.toLowerCase().includes(q)));
+    }
     return r;
-  }, [topLevel, f.status, f.assignee, f.overdueOnly, f.search, profile.id]);
+  }, [topLevel, f.status, f.assignee, f.overdueOnly, f.search, profile.id, projects, onboardings, locations, companies, deals, members, childMap]); // eslint-disable-line react-hooks/exhaustive-deps
   const groups = useMemo(() => groupTasks(filtered, groupBy, { projects, members }), [filtered, groupBy, projects, members]);
   const visibleRows = useMemo(() => groups.flatMap(g => collapsed[g.key] ? [] : (g.sub ? g.sub.flatMap(s => s.tasks) : g.tasks)), [groups, collapsed]);
 
@@ -231,9 +238,12 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
         <span className="relative">
           <LabelledPill label="Group:" value={GROUPS.find(g => g[0] === groupBy)?.[1] || 'Project'} onClick={() => setGroupMenu(v => !v)} />
           {groupMenu && (
-            <div className="absolute left-0 top-full mt-1 z-40 min-w-[160px] menu-surface rounded-[10px] py-1">
-              {GROUPS.map(([k, l]) => <button key={k} onClick={() => { setGroupBy(k); setGroupMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${groupBy === k ? 'font-semibold' : ''}`}>{l}</button>)}
-            </div>
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setGroupMenu(false)} />
+              <div className="absolute left-0 top-full mt-1 z-40 min-w-[160px] menu-surface rounded-[10px] py-1">
+                {GROUPS.map(([k, l]) => <button key={k} onClick={() => { setGroupBy(k); setGroupMenu(false); }} className={`w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 ${groupBy === k ? 'font-semibold' : ''}`}>{l}</button>)}
+              </div>
+            </>
           )}
         </span>
         <FilterPill on={f.status !== 'open'} tone="ink" onClick={() => setF({ status: f.status === 'open' ? 'all' : 'open' })}>{f.status === 'open' ? 'Open' : f.status === 'all' ? 'All' : f.status.replace('_', ' ')}</FilterPill>
@@ -258,7 +268,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
             </div>
           ) : (
             <DashedAdd onClick={() => { setAdding(true); setTimeout(() => addRef.current?.focus(), 30); }}>
-              Add a task{firstProject ? ` to ${firstProject.name}` : ''} — <span className="font-mono text-[13px]">@peter mon !high</span>
+              Add a task{firstProject ? ` to ${projectCustomer(firstProject)?.site || firstProject.name}` : ''} — <span className="font-mono text-[13px]">@peter mon !high</span>
             </DashedAdd>
           )}
         </div>
@@ -301,10 +311,13 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
                   className="group relative flex items-start sm:items-center gap-3 pl-4 pr-4 py-[11px] border-b"
                   style={{ borderColor: 'var(--ink-soft)', borderLeft: isBlocked ? '3px solid rgb(var(--c-coral))' : '3px solid transparent',
                     background: isActive || focused ? 'rgb(var(--c-primary) / .05)' : 'transparent' }}>
-                  {/* Hover checkbox on the left edge — the only selection control. */}
-                  <input type="checkbox" checked={sel.has(t.id)} onChange={() => setSel(s => { const n = new Set(s); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return n; })}
-                    className={`absolute -left-[2px] top-1/2 -translate-y-1/2 accent-ember w-[14px] h-[14px] transition-opacity ${sel.has(t.id) || sel.size > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                    style={{ marginLeft: -12 }} />
+                  {/* In the row, not outside it: the Card clips its overflow, so an
+                      absolutely placed box on the left edge could never be tapped. */}
+                  <label className={`shrink-0 items-center justify-center w-6 h-6 -ml-1 cursor-pointer ${sel.size > 0 ? 'flex' : 'hidden group-hover:flex'}`}
+                    onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={sel.has(t.id)} onChange={() => setSel(s => { const n = new Set(s); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return n; })}
+                      className="accent-ember w-[15px] h-[15px]" />
+                  </label>
                   <Check done={isDone} active={isActive} onClick={() => canWrite && toggleDone(t)} disabled={!canWrite} />
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onSelect?.(t.id)}>
                     <div className={`text-[15px] ${isDone ? 'text-dim line-through' : 'text-paper font-medium'} truncate sm:truncate`}>{t.title}</div>
@@ -312,6 +325,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
                       <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
                         {second && <span className="text-[11px] truncate" style={{ color: 'rgb(var(--c-coral))' }}>{second}</span>}
                         {link && <Tag tone={link.tone}>{link.label}{link.name ? ` ${link.name}` : ''}</Tag>}
+                        {!link && groupBy !== 'project' && projectCustomer(projects.find(p => p.id === t.project_id))?.site && <Tag>{projectCustomer(projects.find(p => p.id === t.project_id)).site}</Tag>}
                         {extras.length > 0 && <span className="text-[11px] text-dim truncate">{extras.join(' · ')}</span>}
                       </div>
                     )}
@@ -331,7 +345,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
                   </span>
                   <Avatar id={t.owner_id} name={nameOf(t.owner_id)} />
                 </div>
-                {kids.map(k => (
+                {kids.filter(k => (f.status === 'all' ? true : f.status === 'open' ? k.status !== 'done' : k.status === f.status)).map(k => (
                   <div key={k.id} className="flex items-center gap-3 pl-[46px] pr-4 py-2 border-b" style={{ borderColor: 'var(--ink-soft)' }}>
                     <Check size={16} done={k.status === 'done'} onClick={() => canWrite && toggleDone(k)} disabled={!canWrite} />
                     <span className={`flex-1 text-[13px] cursor-pointer ${k.status === 'done' ? 'text-dim line-through' : 'text-paper-soft'}`} onClick={() => onSelect?.(k.id)}>{k.title}</span>
