@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { pending, remove, flush, isOnline, runOrQueue } from '../../lib/offlineQueue';
-import { Card, Pill, Mono, PrimaryBtn, GhostBtn, SkeletonList, OfflineBanner, fmtRel } from './ui.jsx';
+import { useStickyState } from '../../lib/stickyState';
+import InboxPanel from './InboxPanel.jsx';
+import { Card, Pill, Mono, PrimaryBtn, GhostBtn, Segmented, SkeletonList, OfflineBanner, fmtRel } from './ui.jsx';
 
 // The phone Inbox (screen 18): what needs you, what you have read, and anything
 // written while offline that is still waiting to send. Approvals come from the
@@ -15,7 +17,10 @@ const KIND = {
   system:     { label: 'System', tone: 'muted' },
 };
 
-export default function MobileInbox({ profile, onNavigate, onOpenMail }) {
+export default function MobileInbox({ profile, onNavigate }) {
+  // Tapping Inbox lands on the shared mailbox, the way it always has. The
+  // notifications, approvals and the offline queue sit behind the second tab.
+  const [tab, setTab] = useStickyState('inbox.tab', 'mail');
   const [items, setItems] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [queue, setQueue] = useState(pending());
@@ -72,15 +77,14 @@ export default function MobileInbox({ profile, onNavigate, onOpenMail }) {
     <div className="h-full flex flex-col" style={{ background: 'var(--scene-bg)' }}>
       <OfflineBanner />
       <div className="px-[18px] pt-[14px] pb-2.5">
-        <div className="flex items-start gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="font-display text-[23px] font-extrabold text-paper">Inbox</div>
-            <Mono className="!tracking-[.18em] uppercase">{needCount} need you · {read.length} read</Mono>
-          </div>
-          {/* The shared email inbox still lives here, one tap away. */}
-          {onOpenMail && <button onClick={onOpenMail} className="px-3 py-[7px] rounded-[10px] border text-[13px] font-semibold text-paper shrink-0" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>Email</button>}
+        <div className="font-display text-[23px] font-extrabold text-paper">Inbox</div>
+        <Mono className="!tracking-[.18em] uppercase">{tab === 'mail' ? 'Shared mailbox' : `${needCount} need you · ${read.length} read`}</Mono>
+        <div className="mt-2.5">
+          <Segmented value={tab} options={[['mail', 'Mail'], ['alerts', `Needs you${needCount ? ` ${needCount}` : ''}`]]} onChange={setTab} />
         </div>
       </div>
+      {tab === 'mail' && <div className="flex-1 min-h-0"><InboxPanel profile={profile} onNavigate={onNavigate} /></div>}
+      {tab === 'alerts' && (
       <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))] flex flex-col gap-3">
         {loading ? <SkeletonList rows={4} /> : (
           <>
@@ -128,6 +132,7 @@ export default function MobileInbox({ profile, onNavigate, onOpenMail }) {
           </>
         )}
       </div>
+      )}
     </div>
   );
 }

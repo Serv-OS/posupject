@@ -285,10 +285,8 @@ export default function Shell({ session }) {
       // bad day, the old screen is one nav click away rather than a revert.
       case 'mywork':
         return <MyWork profile={profile} onNavigate={navigateTo} />;
-      case 'inbox_mail':
-        return <InboxPanel profile={profile} onNavigate={navigateTo} />;
       case 'inbox':
-        if (isMobile) return <MobileInbox profile={profile} onNavigate={navigateTo} onOpenMail={() => setView('inbox_mail')} />;
+        if (isMobile) return <MobileInbox profile={profile} onNavigate={navigateTo} />;
         return <InboxPanel profile={profile} onNavigate={navigateTo} />;
       case 'calendar':
         return <CalendarPanel profile={profile} onNavigate={navigateTo} />;

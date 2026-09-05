@@ -23,6 +23,8 @@ import {
 
 export const CORE = [
   ['today', 'Today', Home],
+  // The shared mailbox is how the day starts here; it stays top level, as it was.
+  ['inbox', 'Inbox', Mail],
   ['tasks', 'Tasks', CheckSquare],
   ['projects', 'Projects', Folder],
   ['work_board', 'Board', KanbanSquare],
@@ -32,7 +34,7 @@ export const CORE = [
 ];
 
 const CRM = [
-  ['inbox', 'Inbox', Mail], ['tickets', 'Tickets', Ticket], ['deals', 'Deals', Banknote], ['companies', 'Companies', Building2],
+  ['deals', 'Deals', Banknote], ['companies', 'Companies', Building2],
   ['contacts', 'Contacts', User], ['locations', 'Locations', MapPin], ['leads', 'Leads', Target],
   ['chat', 'Chat', MessageSquare], ['calendar', 'Meetings', Calendar],
 ];
@@ -46,7 +48,7 @@ export const COLLAPSIBLE = [
     ['onboarding', 'Onboarding', Rocket], ['mywork', 'My Work (old)', Home],
   ] },
   { id: 'support', label: 'Support', items: [
-    ['calls', 'Call Log', PhoneCall], ['forms', 'Forms', ClipboardList], ['templates', 'Templates', FileText],
+    ['tickets', 'Tickets', Ticket], ['calls', 'Call Log', PhoneCall], ['forms', 'Forms', ClipboardList], ['templates', 'Templates', FileText],
   ] },
   { id: 'finance', label: 'Finance', items: [
     ['bills', 'Bills', Wallet], ['expenses', 'Expenses', Receipt], ['what_i_owe', 'What I owe', Banknote],
@@ -83,12 +85,12 @@ const ACTIVE_MAP = {
   company_detail: 'companies', contact_detail: 'contacts', location_detail: 'locations',
   lead_detail: 'leads', deal_detail: 'deals', quote_detail: 'quotes',
   onboarding_detail: 'onboarding', project_detail: 'projects', task_detail: 'tasks',
-  ticket_detail: 'tickets', inbox_mail: 'inbox', form_detail: 'forms', feature_request_detail: 'feature_requests',
+  ticket_detail: 'tickets', form_detail: 'forms', feature_request_detail: 'feature_requests',
   release_detail: 'releases', invoice_detail: 'invoices',
   bill_detail: 'bills', expense_detail: 'expenses', work: 'work_board',
 };
 
-const DEFAULT_GROUPS = { appbuild: false, crm: true, sales: false, delivery: false, support: false, finance: false, inventory: false, product: false, workforce: false, insights: false };
+const DEFAULT_GROUPS = { appbuild: false, crm: true, sales: false, delivery: false, support: true, finance: false, inventory: false, product: false, workforce: false, insights: false };
 
 const INDEX = [
   ...CORE.map(([key, label, Icon]) => ({ key, label, Icon, section: 'Work' })),
@@ -164,10 +166,10 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
   const logoUrl = theme === 'dark' ? (logos.dark || logos.light) : (logos.light);
 
   const [open, setOpen] = useState(() => {
-    try { return { ...DEFAULT_GROUPS, ...(JSON.parse(localStorage.getItem('servos_nav_groups_v2')) || {}) }; }
+    try { return { ...DEFAULT_GROUPS, ...(JSON.parse(localStorage.getItem('servos_nav_groups_v3')) || {}) }; }
     catch { return DEFAULT_GROUPS; }
   });
-  useEffect(() => { try { localStorage.setItem('servos_nav_groups_v2', JSON.stringify(open)); } catch { /* ignore */ } }, [open]);
+  useEffect(() => { try { localStorage.setItem('servos_nav_groups_v3', JSON.stringify(open)); } catch { /* ignore */ } }, [open]);
   const toggle = (id) => setOpen(o => ({ ...o, [id]: !o[id] }));
 
   const [pinned, setPinned] = usePersist('servos_nav_pins', []);
