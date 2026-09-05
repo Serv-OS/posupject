@@ -6,7 +6,7 @@ import { parseQuickAdd, quickAddRow } from '../../lib/quickAdd';
 import {
   Avatar, Check, StatusPill, PriorityPill, Tag, LinkChip, SectionLabel, MetaLabel, Mono, PageTitle,
   PrimaryBtn, GhostBtn, Segmented, LabelledPill, FilterPill, Card, DashedAdd, DarkBar, SkeletonList, EmptyState,
-  StatusMenu, useLongPress, hair, dueLabel, fmtShort, fmtHM,
+  StatusMenu, MobileSheet, SheetRow, STATUS_LABEL, STATUS_ORDER, useLongPress, hair, dueLabel, fmtShort, fmtHM,
 } from './ui.jsx';
 
 // Screen 02 — the grouped list.
@@ -31,6 +31,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
   const [deals, setDeals] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [onboardings, setOnboardings] = useState([]);
+  const [statusSheet, setStatusSheet] = useState(null); // phone: status is a sheet, not a clipped menu
   const [attachCounts, setAttachCounts] = useState({});
   const [tracked, setTracked] = useState({});
   const [loading, setLoading] = useState(true);
@@ -208,10 +209,10 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--scene)' }}>
       {/* Header */}
-      <div className="px-6 pt-5 flex items-start gap-4">
-        <div className="flex-1 min-w-0">
+      <div className="px-[18px] lg:px-6 pt-3 lg:pt-5 flex items-start gap-3 lg:gap-4 flex-wrap lg:flex-nowrap">
+        <div className="flex-1 min-w-0 basis-full sm:basis-auto">
           <PageTitle className="mb-1">Tasks</PageTitle>
-          <MetaLabel>{counts.open} open · {counts.overdue} overdue · {counts.blocked} blocked · {counts.done} done</MetaLabel>
+          <MetaLabel className="block truncate">{counts.open} open · {counts.overdue} overdue · {counts.blocked} blocked · {counts.done} done</MetaLabel>
         </div>
         <div className="flex gap-2 items-center shrink-0">
           <GhostBtn onClick={() => onNavigate?.('project_templates')}>Import from template</GhostBtn>
@@ -297,7 +298,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
             return (
               <div key={t.id}>
                 <div onMouseEnter={() => setFocus(t.id)} {...holdSelect(t.id)}
-                  className="group relative flex items-center gap-3 pl-4 pr-4 py-[11px] border-b"
+                  className="group relative flex items-start sm:items-center gap-3 pl-4 pr-4 py-[11px] border-b"
                   style={{ borderColor: 'var(--ink-soft)', borderLeft: isBlocked ? '3px solid rgb(var(--c-coral))' : '3px solid transparent',
                     background: isActive || focused ? 'rgb(var(--c-primary) / .05)' : 'transparent' }}>
                   {/* Hover checkbox on the left edge — the only selection control. */}
@@ -306,7 +307,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
                     style={{ marginLeft: -12 }} />
                   <Check done={isDone} active={isActive} onClick={() => canWrite && toggleDone(t)} disabled={!canWrite} />
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onSelect?.(t.id)}>
-                    <div className={`text-[15px] truncate ${isDone ? 'text-dim line-through' : 'text-paper font-medium'}`}>{t.title}</div>
+                    <div className={`text-[15px] ${isDone ? 'text-dim line-through' : 'text-paper font-medium'} truncate sm:truncate`}>{t.title}</div>
                     {(second || link || extras.length > 0) && (
                       <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
                         {second && <span className="text-[11px] truncate" style={{ color: 'rgb(var(--c-coral))' }}>{second}</span>}
@@ -314,10 +315,17 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
                         {extras.length > 0 && <span className="text-[11px] text-dim truncate">{extras.join(' · ')}</span>}
                       </div>
                     )}
+                    {/* Phone: the chips go UNDER the title. Kept on one line they
+                        left the title exactly zero pixels wide. */}
+                    <div className="sm:hidden flex items-center gap-2 mt-1.5 flex-wrap">
+                      {due.text && <Mono tone={due.tone === 'coral' ? 'coral' : due.tone === 'primary' ? 'primary' : 'dim'} bold={due.tone === 'coral'}>{due.text}</Mono>}
+                      <PriorityPill priority={t.priority} />
+                      <span onClick={e => { e.stopPropagation(); if (canWrite) setStatusSheet(t); }}><StatusPill status={t.status} caret={false} /></span>
+                    </div>
                   </div>
-                  <Mono tone={due.tone === 'coral' ? 'coral' : due.tone === 'primary' ? 'primary' : 'dim'} bold={due.tone === 'coral' || due.tone === 'primary'}>{due.text}</Mono>
-                  <PriorityPill priority={t.priority} />
-                  <span className="relative">
+                  <span className="hidden sm:inline-flex"><Mono tone={due.tone === 'coral' ? 'coral' : due.tone === 'primary' ? 'primary' : 'dim'} bold={due.tone === 'coral' || due.tone === 'primary'}>{due.text}</Mono></span>
+                  <span className="hidden sm:inline-flex"><PriorityPill priority={t.priority} /></span>
+                  <span className="relative hidden sm:inline-flex">
                     <StatusPill status={t.status} onClick={canWrite ? () => setMenuFor(menuFor === t.id ? null : t.id) : undefined} />
                     {menuFor === t.id && <StatusMenu current={t.status} onPick={(s) => setStatus(t, s)} onClose={() => setMenuFor(null)} />}
                   </span>
@@ -337,26 +345,41 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
           const projTasks = groupBy === 'project' && g.key !== '__none' ? allTopLevel.filter(t => t.project_id === g.key) : g.tasks;
           const total = projTasks.length, doneN = projTasks.filter(t => t.status === 'done').length;
           const pct = total ? Math.round((doneN / total) * 100) : 0;
+          const goLive = (() => {
+            if (!due || proj?.status !== 'active') return null;
+            const days = Math.round((new Date(proj.due_date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
+            // A date already gone is late, not a go-live to look forward to.
+            if (days < 0) return <Mono tone="coral" bold>{`Due ${fmtShort(proj.due_date)} \u00b7 ${-days}d late`}</Mono>;
+            return <Mono tone={days <= 14 ? 'coral' : 'dim'} bold={days <= 14}>{days <= 14 ? `Go live ${fmtShort(proj.due_date)}` : `Due ${fmtShort(proj.due_date)}`}</Mono>;
+          })();
+          const stats = (<>
+            <Mono tone="muted">{doneN}/{total} done</Mono>
+            {g.progress.blocked > 0 && <Mono tone="coral" bold>{g.progress.blocked} blocked</Mono>}
+            {goLive}
+          </>);
           return (
             <Card key={g.key}>
-              <div className="px-4 py-3 flex items-center gap-2.5 border-b" style={hair}>
-                <button onClick={() => setCollapsed(c => ({ ...c, [g.key]: !c[g.key] }))} className="text-[11px] text-dim">{hidden ? '▸' : '▾'}</button>
-                <span className="text-[15px] font-bold text-paper truncate">{customer?.site || g.label}</span>
-                {customer?.company && <Tag>{customer.company}</Tag>}
-                {customer?.site && <Mono tone="muted" className="truncate max-w-[200px]">{g.label}</Mono>}
-                {proj?.owner_id && <Avatar id={proj.owner_id} name={nameOf(proj.owner_id)} size={20} />}
-                <div className="w-[110px] h-[6px] rounded-full overflow-hidden shrink-0" style={{ background: 'var(--ink-line)' }}>
-                  <div className="h-full" style={{ width: `${pct}%`, background: 'rgb(var(--c-primary))' }} />
+              {/* Two rows on a phone: who it is for, then the numbers. One row on
+                  a desktop. Kept on one line the customer name lost to the chips. */}
+              <div className="px-4 py-3 border-b" style={hair}>
+                <div className="flex items-center gap-2.5">
+                  <button onClick={() => setCollapsed(c => ({ ...c, [g.key]: !c[g.key] }))} aria-label={hidden ? 'Expand' : 'Collapse'}
+                    className="w-8 h-8 -my-1 -ml-1.5 shrink-0 flex items-center justify-center text-[13px] text-dim hover:text-paper">{hidden ? '\u25b8' : '\u25be'}</button>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-bold text-paper truncate">{customer?.site || g.label}</span>
+                    <span className="block sm:hidden text-[11px] text-dim truncate">{[customer?.company, customer?.site ? g.label : null].filter(Boolean).join(' \u00b7 ')}</span>
+                  </span>
+                  <span className="hidden sm:contents">
+                    {customer?.company && <Tag>{customer.company}</Tag>}
+                    {customer?.site && <Mono tone="muted" className="truncate max-w-[200px]">{g.label}</Mono>}
+                  </span>
+                  {proj?.owner_id && <Avatar id={proj.owner_id} name={nameOf(proj.owner_id)} size={20} />}
+                  <div className="hidden sm:block w-[110px] h-[6px] rounded-full overflow-hidden shrink-0" style={{ background: 'var(--ink-line)' }}>
+                    <div className="h-full" style={{ width: `${pct}%`, background: 'rgb(var(--c-primary))' }} />
+                  </div>
+                  <span className="hidden sm:contents">{stats}</span>
                 </div>
-                <Mono tone="muted">{doneN}/{total} done</Mono>
-                {g.progress.blocked > 0 && <Mono tone="coral" bold>{g.progress.blocked} blocked</Mono>}
-                {due && proj?.status === 'active' && (() => {
-                  // Within a fortnight the go-live is the thing to read; further out it is a date.
-                  const days = Math.round((new Date(proj.due_date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
-                  // A date already gone is late, not a go-live to look forward to.
-                  if (days < 0) return <Mono tone="coral" bold>{`Due ${fmtShort(proj.due_date)} · ${-days}d late`}</Mono>;
-                  return <Mono tone={days <= 14 ? 'coral' : 'dim'} bold={days <= 14}>{days <= 14 ? `Go live ${fmtShort(proj.due_date)}` : `Due ${fmtShort(proj.due_date)}`}</Mono>;
-                })()}
+                <div className="sm:hidden flex items-center gap-2.5 flex-wrap mt-1.5 pl-[38px]">{stats}</div>
               </div>
               {!hidden && (g.sub
                 ? g.sub.map(s => (
@@ -371,6 +394,13 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
         })}
       </div>
 
+      {statusSheet && (
+        <MobileSheet title={statusSheet.title} sub="Set status" onClose={() => setStatusSheet(null)}>
+          {STATUS_ORDER.map(st => (
+            <SheetRow key={st} active={statusSheet.status === st} onClick={() => { setStatus(statusSheet, st); setStatusSheet(null); }}>{STATUS_LABEL[st]}</SheetRow>
+          ))}
+        </MobileSheet>
+      )}
       {sel.size > 0 && canWrite && (
         <div className="px-[14px] lg:px-6 pb-4 sticky z-30" style={{ bottom: 'calc(var(--tabbar-h) + env(safe-area-inset-bottom))' }}>
           <DarkBar count={sel.size} onClear={() => setSel(new Set())}
