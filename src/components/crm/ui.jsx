@@ -248,7 +248,9 @@ export function LensPill({ on, children, count, onClick }) {
 /** The card: card-bg, bdr, 16 radius, shadow-card. `panel` swaps to panel-bg with no shadow. */
 export function Card({ children, className = '', panel, style, onClick, coral }) {
   return (
-    <div onClick={onClick} className={`rounded-[16px] border overflow-hidden ${onClick ? 'cursor-pointer' : ''} ${className}`}
+    /* shrink-0: overflow-hidden zeroes a flex item's automatic minimum size, so
+       inside a flex-column scroller a Card would be squashed and clip its rows. */
+    <div onClick={onClick} className={`rounded-[16px] border overflow-hidden shrink-0 ${onClick ? 'cursor-pointer' : ''} ${className}`}
       style={{ background: panel ? 'var(--panel-bg)' : 'var(--card-bg)',
         borderColor: coral ? 'rgb(var(--c-coral) / .28)' : 'var(--bdr)',
         boxShadow: panel ? 'none' : 'var(--shadow-card)', ...style }}>
@@ -528,7 +530,7 @@ export function useLongPress(onLong, ms = 550) {
  * real table with the first column pinned. Long-press a row for selection.
  *
  * columns: [{ key, label, render?(row) → node, align?: 'right', mono?: bool, pinned?: bool }]
- * card:    (row) → { title, amount?, chip?: { text, tone }, meta?: string, tone?: 'coral'|'amber' }
+ * card:    (row) → { title, amount?, chip?: { text, tone }, meta?: string, tone?: 'coral'|'amber', action?: node }
  */
 export function MobileTable({ storageKey, rows, columns, card, onRow, rowKey = (r) => r.id, empty = 'Nothing here yet.', selectable, bulk }) {
   const [mode, setMode] = _useState(() => { try { return localStorage.getItem(`${storageKey}.mode`) || 'cards'; } catch { return 'cards'; } });
@@ -566,6 +568,7 @@ export function MobileTable({ storageKey, rows, columns, card, onRow, rowKey = (
                   {selectable && selected.size > 0 && <Check done={on} size={18} />}
                   <span className="text-[15px] font-semibold flex-1 min-w-0 truncate text-paper">{c.title}</span>
                   {c.amount != null && <span className="font-mono text-[14px] font-bold text-paper">{c.amount}</span>}
+                  {c.action && <span onClick={e => e.stopPropagation()} className="shrink-0">{c.action}</span>}
                 </div>
                 <div className="flex items-center gap-2 mt-1 min-w-0">
                   {c.chip && <Pill tone={c.chip.tone}>{c.chip.text}</Pill>}

@@ -12,6 +12,7 @@ import WorkBoard from '../components/crm/WorkBoard.jsx';
 import BillsPanel from '../components/finance/BillsPanel.jsx';
 import QuoteBuilder from '../components/crm/QuoteBuilder.jsx';
 import MobileInbox from '../components/crm/MobileInbox.jsx';
+import CallLogPanel from '../components/crm/CallLogPanel.jsx';
 import LocationDetail from '../components/crm/LocationDetail.jsx';
 import MobileNav from '../components/MobileNav.jsx';
 import QuickAddCommand from '../components/crm/QuickAddCommand.jsx';
@@ -36,6 +37,7 @@ function App() {
         {v === 'board' && <WorkBoard profile={P} onNavigate={nav} initialTab="board" />}
         {v === 'bills' && <BillsPanel profile={P} onNavigate={nav} />}
         {v === 'quote' && <QuoteBuilder quoteId="q1" profile={P} onClose={nav} onNavigate={nav} />}
+        {v === 'calls' && <CallLogPanel profile={P} onNavigate={nav} />}
         {v === 'inbox' && <MobileInbox profile={P} onNavigate={nav} />}
         {v === 'site' && <LocationDetail locationId="l1" profile={P} onClose={nav} onNavigate={nav} onCreateLead={nav} />}
         </div>

@@ -30,6 +30,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
   const [locations, setLocations] = useState([]);
   const [deals, setDeals] = useState([]);
   const [tickets, setTickets] = useState([]);
+  const [onboardings, setOnboardings] = useState([]);
   const [attachCounts, setAttachCounts] = useState({});
   const [tracked, setTracked] = useState({});
   const [loading, setLoading] = useState(true);
@@ -52,7 +53,7 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
 
   useEffect(() => { load(); }, []);
   const load = async () => {
-    const [t, m, p, c, l, d, tk] = await Promise.all([
+    const [t, m, p, c, l, d, tk, ob] = await Promise.all([
       supabase.from('tasks').select('*').order('sort_order'),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('crm_projects').select('*').order('name'),
@@ -60,9 +61,10 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
       supabase.from('locations').select('id, name, company_id'),
       supabase.from('deals').select('id, name, company_id'),
       supabase.from('tickets').select('id, ticket_number, subject'),
+      supabase.from('onboardings').select('id, company_id, deal_id, location_id'),
     ]);
     setAllTasks(t.data || []); setMembers(m.data || []); setProjects(p.data || []);
-    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setTickets(tk.data || []);
+    setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setTickets(tk.data || []); setOnboardings(ob.data || []);
     setLoading(false);
     // The second line's extras. Two cheap queries, not one per row.
     const ids = (t.data || []).map(x => x.id);
@@ -80,7 +82,11 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
   // ── Lookups ────────────────────────────────────────────────────────────────
   const nameOf = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email.split('@')[0]) : ''; };
   const childMap = useMemo(() => { const m = {}; for (const t of allTasks) if (t.parent_task_id) (m[t.parent_task_id] ||= []).push(t); return m; }, [allTasks]);
-  const topLevel = useMemo(() => allTasks.filter(t => !t.parent_task_id), [allTasks]);
+  // A closed project's leftovers are not open work; counting them made every
+  // handed-over onboarding read as overdue forever.
+  const activeProjectIds = useMemo(() => new Set(projects.filter(p => p.status === 'active').map(p => p.id)), [projects]);
+  const topLevel = useMemo(() => allTasks.filter(t => !t.parent_task_id && (!t.project_id || activeProjectIds.has(t.project_id))), [allTasks, activeProjectIds]);
+  const allTopLevel = useMemo(() => allTasks.filter(t => !t.parent_task_id), [allTasks]);
   const linkOf = (t) => {
     const resolve = (type, id) => {
       if (!type || !id) return null;
@@ -88,15 +94,34 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
       if (type === 'location') { const l = locations.find(x => x.id === id); return l ? { label: 'Site', name: l.name, tone: 'ink', companyId: l.company_id } : null; }
       if (type === 'deal') { const dl = deals.find(x => x.id === id); return dl ? { label: 'Deal', name: dl.name, tone: 'primary', companyId: dl.company_id } : null; }
       if (type === 'ticket') { const tk = tickets.find(x => x.id === id); return tk ? { label: 'Ticket', name: `#${tk.ticket_number}`, tone: 'primary' } : null; }
+      if (type === 'onboarding') {
+        const o = onboardings.find(x => x.id === id);
+        const l = locations.find(x => x.id === o?.location_id);
+        const c = companies.find(x => x.id === (o?.company_id || l?.company_id));
+        return { label: 'Onboarding', name: l?.name || c?.name || '', tone: 'ink', companyId: c?.id };
+      }
       return { label: SUBJECT_LABEL[type] || type, name: '', tone: 'ink' };
     };
     return resolve(t.subject_type, t.subject_id);
   };
+  // Who the work is for, and where. Every project here hangs off an onboarding,
+  // so without that hop fourteen jobs all read as one template name.
   const projectCustomer = (p) => {
+    const of = (companyId, siteId, dealId) => {
+      const site = locations.find(x => x.id === siteId);
+      const deal = deals.find(x => x.id === dealId);
+      const company = companies.find(x => x.id === (companyId || site?.company_id || deal?.company_id));
+      const name = site?.name || deal?.name || company?.name || null;
+      return name ? { site: name, company: company && company.name !== name ? company.name : null } : null;
+    };
     if (!p?.subject_type || !p?.subject_id) return null;
-    if (p.subject_type === 'company') return companies.find(x => x.id === p.subject_id)?.name;
-    if (p.subject_type === 'location') { const l = locations.find(x => x.id === p.subject_id); return companies.find(x => x.id === l?.company_id)?.name || l?.name; }
-    if (p.subject_type === 'deal') { const dl = deals.find(x => x.id === p.subject_id); return companies.find(x => x.id === dl?.company_id)?.name || dl?.name; }
+    if (p.subject_type === 'company') return of(p.subject_id);
+    if (p.subject_type === 'location') return of(null, p.subject_id);
+    if (p.subject_type === 'deal') return of(null, null, p.subject_id);
+    if (p.subject_type === 'onboarding') {
+      const o = onboardings.find(x => x.id === p.subject_id);
+      return o ? of(o.company_id, o.location_id, o.deal_id) : null;
+    }
     return null;
   };
 
@@ -308,23 +333,29 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
               </div>
             );
           };
-          const total = g.tasks.length, doneN = g.progress.done;
+          // Progress is the project's real state; the list above it is filtered.
+          const projTasks = groupBy === 'project' && g.key !== '__none' ? allTopLevel.filter(t => t.project_id === g.key) : g.tasks;
+          const total = projTasks.length, doneN = projTasks.filter(t => t.status === 'done').length;
+          const pct = total ? Math.round((doneN / total) * 100) : 0;
           return (
             <Card key={g.key}>
               <div className="px-4 py-3 flex items-center gap-2.5 border-b" style={hair}>
                 <button onClick={() => setCollapsed(c => ({ ...c, [g.key]: !c[g.key] }))} className="text-[11px] text-dim">{hidden ? '▸' : '▾'}</button>
-                <span className="text-[15px] font-bold text-paper truncate">{g.label}</span>
-                {customer && <Tag>{customer}</Tag>}
+                <span className="text-[15px] font-bold text-paper truncate">{customer?.site || g.label}</span>
+                {customer?.company && <Tag>{customer.company}</Tag>}
+                {customer?.site && <Mono tone="muted" className="truncate max-w-[200px]">{g.label}</Mono>}
+                {proj?.owner_id && <Avatar id={proj.owner_id} name={nameOf(proj.owner_id)} size={20} />}
                 <div className="w-[110px] h-[6px] rounded-full overflow-hidden shrink-0" style={{ background: 'var(--ink-line)' }}>
-                  <div className="h-full" style={{ width: `${g.progress.pct}%`, background: 'rgb(var(--c-primary))' }} />
+                  <div className="h-full" style={{ width: `${pct}%`, background: 'rgb(var(--c-primary))' }} />
                 </div>
                 <Mono tone="muted">{doneN}/{total} done</Mono>
                 {g.progress.blocked > 0 && <Mono tone="coral" bold>{g.progress.blocked} blocked</Mono>}
                 {due && proj?.status === 'active' && (() => {
                   // Within a fortnight the go-live is the thing to read; further out it is a date.
                   const days = Math.round((new Date(proj.due_date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
-                  const soon = days <= 14;
-                  return <Mono tone={soon ? 'coral' : 'dim'} bold={soon}>{soon ? `Go live ${fmtShort(proj.due_date)}` : `Due ${fmtShort(proj.due_date)}`}</Mono>;
+                  // A date already gone is late, not a go-live to look forward to.
+                  if (days < 0) return <Mono tone="coral" bold>{`Due ${fmtShort(proj.due_date)} · ${-days}d late`}</Mono>;
+                  return <Mono tone={days <= 14 ? 'coral' : 'dim'} bold={days <= 14}>{days <= 14 ? `Go live ${fmtShort(proj.due_date)}` : `Due ${fmtShort(proj.due_date)}`}</Mono>;
                 })()}
               </div>
               {!hidden && (g.sub

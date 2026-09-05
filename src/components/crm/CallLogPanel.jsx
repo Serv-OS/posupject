@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { PhoneCall, PhoneIncoming, PhoneOutgoing, PhoneMissed, Voicemail } from 'lucide-react';
 import CallButton from '../CallButton.jsx';
 
-import { digits10, contactForCall } from '../../lib/callMatch';
+import { callPartyNumber, digits10, contactForCall } from '../../lib/callMatch';
 const fmtWhen = (d) => new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtDur = (s) => { const n = Number(s) || 0; return n >= 60 ? `${Math.floor(n / 60)}m ${n % 60}s` : `${n}s`; };
 
@@ -136,18 +136,21 @@ export default function CallLogPanel({ profile, onNavigate }) {
         <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
           <MobileTable storageKey="calls.mobile" rows={filtered} onRow={(a) => { if (a.contact_id) onNavigate?.('contact', a.contact_id); else if (a.subject_type === 'ticket' && a.subject_id) onNavigate?.('ticket', a.subject_id); }} empty="No calls match these filters."
             columns={[
-              { key: 'who', label: 'Who', pinned: true, render: (a) => { const ct = contactOf(a); const md = a.channel_metadata || {}; return ct ? [ct.first_name, ct.last_name].filter(Boolean).join(' ') : (a.direction === 'inbound' ? md.from_number : (md.to_number || md.from_number)) || 'Unknown number'; } },
+              { key: 'who', label: 'Who', pinned: true, render: (a) => { const ct = contactOf(a); return ct ? [ct.first_name, ct.last_name].filter(Boolean).join(' ') : callPartyNumber(a) || 'Unknown number'; } },
               { key: 'when', label: 'When', render: (a) => fmtWhen(a.occurred_at) },
               { key: 'kind', label: 'Outcome', render: (a) => callKind(a) },
               { key: 'direction', label: 'Direction', render: (a) => a.direction },
               { key: 'duration', label: 'Duration', render: (a) => { const md = a.channel_metadata || {}; const d = md.recording_duration || md.duration_seconds; return d > 0 ? fmtDur(d) : '—'; } },
               { key: 'agent', label: 'Agent', render: (a) => (a.actor_id ? agentName(a.actor_id) : '—') },
-              { key: 'number', label: 'Number', mono: true, render: (a) => { const md = a.channel_metadata || {}; return (a.direction === 'inbound' ? md.from_number : (md.to_number || md.from_number)) || '—'; } },
+              { key: 'number', label: 'Number', mono: true, render: (a) => callPartyNumber(a) || '—' },
             ]}
             card={(a) => {
               const kind = callKind(a); const ct = contactOf(a); const md = a.channel_metadata || {};
-              const number = a.direction === 'inbound' ? md.from_number : (md.to_number || md.from_number); const dur = md.recording_duration || md.duration_seconds;
+              // callPartyNumber reads every shape the softphone writes; the old
+              // to_number/from_number pair missed every outbound call.
+              const number = callPartyNumber(a); const dur = md.recording_duration || md.duration_seconds;
               return { title: ct ? [ct.first_name, ct.last_name].filter(Boolean).join(' ') : (number || 'Unknown number'), chip: { text: kind, tone: kind === 'missed' ? 'coral' : kind === 'voicemail' ? 'amber' : 'primary' }, tone: kind === 'missed' ? 'coral' : undefined,
+                action: <CallButton number={number || ct?.phone} variant="icon" title={`Call ${ct ? [ct.first_name, ct.last_name].filter(Boolean).join(' ') : number || ''} back`} />,
                 meta: [fmtWhen(a.occurred_at), a.direction, a.actor_id ? agentName(a.actor_id) : null, dur > 0 ? fmtDur(dur) : null].filter(Boolean).join(' · ') };
             }} />
         </div>
