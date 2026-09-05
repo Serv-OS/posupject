@@ -455,7 +455,7 @@ export function MobileSheet({ title, sub, onClose, children, footer, tall }) {
   // --app-vh is the VISUAL viewport, so the sheet docks above the on-screen keyboard
   // instead of being laid out behind it against the layout viewport.
   return _createPortal(
-    <div className="fixed inset-x-0 top-0 z-[70] flex flex-col justify-end bg-black/40" onClick={onClose} style={{ height: 'var(--app-vh, 100%)' }}>
+    <div className="lg:hidden fixed inset-x-0 top-0 z-[70] flex flex-col justify-end bg-black/40" onClick={onClose} style={{ height: 'var(--app-vh, 100%)' }}>
       <div onClick={e => e.stopPropagation()} className="rounded-t-[20px] border-t flex flex-col"
         style={{ background: 'var(--raised-bg)', borderColor: 'var(--bdr)', boxShadow: 'var(--shadow-pop)', paddingBottom: 'env(safe-area-inset-bottom)',
           [tall ? 'height' : 'maxHeight']: `calc(var(--app-vh, 100vh) * ${tall ? 0.88 : 0.8})` }}>
@@ -518,7 +518,8 @@ export function useLongPress(onLong, ms = 550) {
   return (arg) => ({
     onTouchStart: () => { clear(); t.current = setTimeout(() => { onLong(arg); if (navigator.vibrate) navigator.vibrate(10); }, ms); },
     onTouchEnd: clear, onTouchMove: clear, onTouchCancel: clear,
-    onContextMenu: (e) => { e.preventDefault(); onLong(arg); },
+    // Swallow the menu the long press triggers; never treat a right-click as a hold.
+    onContextMenu: (e) => e.preventDefault(),
   });
 }
 
@@ -544,7 +545,8 @@ export function MobileTable({ storageKey, rows, columns, card, onRow, rowKey = (
   const shown = rest.filter(c => chosen.includes(c.key));
   const toggleCol = (k) => setChosen(c => (c.includes(k) ? c.filter(x => x !== k) : [...c, k]));
   const cell = (c, r) => (c.render ? c.render(r) : r[c.key] ?? '—');
-  const tap = (row) => { if (selected.size) { press(row).onContextMenu({ preventDefault() {} }); return; } onRow?.(row); };
+  const toggle = (row) => setSelected(s => { const n = new Set(s); const k = rowKey(row); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const tap = (row) => { if (selected.size) { toggle(row); return; } onRow?.(row); };
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -631,7 +633,7 @@ export function EditSheet({ title, sections, values, onChange, onCancel, onSave,
   const set = (f, raw) => onChange(f.key, f.parse ? f.parse(raw) : (raw === '' ? null : raw));
   const inputCls = 'w-full bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none';
   return _createPortal(
-    <div className="fixed inset-x-0 top-0 z-[70] flex flex-col" style={{ background: 'var(--scene-bg)', height: 'var(--app-vh, 100%)' }}>
+    <div className="lg:hidden fixed inset-x-0 top-0 z-[70] flex flex-col" style={{ background: 'var(--scene-bg)', height: 'var(--app-vh, 100%)' }}>
       <div className="px-[18px] pt-3 pb-3 border-b flex items-center gap-3" style={{ borderColor: 'var(--hair)', background: 'var(--panel-bg)' }}>
         <button type="button" onClick={onCancel} className="text-[14px] text-muted">Cancel</button>
         <div className="flex-1 min-w-0 text-center">

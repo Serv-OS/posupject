@@ -124,7 +124,7 @@ export default function BillsPanel({ profile, onNavigate }) {
                 { key: 'ref', label: 'Ref', render: (b) => b.supplier_ref || '—' },
                 { key: 'context', label: 'Context', render: (b) => (b.cost_context === 'deal' ? 'deal cost' : 'ongoing') },
                 { key: 'recurring', label: 'Recurring', render: (b) => (b.recurring_id ? 'yes' : '—') },
-                { key: 'created', label: 'Created', render: (b) => fmtD(b.created_at) },
+                { key: 'created', label: 'Created', render: (b) => fmtD(String(b.created_at).slice(0, 10)) },
               ]}
               card={(b) => {
                 const st = billStatus(b);

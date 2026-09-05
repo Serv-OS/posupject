@@ -15,7 +15,7 @@ const KIND = {
   system:     { label: 'System', tone: 'muted' },
 };
 
-export default function MobileInbox({ profile, onNavigate }) {
+export default function MobileInbox({ profile, onNavigate, onOpenMail }) {
   const [items, setItems] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [queue, setQueue] = useState(pending());
@@ -72,8 +72,14 @@ export default function MobileInbox({ profile, onNavigate }) {
     <div className="h-full flex flex-col" style={{ background: 'var(--scene-bg)' }}>
       <OfflineBanner />
       <div className="px-[18px] pt-[14px] pb-2.5">
-        <div className="font-display text-[23px] font-extrabold text-paper">Inbox</div>
-        <Mono className="!tracking-[.18em] uppercase">{needCount} need you · {read.length} read</Mono>
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="font-display text-[23px] font-extrabold text-paper">Inbox</div>
+            <Mono className="!tracking-[.18em] uppercase">{needCount} need you · {read.length} read</Mono>
+          </div>
+          {/* The shared email inbox still lives here, one tap away. */}
+          {onOpenMail && <button onClick={onOpenMail} className="px-3 py-[7px] rounded-[10px] border text-[13px] font-semibold text-paper shrink-0" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>Email</button>}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))] flex flex-col gap-3">
         {loading ? <SkeletonList rows={4} /> : (

@@ -83,7 +83,7 @@ const ACTIVE_MAP = {
   company_detail: 'companies', contact_detail: 'contacts', location_detail: 'locations',
   lead_detail: 'leads', deal_detail: 'deals', quote_detail: 'quotes',
   onboarding_detail: 'onboarding', project_detail: 'projects', task_detail: 'tasks',
-  ticket_detail: 'tickets', form_detail: 'forms', feature_request_detail: 'feature_requests',
+  ticket_detail: 'tickets', inbox_mail: 'inbox', form_detail: 'forms', feature_request_detail: 'feature_requests',
   release_detail: 'releases', invoice_detail: 'invoices',
   bill_detail: 'bills', expense_detail: 'expenses', work: 'work_board',
 };
