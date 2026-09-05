@@ -323,7 +323,7 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
 
       {/* Content */}
       {editing ? (<>
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 lg:p-6">
+        <div className="lg:hidden">
             {/* Phone (23): the same fields in the same order, as a full-screen sheet. */}
             <div className="lg:hidden">
               <EditSheet title="Edit ticket" values={draft} onChange={set} onCancel={() => setEditing(false)} onSave={save}
