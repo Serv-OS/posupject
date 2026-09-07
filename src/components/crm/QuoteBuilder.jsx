@@ -105,14 +105,24 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   }]);
 
   const totals = useMemo(() => {
-    let oneOff = 0, tax = 0, saasArr = 0, paymentsArr = 0;
+    // Every price on a quote is EX VAT and tax goes on top — including the
+    // recurring lines, which used to carry no tax at all, so the subscription
+    // price we quoted was really the inc-VAT price.
+    // Card processing is a financial service and is VAT exempt, so a payments
+    // line is zero-rated unless someone deliberately puts a rate on it.
+    let oneOff = 0, tax = 0, saasArr = 0, paymentsArr = 0, recurringTax = 0;
     items.forEach(it => {
       const lt = lineTotal(it);
-      if (it.category === 'saas') saasArr += it.billing_type === 'monthly' ? lt * 12 : lt;
-      else if (it.category === 'payments') paymentsArr += lt;
-      else if (it.billing_type === 'one_off') { oneOff += lt; tax += lt * (Number(it.tax_rate) || 0) / 100; }
+      const rate = Number(it.tax_rate) || 0;
+      if (it.category === 'saas') {
+        const yearly = it.billing_type === 'monthly' ? lt * 12 : lt;
+        saasArr += yearly; recurringTax += yearly * rate / 100;
+      } else if (it.category === 'payments') {
+        paymentsArr += lt; recurringTax += lt * (it.tax_rate == null ? 0 : rate) / 100;
+      } else if (it.billing_type === 'one_off') { oneOff += lt; tax += lt * rate / 100; }
     });
-    return { oneOff, tax, oneOffTotal: oneOff + tax, saasArr, paymentsArr, recurringArr: saasArr + paymentsArr };
+    const recurringArr = saasArr + paymentsArr;
+    return { oneOff, tax, oneOffTotal: oneOff + tax, saasArr, paymentsArr, recurringArr, recurringTax, recurringGross: recurringArr + recurringTax };
   }, [items]);
 
   const save = async () => {
@@ -213,7 +223,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
         {/* Docked total */}
         <div className="fixed inset-x-0 z-30 px-[14px] pt-2.5 pb-2.5 border-t" style={{ bottom: 'calc(56px + env(safe-area-inset-bottom))', background: 'var(--panel-bg)', backdropFilter: 'blur(12px)', borderColor: 'var(--hair)' }}>
           <div className="flex items-baseline gap-2">
-            <span className="text-[12px] text-muted flex-1">Net {money(totals.oneOff)} · {taxLabelFor(cur)} {money(totals.tax)}{totals.recurringArr ? ` · ARR ${money(totals.recurringArr)}` : ''}</span>
+            <span className="text-[12px] text-muted flex-1">Net {money(totals.oneOff)} · {taxLabelFor(cur)} {money(totals.tax)}{totals.recurringArr ? ` · ARR ${money(totals.recurringArr)} ex VAT` : ''}</span>
             <span className="font-display text-[20px] font-extrabold text-paper">{money(totals.oneOffTotal)}</span>
           </div>
           <div className="flex gap-2 mt-2">
@@ -347,7 +357,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                       <div><span className="text-[9px] text-dim block">Qty</span><input type="number" className={cell + ' w-full'} value={it.qty} onChange={e => updateItem(idx, { qty: e.target.value })} /></div>
                       <div><span className="text-[9px] text-dim block">Unit {currencySymbol(cur)}</span><input type="number" className={cell + ' w-full'} value={it.unit_price} onChange={e => updateItem(idx, { unit_price: e.target.value })} /></div>
                       <div><span className="text-[9px] text-dim block">Disc %</span><input type="number" className={cell + ' w-full'} value={it.discount} onChange={e => updateItem(idx, { discount: e.target.value })} /></div>
-                      <div><span className="text-[9px] text-dim block">Tax %</span><input type="number" className={cell + ' w-full'} value={it.tax_rate ?? defaultTaxRateFor(cur)} onChange={e => updateItem(idx, { tax_rate: e.target.value })} disabled={it.category === 'saas' || it.category === 'payments'} /></div>
+                      <div><span className="text-[9px] text-dim block">Tax %</span><input type="number" className={cell + ' w-full'} value={it.tax_rate ?? defaultTaxRateFor(cur)} onChange={e => updateItem(idx, { tax_rate: e.target.value })} /></div>
                     </div>
                     <div className="text-right text-xs text-muted">Line total: <span className="text-paper font-mono font-semibold">{money(lineTotal(it))}</span>{it.billing_type === 'monthly' ? '/mo' : it.category === 'payments' ? '/yr' : ''}</div>
                   </div>
@@ -372,7 +382,9 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               <div className="border-t border-bdr my-2" />
               <Row k="SaaS (ARR)" v={money(totals.saasArr)} sub />
               <Row k="Payments (ARR)" v={money(totals.paymentsArr)} sub />
-              <Row k="Recurring ARR" v={money(totals.recurringArr)} bold />
+              <Row k="Recurring ARR (ex VAT)" v={money(totals.recurringArr)} bold />
+              {totals.recurringTax > 0 && <><Row k="VAT on recurring" v={money(totals.recurringTax)} sub />
+              <Row k="Recurring inc VAT" v={money(totals.recurringGross)} bold /></>}
               <div className="text-[10px] text-dim mt-2 leading-relaxed">SaaS &amp; payments are the plan the customer agrees to (forecast ARR on the deal) — not charged here. One-off total is what Stripe captures.</div>
             </div>
 

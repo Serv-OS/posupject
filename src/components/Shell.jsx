@@ -338,7 +338,7 @@ export default function Shell({ session }) {
       case 'release_detail':
         return <ReleaseDetail releaseId={detailId} profile={profile} onClose={() => setView('releases')} />;
       case 'reporting':
-        return <ReportingDashboard profile={profile} />;
+        return <ReportingDashboard profile={profile} onNavigate={navigateTo} />;
       case 'sales_performance':
         return <SalesPerformance profile={profile} onNavigate={navigateTo} />;
       case 'inv_dashboard':

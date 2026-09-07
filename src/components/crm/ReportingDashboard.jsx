@@ -1,6 +1,14 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { pipelineTotals, DEFAULT_STAGE_WEIGHTS } from '../../lib/trading';
+
+// The deal stages, in order, with the names the rest of the app uses.
+const DEAL_STAGE_ORDER = ['new_lead', 'contacted', 'qualified', 'demo_booked', 'demo_done', 'proposal_sent', 'negotiation', 'closed_won', 'closed_lost'];
+const DEAL_STAGE_LABELS = {
+  new_lead: 'New Lead', contacted: 'Contacted', qualified: 'Qualified', demo_booked: 'Demo Booked',
+  demo_done: 'Demo Done', proposal_sent: 'Proposal Sent', negotiation: 'Negotiation',
+  closed_won: 'Closed Won', closed_lost: 'Closed Lost',
+};
 import { gbp0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { oneOffValue, recurringValue, totalValue } from '../../lib/dealValue';
 
@@ -23,7 +31,7 @@ const LEAD_ENGAGED_STAGES = ['attempting','mql'];
 const LEAD_QUALIFIED_STAGES = ['sql','deal'];
 const LEAD_STALE_DAYS = 5;
 
-export default function ReportingDashboard({ profile }) {
+export default function ReportingDashboard({ profile, onNavigate }) {
   const [deals, setDeals] = useState([]);
   const [onboardings, setOnboardings] = useState([]);
   const [tickets, setTickets] = useState([]);
@@ -39,6 +47,8 @@ export default function ReportingDashboard({ profile }) {
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [trading, setTrading] = useState([]);
+  const [pipeOwner, setPipeOwner] = useState('all');
+  const [pipeWindow, setPipeWindow] = useState('all');
   const [weights, setWeights] = useState(DEFAULT_STAGE_WEIGHTS);
   const [tab, setTab] = useState('leads');
   const [leads, setLeads] = useState([]);
@@ -361,7 +371,56 @@ export default function ReportingDashboard({ profile }) {
     }));
   }, [modules, locationModules]);
 
-  const formatCurrency = (v) => `£${v.toLocaleString('en-GB', { minimumFractionDigits: 0 })}`;
+
+  // ── Pipeline ──────────────────────────────────────────────────────────────
+  // The Sales tab answers "what did we close". This answers "what is in play":
+  // every open deal, what stage it sits at, what it is made of, and what it is
+  // worth weighted by the stage's own probability. Money rules come from
+  // lib/dealValue so this never re-invents what a deal is worth.
+  const pipelineMetrics = useMemo(() => {
+    const OPEN_STAGES = DEAL_STAGE_ORDER.filter(s => s !== 'closed_won' && s !== 'closed_lost');
+    const lastMoved = {};
+    for (const h of stageHistory || []) {
+      if (h.object_type !== 'deal') continue;
+      if (!lastMoved[h.object_id] || new Date(h.changed_at) > new Date(lastMoved[h.object_id])) lastMoved[h.object_id] = h.changed_at;
+    }
+    const cutoff = pipeWindow === 'all' ? null : (() => {
+      const d = new Date(); d.setDate(d.getDate() + Number(pipeWindow)); return d.toISOString().slice(0, 10);
+    })();
+    const open = deals.filter(d => OPEN_STAGES.includes(d.stage))
+      .filter(d => pipeOwner === 'all' || (pipeOwner === 'none' ? !d.owner_id : d.owner_id === pipeOwner))
+      // A window filters on the close date the rep committed to. Deals with no
+      // date are always shown: they are the ones that need a date, not hiding.
+      .filter(d => !cutoff || !d.expected_close_date || d.expected_close_date <= cutoff);
+
+    const money = (list) => list.reduce((acc, d) => {
+      acc.oneOff += oneOffValue(d); acc.recurring += recurringValue(d); acc.total += totalValue(d);
+      acc.hardware += Number(d.hardware_value || 0); acc.services += Number(d.services_value || 0);
+      acc.saas += Number(d.saas_arr || 0); acc.payments += Number(d.payments_arr || 0);
+      acc.weighted += totalValue(d) * (weights[d.stage] ?? 0);
+      return acc;
+    }, { oneOff: 0, recurring: 0, total: 0, hardware: 0, services: 0, saas: 0, payments: 0, weighted: 0 });
+
+    const all = money(open);
+    const byStage = OPEN_STAGES.map(stage => {
+      const list = open.filter(d => d.stage === stage);
+      return { stage, label: DEAL_STAGE_LABELS[stage] || stage, count: list.length, prob: weights[stage] ?? 0, ...money(list) };
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = open.map(d => ({
+      d,
+      company: companies.find(c => c.id === d.company_id)?.name || '',
+      oneOff: oneOffValue(d), recurring: recurringValue(d), total: totalValue(d),
+      weighted: totalValue(d) * (weights[d.stage] ?? 0),
+      late: !!d.expected_close_date && d.expected_close_date < today,
+      undated: !d.expected_close_date,
+      idleDays: Math.floor((Date.now() - new Date(lastMoved[d.id] || d.updated_at || d.created_at)) / 86400000),
+    })).sort((a, b) => (a.d.expected_close_date || '9999').localeCompare(b.d.expected_close_date || '9999') || b.total - a.total);
+
+    return { open, all, byStage, rows, noDate: rows.filter(r => r.undated).length, late: rows.filter(r => r.late).length };
+  }, [deals, companies, stageHistory, weights, pipeOwner, pipeWindow]);
+
+  const formatCurrency = (v) => `£${Math.round(v).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
 
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim";
   const tabBtn = (t, lbl) => (
@@ -380,6 +439,7 @@ export default function ReportingDashboard({ profile }) {
 
       <div className="px-6 py-2 border-b border-bdr flex gap-1 overflow-x-auto">
         {tabBtn('leads', 'Leads')}
+        {tabBtn('pipeline', 'Pipeline')}
         {tabBtn('sales', 'Sales')}
         {tabBtn('quota', 'Quota & Commission')}
         {tabBtn('onboarding', 'Onboarding')}
@@ -485,6 +545,107 @@ export default function ReportingDashboard({ profile }) {
                 leads.map(l => [l.name, l.stage, l.source, ownerName(l.owner_id), l.created_at, l.updated_at, Math.floor((Date.now() - new Date(l.updated_at || l.created_at).getTime()) / 86400000)]),
                 'leads-export.csv'
               )} className="px-3 py-1.5 text-xs text-muted border border-bdr rounded hover:text-paper">Export leads CSV</button>
+            </>
+          )}
+
+
+          {tab === 'pipeline' && (
+            <>
+              <div className="flex items-center gap-2 flex-wrap">
+                <select value={pipeOwner} onChange={e => setPipeOwner(e.target.value)}
+                  className="px-3 py-1.5 text-xs bg-card border border-bdr rounded-xl text-paper">
+                  <option value="all">Everyone</option>
+                  {members.map(m => <option key={m.id} value={m.id}>{ownerName(m.id)}</option>)}
+                  <option value="none">Unassigned</option>
+                </select>
+                {[['30', 'Closing in 30 days'], ['90', 'Closing in 90 days'], ['all', 'All open']].map(([k, l]) => (
+                  <button key={k} onClick={() => setPipeWindow(k)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-xl transition ${pipeWindow === k ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>{l}</button>
+                ))}
+                <span className="ml-auto text-[10px] text-dim">Weighted uses each stage&rsquo;s own probability</span>
+              </div>
+
+              <div className="grid grid-cols-4 gap-3">
+                <MetricCard label="Open deals" value={pipelineMetrics.open.length} sub={`${pipelineMetrics.late} past their close date`} color={pipelineMetrics.late ? 'text-red-600' : 'text-paper'} />
+                <MetricCard label="Pipeline value" value={formatCurrency(pipelineMetrics.all.total)} sub="one-off + ARR" />
+                <MetricCard label="Weighted" value={formatCurrency(pipelineMetrics.all.weighted)} sub="by stage probability" color="text-emerald-600" />
+                <MetricCard label="Recurring in play" value={formatCurrency(pipelineMetrics.all.recurring)} sub="SaaS + payments ARR" />
+              </div>
+
+              <div className="glass-card rounded-2xl p-4">
+                <div className={label + ' mb-3'}>What the pipeline is made of</div>
+                <div className="grid grid-cols-4 gap-3">
+                  {[['Hardware', pipelineMetrics.all.hardware], ['Services', pipelineMetrics.all.services],
+                    ['SaaS ARR', pipelineMetrics.all.saas], ['Payments ARR', pipelineMetrics.all.payments]].map(([l, v]) => (
+                    <div key={l}>
+                      <div className="text-[10px] text-dim uppercase tracking-wide">{l}</div>
+                      <div className="text-lg font-bold text-paper tabular-nums">{formatCurrency(v)}</div>
+                      <div className="h-[5px] mt-1 rounded-full overflow-hidden" style={{ background: 'var(--ink-line)' }}>
+                        <div className="h-full bg-ember" style={{ width: `${pipelineMetrics.all.total ? Math.round((v / pipelineMetrics.all.total) * 100) : 0}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[10px] text-dim mt-3">Hardware and services are one-off. SaaS and payments are annual recurring, counted once at their yearly rate.</div>
+              </div>
+
+              <div className="glass-card rounded-2xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-bdr flex items-center gap-2">
+                  <div className={label}>By stage</div>
+                  <span className="ml-auto text-[10px] text-dim">count · value · weighted</span>
+                </div>
+                {pipelineMetrics.byStage.map(s => (
+                  <div key={s.stage} className="px-4 py-2.5 border-b border-bdr last:border-b-0 flex items-center gap-3 text-sm">
+                    <span className="w-32 shrink-0 text-paper truncate">{s.label}</span>
+                    <span className="w-8 shrink-0 text-right font-mono text-xs text-muted">{s.count}</span>
+                    <div className="flex-1 h-[6px] rounded-full overflow-hidden" style={{ background: 'var(--ink-line)' }}>
+                      <div className="h-full bg-ember" style={{ width: `${pipelineMetrics.all.total ? Math.round((s.total / pipelineMetrics.all.total) * 100) : 0}%` }} />
+                    </div>
+                    <span className="w-10 shrink-0 text-right font-mono text-[10px] text-dim">{Math.round(s.prob * 100)}%</span>
+                    <span className="w-24 shrink-0 text-right tabular-nums text-paper">{formatCurrency(s.total)}</span>
+                    <span className="w-24 shrink-0 text-right tabular-nums text-emerald-600">{formatCurrency(s.weighted)}</span>
+                  </div>
+                ))}
+                {pipelineMetrics.open.length === 0 && <div className="px-4 py-8 text-center text-dim text-sm italic">Nothing open in this view.</div>}
+              </div>
+
+              <div className="glass-card rounded-2xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-bdr flex items-center gap-2">
+                  <div className={label}>Every open deal</div>
+                  <span className="text-xs text-dim font-mono">({pipelineMetrics.rows.length})</span>
+                  {pipelineMetrics.noDate > 0 && <span className="ml-auto text-[10px] text-amber-600">{pipelineMetrics.noDate} with no close date</span>}
+                </div>
+                <div className="px-4 py-2 border-b border-bdr grid grid-cols-[minmax(0,2fr)_110px_88px_88px_92px_84px_60px] gap-2 text-[9px] font-mono font-bold uppercase tracking-[0.18em] text-dim">
+                  <div>Deal</div><div>Stage</div><div className="text-right">One-off</div><div className="text-right">ARR</div>
+                  <div className="text-right">Close</div><div>Owner</div><div className="text-right">Idle</div>
+                </div>
+                {pipelineMetrics.rows.map(r => (
+                  <div key={r.d.id} onClick={() => onNavigate?.('deal', r.d.id)}
+                    className="px-4 py-2.5 border-b border-bdr last:border-b-0 grid grid-cols-[minmax(0,2fr)_110px_88px_88px_92px_84px_60px] gap-2 items-center text-sm hover:bg-card/50 cursor-pointer">
+                    <div className="min-w-0">
+                      <div className="text-paper truncate">{r.company || r.d.name}</div>
+                      {r.company && <div className="text-[11px] text-dim truncate">{r.d.name}</div>}
+                    </div>
+                    <div className="text-xs text-muted truncate">{DEAL_STAGE_LABELS[r.d.stage] || r.d.stage}</div>
+                    <div className="text-right tabular-nums text-xs text-paper">{r.oneOff ? formatCurrency(r.oneOff) : '—'}</div>
+                    <div className="text-right tabular-nums text-xs text-paper">{r.recurring ? formatCurrency(r.recurring) : '—'}</div>
+                    <div className={`text-right text-xs tabular-nums ${r.late ? 'text-red-600 font-semibold' : r.undated ? 'text-amber-600' : 'text-muted'}`}>
+                      {r.undated ? 'no date' : new Date(r.d.expected_close_date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                    </div>
+                    <div className="text-xs text-muted truncate">{ownerName(r.d.owner_id) || 'Unassigned'}</div>
+                    <div className={`text-right text-xs font-mono ${r.idleDays >= 30 ? 'text-red-600' : r.idleDays >= 14 ? 'text-amber-600' : 'text-dim'}`}>{r.idleDays}d</div>
+                  </div>
+                ))}
+                {pipelineMetrics.rows.length === 0 && <div className="px-4 py-8 text-center text-dim text-sm italic">Nothing open in this view.</div>}
+              </div>
+
+              <button onClick={() => exportCSV(
+                ['Deal', 'Company', 'Stage', 'Probability', 'Hardware', 'Services', 'SaaS ARR', 'Payments ARR', 'One-off', 'Recurring ARR', 'Total', 'Weighted', 'Expected close', 'Owner', 'Days idle'],
+                pipelineMetrics.rows.map(r => [r.d.name, r.company, DEAL_STAGE_LABELS[r.d.stage] || r.d.stage, weights[r.d.stage] ?? 0,
+                  r.d.hardware_value || 0, r.d.services_value || 0, r.d.saas_arr || 0, r.d.payments_arr || 0,
+                  r.oneOff, r.recurring, r.total, Math.round(r.weighted), r.d.expected_close_date || '', ownerName(r.d.owner_id) || 'Unassigned', r.idleDays]),
+                'pipeline-export.csv'
+              )} className="px-3 py-1.5 text-xs text-muted border border-bdr rounded hover:text-paper">Export pipeline CSV</button>
             </>
           )}
 
