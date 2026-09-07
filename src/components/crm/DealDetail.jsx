@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { paymentsArrFromRates } from '../../lib/paymentsArr';
 import { EditSheet } from './ui.jsx';
 import { currencyForCountry } from '../../lib/region';
 import { defaultTaxRateFor } from '../../lib/money';
@@ -28,6 +29,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
   const [history, setHistory] = useState([]);
   const [projects, setProjects] = useState([]);
   const [quotes, setQuotes] = useState([]);
+  const [procAccounts, setProcAccounts] = useState([]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
 
@@ -36,7 +38,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
   useEffect(() => { load(); }, [dealId]);
 
   const load = async () => {
-    const [d, m, c, l, h, prj, qz] = await Promise.all([
+    const [d, m, c, l, h, prj, qz, pa] = await Promise.all([
       supabase.from('deals').select('*').eq('id', dealId).single(),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('companies').select('id, name').order('name'),
@@ -44,6 +46,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
       supabase.from('stage_history').select('*').eq('object_type', 'deal').eq('object_id', dealId).order('changed_at', { ascending: false }),
       supabase.from('crm_projects').select('*').eq('subject_type', 'deal').eq('subject_id', dealId).order('created_at', { ascending: false }),
       supabase.from('quotes').select('*').eq('deal_id', dealId).order('created_at', { ascending: false }),
+      supabase.from('processing_accounts').select('id, label, company_id, location_id'),
     ]);
     setDeal(d.data);
     setMembers(m.data || []);
@@ -52,6 +55,13 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
     setHistory(h.data || []);
     setProjects(prj.data || []);
     setQuotes(qz.data || []);
+    // Rate cards for this deal's company, with their rows, so payments ARR can
+    // be read off the rate card instead of guessed.
+    const accs = (pa.data || []).filter(x => !d.data?.company_id || x.company_id === d.data.company_id);
+    if (accs.length) {
+      const { data: rr } = await supabase.from('processing_rates').select('*').in('account_id', accs.map(x => x.id));
+      setProcAccounts(accs.map(x => ({ ...x, rates: (rr || []).filter(r => r.account_id === x.id) })));
+    } else setProcAccounts([]);
     if (d.data?.company_id) setCompany(c.data?.find(co => co.id === d.data.company_id) || null);
   };
 
@@ -273,6 +283,33 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                   {deal.services_value > 0 && <div className="flex justify-between"><span className="text-xs text-muted">Services</span><span className="text-sm text-paper font-mono">{fmt(deal.services_value)}</span></div>}
                   {deal.saas_arr > 0 && <div className="flex justify-between"><span className="text-xs text-muted">SaaS ARR</span><span className="text-sm text-paper font-mono">{fmt(deal.saas_arr)}</span></div>}
                   {deal.payments_arr > 0 && <div className="flex justify-between"><span className="text-xs text-muted">Payments ARR</span><span className="text-sm text-paper font-mono">{fmt(deal.payments_arr)}</span></div>}
+                  {(() => {
+                    // What the rate card says this account is worth to us a year.
+                    const calc = procAccounts.reduce((acc, x) => {
+                      const r = paymentsArrFromRates(x.rates);
+                      return { priced: acc.priced + r.priced, arr: acc.arr + r.arr };
+                    }, { priced: 0, arr: 0 });
+                    if (!calc.priced) return null;
+                    const current = Number(deal.payments_arr || 0);
+                    const off = Math.abs(calc.arr - current) >= 1;
+                    return (
+                      <div className="pt-2 mt-1 border-t border-bdr">
+                        <div className="flex justify-between items-baseline">
+                          <span className="text-xs text-muted">Payments ARR from the rate card</span>
+                          <span className="text-sm font-mono text-paper">{fmt(calc.arr)}</span>
+                        </div>
+                        <div className="text-[10px] text-dim mt-0.5">Our rate minus the buy rate, times twelve, across {calc.priced} priced card type{calc.priced === 1 ? '' : 's'}.</div>
+                        {canWrite && off && (
+                          <button onClick={async () => {
+                            const { error } = await supabase.from('deals').update({ payments_arr: Math.round(calc.arr * 100) / 100 }).eq('id', dealId);
+                            if (!error) load();
+                          }} className="mt-1.5 text-[11px] font-semibold" style={{ color: 'rgb(var(--c-primary-deep))' }}>
+                            {current > 0 ? `Use this instead of ${fmt(current)}` : 'Use this figure'}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="flex justify-between pt-2 border-t border-bdr">
                     <span className="text-xs text-paper font-semibold">Total</span>
                     <span className="text-base text-ember font-mono font-bold">{fmt(

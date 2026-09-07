@@ -69,8 +69,14 @@ const STAGE_HISTORY = [
   { id: 'sh1', object_type: 'deal', object_id: 'd1', to_stage: 'proposal_sent', changed_at: ts(-3), changed_by: ME },
   { id: 'sh2', object_type: 'deal', object_id: 'd3', to_stage: 'qualified', changed_at: ts(-35), changed_by: ME },
 ];
+const PROC_ACCOUNTS = [{ id: 'pa1', label: 'Coffee Boy rate card', company_id: 'c1', location_id: 'l1' }];
+// £100k/mo at 1.20% against a 0.90% buy, plus 8,000 txns at 5p vs 3p.
+// margin = (1200 + 400) - (900 + 240) = £460/mo -> £5,520 a year.
+const PROC_RATES = [
+  { id: 'pr1', account_id: 'pa1', category: 'visa_mc_cp', monthly_volume: 100000, monthly_txns: 8000, current_rate_pct: 1.6, our_rate_pct: 1.2, buy_rate_pct: 0.9, our_txn_fee: 5, buy_txn_fee: 3 },
+];
 const WEIGHTS = [{ stage: 'qualified', probability: 0.25 }, { stage: 'demo_booked', probability: 0.4 }, { stage: 'proposal_sent', probability: 0.7 }, { stage: 'negotiation', probability: 0.85 }];
-export const TABLES = { deal_stage_weights: WEIGHTS, deal_trading: [], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: [], processing_rates: [], leads: LEADS, stage_history: STAGE_HISTORY };
+export const TABLES = { deal_stage_weights: WEIGHTS, deal_trading: [], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };
 export const MEMBERS_LIST = MEMBERS;
 
 function makeQuery(table) {

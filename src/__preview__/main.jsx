@@ -14,6 +14,7 @@ import QuoteBuilder from '../components/crm/QuoteBuilder.jsx';
 import MobileInbox from '../components/crm/MobileInbox.jsx';
 import CallLogPanel from '../components/crm/CallLogPanel.jsx';
 import LeadDetail from '../components/crm/LeadDetail.jsx';
+import DealDetail from '../components/crm/DealDetail.jsx';
 import ReportingDashboard from '../components/crm/ReportingDashboard.jsx';
 import LocationDetail from '../components/crm/LocationDetail.jsx';
 import MobileNav from '../components/MobileNav.jsx';
@@ -40,6 +41,7 @@ function App() {
         {v === 'bills' && <BillsPanel profile={P} onNavigate={nav} />}
         {v === 'quote' && <QuoteBuilder quoteId="q1" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'reporting' && <ReportingDashboard profile={P} onNavigate={nav} />}
+        {v === 'deal' && <DealDetail dealId="d1" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'lead' && <LeadDetail leadId="lead1" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'calls' && <CallLogPanel profile={P} onNavigate={nav} />}
         {v === 'inbox' && <MobileInbox profile={P} onNavigate={nav} />}
