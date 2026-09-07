@@ -20,6 +20,7 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
   const [location, setLocation] = useState(null);
   const [contact, setContact] = useState(null);
   const [members, setMembers] = useState([]);
+  const [deal, setDeal] = useState(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
   const [ready, setReady] = useState(false);
@@ -55,6 +56,9 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
     ]);
     setLead(l.data);
     setMembers(m.data || []);
+    // The deal this lead became. Converting sets leads.deal_id, but nothing on
+    // the page linked to it, so a lead badged DEAL was a dead end.
+    if (l.data?.deal_id) supabase.from('deals').select('id, name, stage, value').eq('id', l.data.deal_id).single().then(r => setDeal(r.data)); else setDeal(null);
     // Linked records still fetched for the header Call button
     if (l.data?.company_id) supabase.from('companies').select('id, name, phone, domain').eq('id', l.data.company_id).single().then(r => setCompany(r.data)); else setCompany(null);
     if (l.data?.location_id) supabase.from('locations').select('id, name, phone, city, venue_type').eq('id', l.data.location_id).single().then(r => setLocation(r.data)); else setLocation(null);
@@ -246,6 +250,21 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
             <div className="col-span-4 space-y-4">
               {ready ? (
                 <>
+                  {(deal || lead.deal_id) && (
+                    <Card title="Deal">
+                      {deal ? (
+                        <div onClick={() => onNavigate?.('deal', deal.id)} className="p-3 glass-inner rounded-xl cursor-pointer flex items-center gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-semibold text-paper truncate">{deal.name}</div>
+                            <div className="text-[11px] text-muted capitalize">
+                              {(deal.stage || '').replace(/_/g, ' ')}{deal.value != null ? ` \u00b7 \u00a3${Number(deal.value).toLocaleString('en-GB')}` : ''}
+                            </div>
+                          </div>
+                          <span className="text-dim text-xs">{'\u2192'}</span>
+                        </div>
+                      ) : <Empty>That deal has been deleted.</Empty>}
+                    </Card>
+                  )}
                   <Card title="Contacts">
                     <AssociationManager subjectType="lead" subjectId={leadId} targetType="contact" profile={profile} onNavigate={onNavigate} />
                   </Card>
