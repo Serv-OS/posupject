@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { X, Pencil, Plus, Trash2, Building2, PiggyBank } from 'lucide-react';
-import { AccountModal, gbp0, gbp2, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
+import { AccountModal, ccyOf, moneyFor, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
 
 const thisMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const periodLabel = (p) => new Date(p).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
@@ -13,6 +13,11 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
   const [editingAcc, setEditingAcc] = useState(false);
   const [vform, setVform] = useState({ month: thisMonth(), amount_processed: '', transactions: '', our_revenue: '' });
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
+  // Every figure in this drawer belongs to ONE card, so it is all in that
+  // card's own currency. A US card must never render a pound sign.
+  const ccy = ccyOf(acc);
+  const { m0, m2 } = moneyFor(ccy);
+  const sym = ccy === 'USD' ? '$' : '£';
 
   const [rates, setRates] = useState([]);
 
@@ -78,8 +83,8 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
           {/* Savings hero */}
           <div className="glass-inner rounded-xl p-5 text-center bg-emerald-50/40">
             <div className="flex items-center justify-center gap-2 text-emerald-700 mb-1"><PiggyBank size={18} /><span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em]">Customer saves</span></div>
-            <div className="text-3xl font-bold tabular-nums text-emerald-600">{totals.vol ? gbp0(totals.savingYr) : '—'}<span className="text-base font-semibold text-emerald-700/70"> / yr</span></div>
-            <div className="text-xs text-muted mt-0.5">{totals.vol ? `${gbp2(totals.saving)} / mo · ${pct2(totals.currentEff)} → ${pct2(totals.ourEff)} effective rate` : 'Add volumes & rates to calculate savings'}</div>
+            <div className="text-3xl font-bold tabular-nums text-emerald-600">{totals.vol ? m0(totals.savingYr) : '—'}<span className="text-base font-semibold text-emerald-700/70"> / yr</span></div>
+            <div className="text-xs text-muted mt-0.5">{totals.vol ? `${m2(totals.saving)} / mo · ${pct2(totals.currentEff)} → ${pct2(totals.ourEff)} effective rate` : 'Add volumes & rates to calculate savings'}</div>
           </div>
 
           {/* Per-channel rate breakdown */}
@@ -104,12 +109,12 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
                     <div key={c.key} className="px-4 py-2 border-b border-bdr/50 last:border-0 flex items-center text-sm">
                       <div className="flex-1 min-w-0">
                         <div className="text-paper leading-tight">{c.scheme}{c.tier ? <span className="text-dim"> {c.tier}</span> : ''}</div>
-                        {calc.avg > 0 && <div className="text-[10px] text-dim">avg £{calc.avg.toFixed(2)} · {calc.txns} txns</div>}
+                        {calc.avg > 0 && <div className="text-[10px] text-dim">avg {sym}{calc.avg.toFixed(2)} · {calc.txns} txns</div>}
                       </div>
-                      <span className="w-20 text-right tabular-nums text-muted">{calc.vol ? gbp0(calc.vol) : '—'}</span>
+                      <span className="w-20 text-right tabular-nums text-muted">{calc.vol ? m0(calc.vol) : '—'}</span>
                       <span className="w-16 text-right tabular-nums text-muted">{calc.vol ? pct2(calc.currentEff) : pct2(r.current_rate_pct)}</span>
                       <span className="w-16 text-right tabular-nums text-paper">{calc.vol ? pct2(calc.ourEff) : pct2(r.our_rate_pct)}</span>
-                      <span className="w-20 text-right tabular-nums font-semibold text-emerald-600">{calc.vol ? gbp2(calc.saving) : '—'}</span>
+                      <span className="w-20 text-right tabular-nums font-semibold text-emerald-600">{calc.vol ? m2(calc.saving) : '—'}</span>
                     </div>
                   );
                 })}
@@ -118,9 +123,9 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
           })}
 
           <div className="glass-inner rounded-xl p-4 grid grid-cols-3 gap-3 text-center">
-            <Metric value={totals.vol ? gbp0(totals.vol) : '—'} label="Volume / mo" />
-            <Metric value={totals.vol ? gbp0(totals.saving) : '—'} label="Customer saves / mo" tone={totals.saving >= 0 ? 'emerald' : 'red'} />
-            <Metric value={totals.vol ? gbp0(totals.margin) : '—'} label="Our margin / mo" tone="emerald" />
+            <Metric value={totals.vol ? m0(totals.vol) : '—'} label="Volume / mo" />
+            <Metric value={totals.vol ? m0(totals.saving) : '—'} label="Customer saves / mo" tone={totals.saving >= 0 ? 'emerald' : 'red'} />
+            <Metric value={totals.vol ? m0(totals.margin) : '—'} label="Our margin / mo" tone="emerald" />
           </div>
           <div className="text-[11px] text-dim">Effective rate folds the per-transaction fee into a single % using each card type's average transaction size, so small-basket fees are reflected. Buy rate &amp; margin are internal and never shown to the customer.</div>
           {(acc.partner || acc.merchant_ref) && (
@@ -138,9 +143,9 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
               <div className="p-4 border-b border-bdr space-y-3 bg-card/40">
                 <div className="grid grid-cols-2 gap-3">
                   <div><label className={lbl}>Month</label><input type="month" className={input} value={vform.month} onChange={e => setVform({ ...vform, month: e.target.value })} /></div>
-                  <div><label className={lbl}>Amount processed £</label><input className={input} value={vform.amount_processed} onChange={e => setVform({ ...vform, amount_processed: e.target.value })} placeholder="40000" /></div>
+                  <div><label className={lbl}>Amount processed {sym}</label><input className={input} value={vform.amount_processed} onChange={e => setVform({ ...vform, amount_processed: e.target.value })} placeholder="40000" /></div>
                   <div><label className={lbl}>Transactions</label><input className={input} value={vform.transactions} onChange={e => setVform({ ...vform, transactions: e.target.value })} placeholder="optional" /></div>
-                  <div><label className={lbl}>Our revenue £ (override)</label><input className={input} value={vform.our_revenue} onChange={e => setVform({ ...vform, our_revenue: e.target.value })} placeholder="leave blank = estimate" /></div>
+                  <div><label className={lbl}>Our revenue {sym} (override)</label><input className={input} value={vform.our_revenue} onChange={e => setVform({ ...vform, our_revenue: e.target.value })} placeholder="leave blank = estimate" /></div>
                 </div>
                 <div className="flex gap-2"><button onClick={addVolume} className="btn-glass px-4 py-1.5 rounded-xl text-xs font-semibold">Save</button>
                   <button onClick={() => setAdding(false)} className="btn-ghost px-3 py-1.5 rounded-xl text-xs">Cancel</button></div>
@@ -162,9 +167,9 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
                     return (
                       <tr key={v.id} className="border-b border-bdr/50">
                         <td className="px-4 py-2.5 text-paper">{periodLabel(v.period)}{v.source === 'partner' && <span className="ml-1 text-[9px] text-emerald-600 uppercase">auto</span>}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-paper">{gbp0(v.amount_processed)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-paper">{m0(v.amount_processed)}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums text-muted">{v.transactions ?? '—'}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-paper">{gbp2(revenueOf(accCalc, v))}{est && <span className="text-[9px] text-dim ml-1">est</span>}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-paper">{m2(revenueOf(accCalc, v))}{est && <span className="text-[9px] text-dim ml-1">est</span>}</td>
                         <td className="px-2">{canWrite && <button onClick={() => delVolume(v.id)} className="text-dim hover:text-red-600"><Trash2 size={13} /></button>}</td>
                       </tr>
                     );
@@ -173,7 +178,7 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
             </table>
           </div>
 
-          <div className="text-[11px] text-dim">Leave “Our revenue” blank and it’s estimated from your blended margin ({marginPct(accCalc).toFixed(2)}% + £{marginTxn(accCalc).toFixed(2)}/txn). When your processing partner is connected, monthly figures will sync here automatically.</div>
+          <div className="text-[11px] text-dim">Leave “Our revenue” blank and it’s estimated from your blended margin ({marginPct(accCalc).toFixed(2)}% + {sym}{marginTxn(accCalc).toFixed(2)}/txn). When your processing partner is connected, monthly figures will sync here automatically.</div>
         </div>
       </div>
 

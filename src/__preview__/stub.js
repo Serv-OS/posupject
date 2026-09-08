@@ -3,8 +3,8 @@ const d = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return x.to
 const ts = (n, h = 0) => { const x = new Date(); x.setDate(x.getDate() + n); x.setHours(x.getHours() - h); return x.toISOString(); };
 const ME = 'u-peter';
 export const MEMBERS = [{ id: 'u-peter', display_name: 'Peter', email: 'peter@posup.co.uk', role: 'owner' }, { id: 'u-sarah', display_name: 'Sarah', email: 'sarah@posup.co.uk', role: 'editor' }, { id: 'u-james', display_name: 'James', email: 'james@posup.co.uk', role: 'editor' }];
-const COMPANIES = [{ id: 'c1', name: 'Coffee Boy — Barnsley', country: 'GB' }, { id: 'c2', name: 'Lightspeed POS UK Ltd', country: 'GB' }];
-const LOCATIONS = [{ id: 'l1', name: 'Verde — Macclesfield', company_id: 'c2', status: 'live', phone: '01625 442 118', email: 'verde@example.com', address: '14 Mill Street', city: 'Macclesfield', postcode: 'SK11 6NN', venue_type: 'restaurant', covers: 80, go_live_date: '2026-03-14', owner_id: ME, created_at: ts(-200) }];
+const COMPANIES = [{ id: 'c1', name: 'Coffee Boy — Barnsley', country: 'GB' }, { id: 'c2', name: 'Lightspeed POS UK Ltd', country: 'GB' }, { id: 'c3', name: 'Mozz Pizza', country: null }];
+const LOCATIONS = [{ id: 'l1', name: 'Verde — Macclesfield', company_id: 'c2', status: 'live', phone: '01625 442 118', email: 'verde@example.com', address: '14 Mill Street', city: 'Macclesfield', postcode: 'SK11 6NN', venue_type: 'restaurant', covers: 80, go_live_date: '2026-03-14', owner_id: ME, created_at: ts(-200) }, { id: 'l2', name: 'Mozz — Provo', company_id: 'c3', status: 'live', country: 'US', venue_type: 'restaurant', covers: 60, owner_id: ME, created_at: ts(-30) }];
 const LEADS = [{ id: 'lead1', name: 'Cafe Brigante - Leeds Center', stage: 'deal', deal_id: 'd1', source: 'website', priority: 'medium', venue_type: 'cafe', current_pos: 'Lightspeed', owner_id: ME, company_id: 'c1', location_id: 'l1', created_at: ts(-90) }];
 const DEALS = [
   { id: 'd1', name: 'Coffee Boy — Barnsley Train Station', company_id: 'c1', stage: 'proposal_sent', owner_id: ME, hardware_value: 3200, services_value: 850, saas_arr: 1788, payments_arr: 2400, expected_close_date: d(12), created_at: ts(-40), updated_at: ts(-3) },
@@ -69,19 +69,30 @@ const STAGE_HISTORY = [
   { id: 'sh1', object_type: 'deal', object_id: 'd1', to_stage: 'proposal_sent', changed_at: ts(-3), changed_by: ME },
   { id: 'sh2', object_type: 'deal', object_id: 'd3', to_stage: 'qualified', changed_at: ts(-35), changed_by: ME },
 ];
-const PROC_ACCOUNTS = [{ id: 'pa1', label: 'Coffee Boy rate card', company_id: 'c1', location_id: 'l1' }];
+const PROC_ACCOUNTS = [
+  { id: 'pa1', label: 'Coffee Boy rate card', company_id: 'c1', location_id: 'l1', region_code: 'UK', status: 'live' },
+  { id: 'pa2', label: 'Mozz Provo rate card', company_id: 'c3', location_id: 'l2', region_code: 'US', status: 'prospect' },
+];
 // £100k/mo at 1.20% against a 0.90% buy, plus 8,000 txns at 5p vs 3p.
 // margin = (1200 + 400) - (900 + 240) = £460/mo -> £5,520 a year.
 const PROC_RATES = [
-  { id: 'pr1', account_id: 'pa1', category: 'visa_mc_cp', monthly_volume: 100000, monthly_txns: 8000, current_rate_pct: 1.6, our_rate_pct: 1.2, buy_rate_pct: 0.9, our_txn_fee: 5, buy_txn_fee: 3 },
+  { id: 'pr1', account_id: 'pa1', category: 'cp_vm_debit', monthly_volume: 100000, monthly_txns: 8000, current_rate_pct: 1.6, our_rate_pct: 1.2, buy_rate_pct: 0.3, our_txn_fee: 2, buy_txn_fee: 1, volume_split_pct: 82 },
+  // A US card, so every screen has to prove it renders dollars not pounds.
+  { id: 'pr2', account_id: 'pa2', category: 'cp_vm_debit', monthly_volume: 60000, monthly_txns: 1700, current_rate_pct: 2.49, our_rate_pct: 1.4, buy_rate_pct: 0.56, our_txn_fee: 25, buy_txn_fee: 22.3, volume_split_pct: 55 },
+  { id: 'pr3', account_id: 'pa2', category: 'cp_vm_credit', monthly_volume: 38000, monthly_txns: 1100, current_rate_pct: 2.49, our_rate_pct: 2.55, buy_rate_pct: 2.30, our_txn_fee: 12, buy_txn_fee: 9, volume_split_pct: 35 },
 ];
 const WEIGHTS = [{ stage: 'qualified', probability: 0.25 }, { stage: 'demo_booked', probability: 0.4 }, { stage: 'proposal_sent', probability: 0.7 }, { stage: 'negotiation', probability: 0.85 }];
 const COST_TEMPLATES = [
-  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', note: 'Seeded from the hardcoded rates',
-    rows: { cp_vm_credit: { buy_rate_pct: 0.65, buy_txn_fee: 6, split_pct: 15 }, cp_vm_debit: { buy_rate_pct: 0.55, buy_txn_fee: 6, split_pct: 82 },
-            cp_amex: { buy_rate_pct: 2.0, buy_txn_fee: 10, split_pct: 3 }, cnp_vm_credit: { buy_rate_pct: 0.65, buy_txn_fee: 6, split_pct: 35 },
-            cnp_vm_debit: { buy_rate_pct: 0.55, buy_txn_fee: 6, split_pct: 60 }, cnp_amex: { buy_rate_pct: 2.0, buy_txn_fee: 10, split_pct: 5 } } },
+  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', note: 'UK IFR caps', markup: { rate_pct: 0.10, txn_minor: 5 },
+    rows: { cp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, split_pct: 15 }, cp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, split_pct: 82 },
+            cp_amex: { ic_rate_pct: null, ic_txn_minor: null, split_pct: 3 }, cnp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, split_pct: 35 },
+            cnp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, split_pct: 60 }, cnp_amex: { ic_rate_pct: null, ic_txn_minor: null, split_pct: 5 } } },
+  { id: 'ct-us', region_code: 'US', effective_from: '2026-01-01', note: 'US interchange, verified Sep 2026', markup: { rate_pct: 0.10, txn_minor: 5 },
+    rows: { cp_vm_credit: { ic_rate_pct: 2.20, ic_txn_minor: 4, split_pct: 35 }, cp_vm_debit: { ic_rate_pct: 0.46, ic_txn_minor: 17.3, split_pct: 55 },
+            cp_amex: { ic_rate_pct: 2.50, ic_txn_minor: 10, split_pct: 10 }, cnp_vm_credit: { ic_rate_pct: 2.40, ic_txn_minor: 4, split_pct: 45 },
+            cnp_vm_debit: { ic_rate_pct: 0.62, ic_txn_minor: 19.2, split_pct: 45 }, cnp_amex: { ic_rate_pct: 2.80, ic_txn_minor: 10, split_pct: 10 } } },
 ];
+
 export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };
 export const MEMBERS_LIST = MEMBERS;
 

@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
-import { AccountModal, accountSavings, gbp0, gbp2, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
+import { AccountModal, accountSavings, ccyOf, moneyFor, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
 import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
 import { Card, Mono, MobileSheet, SheetRow, EditSheet, PrimaryBtn, GhostBtn } from './ui.jsx';
@@ -161,7 +161,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     // to type it. Without this the pipeline reports payments ARR as zero forever.
     const acc = procAccounts.find(x => x.id === quote.processing_account_id);
     const our = acc ? paymentsArrFromRates(acc.rates) : null;
-    const arrNote = our?.priced ? `\n\nPayments ARR of ${gbp0(our.arr)} will be set on the deal from the attached rate card.` : '';
+    const arrNote = our?.priced ? `\n\nPayments ARR of ${moneyFor(ccyOf(acc)).m0(our.arr)} will be set on the deal from the attached rate card.` : '';
     if (!confirm(`Mark this quote as Won? This closes the deal and starts onboarding.${arrNote}`)) return;
     await save();
     await supabase.from('quotes').update({ status: 'won' }).eq('id', quoteId);
@@ -304,14 +304,14 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                     <div className="rounded-[12px] px-[15px] py-3 border" style={{ background: 'rgb(var(--c-amber) / .10)', borderColor: 'rgb(var(--c-amber) / .30)' }}>
                       <div className="flex items-baseline justify-between">
                         <span className="text-[13px] font-semibold" style={{ color: 'rgb(var(--c-amber-deep))' }}>We earn</span>
-                        <span className="text-[16px] font-bold tabular-nums" style={{ color: 'rgb(var(--c-amber-deep))' }}>{gbp0(our.arr)}/yr</span>
+                        <span className="text-[16px] font-bold tabular-nums" style={{ color: 'rgb(var(--c-amber-deep))' }}>{moneyFor(ccyOf(a)).m0(our.arr)}/yr</span>
                       </div>
                       <div className="text-[11px] text-dim mt-0.5">Internal only. Never on the customer’s copy.</div>
                     </div>
                   );
                 })()}
                 <SheetRow active={!quote.processing_account_id} onClick={() => { setQ('processing_account_id', null); setSheet(null); }}>None</SheetRow>
-                {procAccounts.map(a => <SheetRow key={a.id} active={quote.processing_account_id === a.id} sub={`saves ${gbp0(accountSavings(a.rates).saving)}/mo`} onClick={() => { setQ('processing_account_id', a.id); setSheet(null); }}>{a.label || a.location?.name || 'Proposal'}</SheetRow>)}
+                {procAccounts.map(a => <SheetRow key={a.id} active={quote.processing_account_id === a.id} sub={`saves ${moneyFor(ccyOf(a)).m0(accountSavings(a.rates).saving)}/mo`} onClick={() => { setQ('processing_account_id', a.id); setSheet(null); }}>{a.label || a.location?.name || 'Proposal'}</SheetRow>)}
               </>
             )}
           </MobileSheet>
@@ -447,16 +447,32 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               {!company ? <div className="text-[11px] text-dim">Add a company to the quote to attach a savings proposal.</div> : (<>
                 <select className={input} value={quote.processing_account_id || ''} onChange={e => setQ('processing_account_id', e.target.value || null)}>
                   <option value="">— None —</option>
-                  {procAccounts.map(a => <option key={a.id} value={a.id}>{(a.label || a.location?.name || 'Proposal')} · saves {gbp0(accountSavings(a.rates).saving)}/mo</option>)}
+                  {procAccounts.map(a => <option key={a.id} value={a.id}>{(a.label || a.location?.name || 'Proposal')} · saves {moneyFor(ccyOf(a)).m0(accountSavings(a.rates).saving)}/mo</option>)}
                 </select>
+                {(() => {
+                  // A card is priced in its own region's currency. Attaching a US
+                  // card to a GBP quote would put dollars on a pound document and
+                  // write the wrong number to the deal's payments ARR, so say so
+                  // rather than rendering a figure that looks right and is not.
+                  const a = procAccounts.find(x => x.id === quote.processing_account_id);
+                  if (!a) return null;
+                  const cardCcy = ccyOf(a);
+                  if (cardCcy === (quote.currency || 'GBP')) return null;
+                  return (
+                    <div className="rounded-xl p-3 border border-red-300 bg-red-50/60 text-[11px] text-red-700">
+                      This proposal is priced in <b>{cardCcy}</b> but the quote is in <b>{quote.currency || 'GBP'}</b>. Change the quote's currency, or build the proposal against the other region's costs. Figures below are in {cardCcy}.
+                    </div>
+                  );
+                })()}
                 {(() => {
                   const a = procAccounts.find(x => x.id === quote.processing_account_id);
                   if (!a) return <div className="text-[11px] text-dim">Pick or create a proposal to show the customer their card-processing savings on the quote.</div>;
                   const s = accountSavings(a.rates);
+                  const { m0 } = moneyFor(ccyOf(a));
                   return (
                     <div className="glass-inner rounded-xl p-3 text-center">
-                      <div className="text-xl font-bold text-emerald-600 tabular-nums">{gbp0(s.savingYr)}<span className="text-xs text-emerald-700/70"> /yr</span></div>
-                      <div className="text-[11px] text-muted">{s.vol ? `${gbp0(s.saving)}/mo · ${pct2(s.currentEff)} → ${pct2(s.ourEff)} effective` : 'Add volumes to this proposal to calculate savings'}</div>
+                      <div className="text-xl font-bold text-emerald-600 tabular-nums">{m0(s.savingYr)}<span className="text-xs text-emerald-700/70"> /yr</span></div>
+                      <div className="text-[11px] text-muted">{s.vol ? `${m0(s.saving)}/mo · ${pct2(s.currentEff)} → ${pct2(s.ourEff)} effective` : 'Add volumes to this proposal to calculate savings'}</div>
                     </div>
                   );
                 })()}
@@ -467,13 +483,14 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                   if (!a) return null;
                   const our = paymentsArrFromRates(a.rates);
                   if (!our.priced) return null;
+                  const { m0, m2 } = moneyFor(ccyOf(a));
                   return (
                     <div className="rounded-xl p-3 border" style={{ background: 'rgb(var(--c-amber) / .10)', borderColor: 'rgb(var(--c-amber) / .30)' }}>
                       <div className="flex items-baseline justify-between">
                         <span className="text-[11px] font-semibold" style={{ color: 'rgb(var(--c-amber-deep))' }}>We earn</span>
-                        <span className="text-base font-bold tabular-nums" style={{ color: 'rgb(var(--c-amber-deep))' }}>{gbp0(our.arr)}<span className="text-[11px]"> /yr</span></span>
+                        <span className="text-base font-bold tabular-nums" style={{ color: 'rgb(var(--c-amber-deep))' }}>{m0(our.arr)}<span className="text-[11px]"> /yr</span></span>
                       </div>
-                      <div className="text-[10px] text-dim mt-0.5">{gbp2(our.marginMonthly)}/mo margin across {our.priced} priced card type{our.priced === 1 ? '' : 's'}. This is the deal's payments ARR.</div>
+                      <div className="text-[10px] text-dim mt-0.5">{m2(our.marginMonthly)}/mo margin across {our.priced} priced card type{our.priced === 1 ? '' : 's'}. This is the deal's payments ARR.</div>
                     </div>
                   );
                 })()}

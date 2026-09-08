@@ -3,11 +3,18 @@ import { supabase } from '../../lib/supabase';
 import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-react';
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
 import { loadCostTemplate, costFor, regionForCountry } from '../../lib/cardCosts';
-import { fmtMoney0 } from '../../lib/money';
+import { fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 
 export const gbp0 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 });
 export const gbp2 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const pct2 = (v) => v == null || v === '' ? '—' : `${Number(v).toFixed(2)}%`;
+
+// A card is priced in the currency of the region whose costs it was built on.
+// region_code is set when the card is saved (site country first, then company).
+// Cards with no region predate that column and are UK, which is what they were.
+export const ccyOf = (account) => (account?.region_code === 'US' ? 'USD' : 'GBP');
+/** Money formatters bound to one card's currency. */
+export const moneyFor = (ccy) => ({ m0: (n) => fmtMoney0(n, ccy), m2: (n) => fmtMoney(n, ccy) });
 
 // Two presentment channels: in-store (card present) and online (card not present)
 export const CHANNELS = [
@@ -147,15 +154,16 @@ export default function PaymentsPanel({ profile, onNavigate }) {
   const period = periodOf(month);
   const volFor = (accId) => volumes.find(v => v.account_id === accId && v.period === period);
 
-  // headline totals for the selected month
-  let totalProcessed = 0, totalRevenue = 0;
-  for (const acc of accounts) {
-    const v = volFor(acc.id);
-    if (v) { totalProcessed += Number(v.amount_processed || 0); totalRevenue += revenueOf(acc, v); }
-  }
+  // Headline totals for the selected month. Cards are priced in their own
+  // region's currency, so these are summed PER CURRENCY and rendered as
+  // '£1,200 + $300'. Adding dollars to pounds would invent an exchange rate
+  // we have not been given, and quietly overstate every total.
+  const withVol = accounts.map(a => ({ acc: a, v: volFor(a.id) })).filter(x => x.v);
+  const processedBy = sumByCurrency(withVol, x => Number(x.v.amount_processed || 0), x => ccyOf(x.acc));
+  const revenueBy = sumByCurrency(withVol, x => revenueOf(x.acc, x.v), x => ccyOf(x.acc));
+  const savingBy = sumByCurrency(accounts, a => accountSavings(a.rates).saving, ccyOf);
+  const savingYrBy = sumByCurrency(accounts, a => accountSavings(a.rates).saving * 12, ccyOf);
   const liveCount = accounts.filter(a => a.status === 'live').length;
-  // potential customer savings across all accounts (from the per-row quote model)
-  const totalSavingMo = accounts.reduce((s, a) => s + accountSavings(a.rates).saving, 0);
 
   const accName = (a) => a.label || a.location?.name || a.company?.name || 'Unnamed account';
 
@@ -181,9 +189,9 @@ export default function PaymentsPanel({ profile, onNavigate }) {
 
           {/* Headline */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Headline icon={<PiggyBank size={18} />} value={gbp0(totalSavingMo)} label="Customer savings / mo" sub={`${gbp0(totalSavingMo * 12)} / yr potential`} accent />
-            <Headline icon={<Banknote size={18} />} value={gbp0(totalProcessed)} label="Amount processed" sub={`in ${new Date(period).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}`} accent />
-            <Headline icon={<TrendingUp size={18} />} value={gbp0(totalRevenue)} label="Our revenue" sub="margin this month" />
+            <Headline icon={<PiggyBank size={18} />} value={fmtByCurrency(savingBy, 0)} label="Customer savings / mo" sub={`${fmtByCurrency(savingYrBy, 0)} / yr potential`} accent />
+            <Headline icon={<Banknote size={18} />} value={fmtByCurrency(processedBy, 0)} label="Amount processed" sub={`in ${new Date(period).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}`} accent />
+            <Headline icon={<TrendingUp size={18} />} value={fmtByCurrency(revenueBy, 0)} label="Our revenue" sub="margin this month" />
             <Headline value={liveCount} label="Live accounts" sub={`${accounts.length} total`} />
           </div>
 
@@ -212,6 +220,7 @@ export default function PaymentsPanel({ profile, onNavigate }) {
                     : accounts.map(a => {
                       const v = volFor(a.id);
                       const s = accountSavings(a.rates);
+                      const { m0 } = moneyFor(ccyOf(a));
                       return (
                         <tr key={a.id} onClick={() => setSelected(a)} className="border-b border-bdr/60 hover:bg-card/50 cursor-pointer">
                           <td className="px-5 py-2.5">
@@ -221,9 +230,9 @@ export default function PaymentsPanel({ profile, onNavigate }) {
                           <td className="px-3 py-2.5"><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg ${STATUS_STYLE[a.status]}`}>{a.status}</span></td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-muted">{s.vol ? pct2(s.currentEff) : '—'}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-paper">{s.vol ? pct2(s.ourEff) : '—'}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-600">{s.vol ? gbp0(s.saving) : '—'}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-emerald-600">{s.vol ? m0(s.saving) : '—'}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-emerald-600">{marginPct(a).toFixed(2)}%</td>
-                          <td className="px-5 py-2.5 text-right tabular-nums font-semibold text-paper">{v ? gbp0(revenueOf(a, v)) : '—'}</td>
+                          <td className="px-5 py-2.5 text-right tabular-nums font-semibold text-paper">{v ? m0(revenueOf(a, v)) : '—'}</td>
                         </tr>
                       );
                     })}
@@ -298,13 +307,27 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
   const region = f.region_code || suggested;
   const sym = region === 'US' ? '$' : '£';
   const minor = region === 'US' ? 'c' : 'p';
+  const { m0, m2 } = moneyFor(region === 'US' ? 'USD' : 'GBP');
   useEffect(() => {
     let live = true;
     loadCostTemplate(supabase, region).then(t => {
       if (!live) return;
       setTemplate(t);
-      // A brand new card starts on the template's costs.
-      if (!a.id) setRates(emptyRates(t));
+      // A new card starts on the template's costs. An EXISTING card takes them
+      // for any row nobody has priced yet: leaving those blank meant the row
+      // read as a zero buy cost, so margin looked bigger than it was. Only
+      // blank cells are filled, so a saved rate always wins, and this is safe
+      // whichever of the two loads lands first.
+      if (!a.id) { setRates(emptyRates(t)); return; }
+      setRates(prev => Object.fromEntries(RATE_CATEGORIES.map(c => {
+        const cost = costFor(t, c.key);
+        const r = prev[c.key] || {};
+        const fill = (cur, v) => (cur === '' || cur == null ? (v == null ? '' : String(v)) : cur);
+        return [c.key, { ...r,
+          buy_rate_pct: fill(r.buy_rate_pct, cost.buy),
+          buy_txn_fee: fill(r.buy_txn_fee, cost.buyTxn),
+          split: fill(r.split, cost.split) }];
+      })));
     });
     return () => { live = false; };
   }, [region, a.id]);
@@ -423,7 +446,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
             <div><label className={label}>Avg transaction size {sym}</label><input className={input} value={f.avg_txn_size} onChange={e => set('avg_txn_size', e.target.value)} placeholder="20" /></div>
           </div>
 
-          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} channelTotal={channelTotal(ch.key)} avgTxn={f.avg_txn_size} splitSum={splitSum(ch.key)} sym={sym} minor={minor} />)}
+          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} channelTotal={channelTotal(ch.key)} avgTxn={f.avg_txn_size} splitSum={splitSum(ch.key)} sym={sym} minor={minor} m0={m0} template={template} />)}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div><label className={label}>Processing partner</label><input className={input} value={f.partner} onChange={e => set('partner', e.target.value)} placeholder="e.g. Adyen" /></div>
@@ -434,9 +457,9 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
           <div className="glass-inner rounded-xl p-4 grid grid-cols-2 md:grid-cols-5 gap-3 text-center">
             <Mini value={fmtMoney0(totals.vol, region === 'US' ? 'USD' : 'GBP')} label="Monthly volume" />
             <Mini value={totals.vol ? pct2(totals.currentEff) + ' → ' + pct2(totals.ourEff) : '—'} label="Eff. rate (their → ours)" />
-            <Mini value={totals.vol ? gbp2(totals.saving) : '—'} label="Customer saves / mo" tone="emerald" />
-            <Mini value={totals.vol ? gbp0(totals.savingYr) : '—'} label="Customer saves / yr" tone="emerald" />
-            <Mini value={totals.vol ? gbp2(totals.margin) : '—'} label="We earn / mo" tone="amber" />
+            <Mini value={totals.vol ? m2(totals.saving) : '—'} label="Customer saves / mo" tone="emerald" />
+            <Mini value={totals.vol ? m0(totals.savingYr) : '—'} label="Customer saves / yr" tone="emerald" />
+            <Mini value={totals.vol ? m2(totals.margin) : '—'} label="We earn / mo" tone="amber" />
           </div>
           {belowCost.length > 0 && (
             <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700">
@@ -455,7 +478,12 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
 
 const cell = "w-full px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper text-right focus:outline-none focus:border-ember";
 
-function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym = '£', minor = 'p' }) {
+function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym = '£', minor = 'p', m0 = (n) => fmtMoney0(n, 'GBP'), template = null }) {
+  // Placeholders are the region's own costs. They used to be hardcoded UK
+  // presets, so every empty cell on a US card quietly suggested a UK number.
+  // With nothing set for a card type the cell shows a dash: an unknown cost
+  // must look unknown, never like a figure someone has agreed.
+  const ph = (v) => (v == null ? '—' : String(v));
   return (
     <div className="glass-inner rounded-xl p-3">
       <div className="flex items-center justify-between mb-2">
@@ -482,21 +510,22 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym =
           <tbody>
             {catsForChannel(ch.key).map(c => {
               const r = rates[c.key];
+              const cost = costFor(template, c.key);
               const d = deriveRow(channelTotal, r.split, avgTxn);
               const calc = rowCalc({ ...r, ...d });
               return (
                 <tr key={c.key}>
                   <td className="py-1 pr-2"><div className="text-sm text-paper leading-tight">{c.scheme}{c.tier ? <span className="text-dim"> {c.tier}</span> : ''}</div></td>
-                  <td className="px-1"><input className={cell} value={r.split} onChange={e => setRate(c.key, 'split', e.target.value)} placeholder={String(c.split)} /></td>
-                  <td className="px-1 text-right text-sm tabular-nums text-dim">{d.monthly_volume ? gbp0(d.monthly_volume) : '—'}</td>
+                  <td className="px-1"><input className={cell} value={r.split} onChange={e => setRate(c.key, 'split', e.target.value)} placeholder={ph(cost.split ?? c.split)} /></td>
+                  <td className="px-1 text-right text-sm tabular-nums text-dim">{d.monthly_volume ? m0(d.monthly_volume) : '—'}</td>
                   <td className="px-1 text-right text-sm tabular-nums text-dim">{d.monthly_txns || '—'}</td>
                   <td className="px-1"><input className={cell} value={r.current_rate_pct} onChange={e => setRate(c.key, 'current_rate_pct', e.target.value)} placeholder="—" /></td>
                   <td className="px-1"><input className={cell} value={r.our_rate_pct} onChange={e => setRate(c.key, 'our_rate_pct', e.target.value)} placeholder="—" /></td>
-                  <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_rate_pct} onChange={e => setRate(c.key, 'buy_rate_pct', e.target.value)} placeholder={String(c.buy)} /></td>
+                  <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_rate_pct} onChange={e => setRate(c.key, 'buy_rate_pct', e.target.value)} placeholder={ph(cost.buy)} /></td>
                   <td className="px-1"><input className={cell} value={r.current_txn_fee} onChange={e => setRate(c.key, 'current_txn_fee', e.target.value)} placeholder="0" /></td>
                   <td className="px-1"><input className={cell} value={r.our_txn_fee} onChange={e => setRate(c.key, 'our_txn_fee', e.target.value)} placeholder="—" /></td>
-                  <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_txn_fee} onChange={e => setRate(c.key, 'buy_txn_fee', e.target.value)} placeholder={String(c.buyTxn)} /></td>
-                  <td className={`pl-2 text-right text-sm font-semibold tabular-nums ${calc.saving < -0.5 ? 'text-red-600' : 'text-emerald-600'}`}>{calc.vol ? gbp0(calc.saving) : '—'}</td>
+                  <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_txn_fee} onChange={e => setRate(c.key, 'buy_txn_fee', e.target.value)} placeholder={ph(cost.buyTxn)} /></td>
+                  <td className={`pl-2 text-right text-sm font-semibold tabular-nums ${calc.saving < -0.5 ? 'text-red-600' : 'text-emerald-600'}`}>{calc.vol ? m0(calc.saving) : '—'}</td>
                 </tr>
               );
             })}
