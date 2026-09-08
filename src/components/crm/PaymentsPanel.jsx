@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-react';
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
+import { loadCostTemplate, costFor, regionForCountry } from '../../lib/cardCosts';
 
 export const gbp0 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 });
 export const gbp2 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -122,6 +123,7 @@ export default function PaymentsPanel({ profile, onNavigate }) {
   const [month, setMonth] = useState(thisMonth());
   const [selected, setSelected] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [editingCosts, setEditingCosts] = useState(null);
   const [loading, setLoading] = useState(true);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -130,7 +132,7 @@ export default function PaymentsPanel({ profile, onNavigate }) {
     const [a, v, c, l, r] = await Promise.all([
       supabase.from('processing_accounts').select('*, company:companies(name), location:locations(name)').order('created_at', { ascending: false }),
       supabase.from('processing_volumes').select('*'),
-      supabase.from('companies').select('id, name').order('name'),
+      supabase.from('companies').select('id, name, country').order('name'),
       supabase.from('locations').select('id, name, company_id').order('name'),
       supabase.from('processing_rates').select('*'),
     ]);
@@ -229,6 +231,8 @@ export default function PaymentsPanel({ profile, onNavigate }) {
             </div>
           </div>
 
+          <CostTemplates profile={profile} onEdit={setEditingCosts} editing={editingCosts} onClose={() => setEditingCosts(null)} />
+
         </div>
       </div>
 
@@ -256,10 +260,16 @@ function Headline({ icon, value, label, sub, accent }) {
 const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
 const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
-const emptyRates = () => Object.fromEntries(RATE_CATEGORIES.map(c => [c.key, {
-  current_rate_pct: '', our_rate_pct: '', buy_rate_pct: String(c.buy),
-  current_txn_fee: '', our_txn_fee: '', buy_txn_fee: String(c.buyTxn), split: String(c.split),
-}]));
+// Buy costs come from the region's cost template. With no template loaded this
+// is exactly what the app used before templates existed.
+const emptyRates = (template = null) => Object.fromEntries(RATE_CATEGORIES.map(c => {
+  const cost = costFor(template, c.key, c);
+  return [c.key, {
+    current_rate_pct: '', our_rate_pct: '', buy_rate_pct: cost.buy == null ? '' : String(cost.buy),
+    current_txn_fee: '', our_txn_fee: '', buy_txn_fee: cost.buyTxn == null ? '' : String(cost.buyTxn),
+    split: cost.split == null ? '' : String(cost.split),
+  }];
+}));
 
 export function AccountModal({ account, companies, locations, onClose, onSaved }) {
   const a = account || {};
@@ -269,10 +279,32 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     partner: a.partner || '', merchant_ref: a.merchant_ref || '',
   });
   const [rates, setRates] = useState(emptyRates());
+  const [template, setTemplate] = useState(null);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const setRate = (cat, field, v) => setRates(p => ({ ...p, [cat]: { ...p[cat], [field]: v } }));
   const num = (v) => v === '' || v == null ? null : Number(v);
   const locs = locations.filter(l => l.company_id === f.company_id);
+
+  // The cost base for this customer's region, by their company's country.
+  const region = regionForCountry(companies.find(c => c.id === f.company_id)?.country);
+  useEffect(() => {
+    let live = true;
+    loadCostTemplate(supabase, region).then(t => {
+      if (!live) return;
+      setTemplate(t);
+      // A brand new card starts on the template's costs.
+      if (!a.id) setRates(emptyRates(t));
+    });
+    return () => { live = false; };
+  }, [region, a.id]);
+
+  const applyTemplate = () => setRates(prev => Object.fromEntries(RATE_CATEGORIES.map(c => {
+    const cost = costFor(template, c.key, c);
+    return [c.key, { ...prev[c.key],
+      buy_rate_pct: cost.buy == null ? '' : String(cost.buy),
+      buy_txn_fee: cost.buyTxn == null ? '' : String(cost.buyTxn),
+      split: prev[c.key]?.split || (cost.split == null ? '' : String(cost.split)) }];
+  })));
 
   useEffect(() => {
     if (!a.id) return;
@@ -458,4 +490,148 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum }) {
 function Mini({ value, label, tone }) {
   const color = tone === 'emerald' ? 'text-emerald-600' : tone === 'amber' ? 'text-amber-600' : 'text-paper';
   return <div><div className={`text-lg font-bold tabular-nums ${color}`}>{value}</div><div className="text-[10px] text-dim">{label}</div></div>;
+}
+
+
+/* What card processing costs us, per region — the base every rate card starts
+ * from. Saving writes a NEW effective-dated row rather than editing the old
+ * one, so a quote priced last month still explains itself. */
+function CostTemplates({ profile, onEdit, editing, onClose }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [missing, setMissing] = useState(false);
+  const canWrite = profile.role === 'owner' || profile.role === 'editor';
+
+  const load = useCallback(async () => {
+    const { data, error } = await supabase.from('processing_cost_templates')
+      .select('*').order('region_code').order('effective_from', { ascending: false });
+    if (error) { setMissing(true); setLoading(false); return; }
+    setMissing(false); setRows(data || []); setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const current = (region) => (rows.filter(r => r.region_code === region && r.effective_from <= new Date().toISOString().slice(0, 10))[0]) || null;
+
+  if (loading) return null;
+  return (
+    <div className="glass-card rounded-2xl overflow-hidden">
+      <div className="px-5 py-3.5 border-b border-bdr flex items-center gap-2">
+        <h3 className="text-[13px] font-bold text-paper">What processing costs us</h3>
+        <span className="text-xs text-dim">the base every rate card starts from</span>
+      </div>
+      {missing ? (
+        <div className="px-5 py-4 text-xs text-amber-600">
+          Cost templates are not set up on this database yet, so rate cards still use the built-in UK rates.
+          Apply migration 108 and this section becomes editable.
+        </div>
+      ) : (
+        <div className="divide-y divide-bdr/60">
+          {['UK', 'US'].map(region => {
+            const t = current(region);
+            const versions = rows.filter(r => r.region_code === region).length;
+            return (
+              <div key={region} className="px-5 py-3 flex items-center gap-3">
+                <span className="text-sm font-semibold text-paper w-8">{region}</span>
+                {t ? (
+                  <>
+                    <span className="text-xs text-muted flex-1">
+                      {RATE_CATEGORIES.filter(c => c.channel === 'cp').map(c => `${c.label} ${t.rows?.[c.key]?.buy_rate_pct ?? '—'}%`).join(' · ')}
+                    </span>
+                    <span className="text-[10px] text-dim">from {new Date(t.effective_from + 'T00:00:00').toLocaleDateString('en-GB')} · {versions} version{versions === 1 ? '' : 's'}</span>
+                  </>
+                ) : (
+                  <span className="text-xs text-amber-600 flex-1">Not set up. {region} rate cards use the built-in UK rates until you set this.</span>
+                )}
+                {canWrite && (
+                  <button onClick={() => onEdit({ region, from: t })} className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-ember/15 text-ember-deep border border-ember/25 hover:bg-ember/25">
+                    {t ? 'New version' : 'Set up'}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {editing && <CostTemplateModal region={editing.region} from={editing.from} profile={profile}
+        onClose={onClose} onSaved={() => { onClose(); load(); }} />}
+    </div>
+  );
+}
+
+function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
+  const seed = () => Object.fromEntries(RATE_CATEGORIES.map(c => {
+    const r = from?.rows?.[c.key];
+    return [c.key, {
+      buy_rate_pct: r?.buy_rate_pct ?? c.buy, buy_txn_fee: r?.buy_txn_fee ?? c.buyTxn, split_pct: r?.split_pct ?? c.split,
+    }];
+  }));
+  const [vals, setVals] = useState(seed);
+  const [effective, setEffective] = useState(new Date().toISOString().slice(0, 10));
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k, field, v) => setVals(p => ({ ...p, [k]: { ...p[k], [field]: v } }));
+
+  const save = async () => {
+    setSaving(true); setErr('');
+    const rows = Object.fromEntries(Object.entries(vals).map(([k, v]) => [k, {
+      buy_rate_pct: v.buy_rate_pct === '' ? null : Number(v.buy_rate_pct),
+      buy_txn_fee: v.buy_txn_fee === '' ? null : Number(v.buy_txn_fee),
+      split_pct: v.split_pct === '' ? null : Number(v.split_pct),
+    }]));
+    const { error } = await supabase.from('processing_cost_templates')
+      .upsert({ region_code: region, effective_from: effective, rows, note: note.trim() || null, created_by: profile.id },
+        { onConflict: 'region_code,effective_from' });
+    setSaving(false);
+    if (error) { setErr(error.message); return; }
+    onSaved();
+  };
+
+  const cell = "px-2 py-1 bg-card border border-bdr rounded-lg text-sm text-paper w-full focus:outline-none focus:border-ember";
+  const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className="glass-card rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+        <div className="px-5 py-4 border-b border-bdr flex items-center gap-3">
+          <div>
+            <div className="text-base font-bold text-paper">{region} processing costs</div>
+            <div className="text-[11px] text-dim">What each transaction costs us. What we charge is set per rate card, on top of this.</div>
+          </div>
+          <button onClick={onClose} className="ml-auto text-muted hover:text-paper"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+            <div><label className={label}>In force from</label>
+              <input type="date" className={cell} value={effective} onChange={e => setEffective(e.target.value)} /></div>
+            <div className="text-[11px] text-dim pb-2">Earlier quotes keep the costs they were priced on.</div>
+          </div>
+          {CHANNELS.map(ch => (
+            <div key={ch.key}>
+              <div className={label}>{ch.label} <span className="normal-case tracking-normal font-normal">({ch.sub})</span></div>
+              <div className="space-y-1.5">
+                {RATE_CATEGORIES.filter(c => c.channel === ch.key).map(c => (
+                  <div key={c.key} className="grid grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))] gap-2 items-center">
+                    <span className="text-sm text-paper truncate">{c.label}</span>
+                    <div><span className="text-[9px] text-dim block">Buy rate %</span>
+                      <input type="number" step="0.01" className={cell} value={vals[c.key].buy_rate_pct ?? ''} onChange={e => set(c.key, 'buy_rate_pct', e.target.value)} /></div>
+                    <div><span className="text-[9px] text-dim block">Buy fee (p)</span>
+                      <input type="number" step="0.1" className={cell} value={vals[c.key].buy_txn_fee ?? ''} onChange={e => set(c.key, 'buy_txn_fee', e.target.value)} /></div>
+                    <div><span className="text-[9px] text-dim block">Card mix %</span>
+                      <input type="number" step="1" className={cell} value={vals[c.key].split_pct ?? ''} onChange={e => set(c.key, 'split_pct', e.target.value)} /></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div><label className={label}>Note</label>
+            <input className={cell} value={note} onChange={e => setNote(e.target.value)} placeholder="Why these changed, or where they came from" /></div>
+          {err && <div className="text-xs text-red-600">{err}</div>}
+        </div>
+        <div className="px-5 py-4 border-t border-bdr flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-muted border border-bdr rounded-xl">Cancel</button>
+          <button onClick={save} disabled={saving} className="px-5 py-2 bg-ember text-ink text-sm font-semibold rounded-xl disabled:opacity-50">{saving ? 'Saving…' : 'Save costs'}</button>
+        </div>
+      </div>
+    </div>
+  );
 }

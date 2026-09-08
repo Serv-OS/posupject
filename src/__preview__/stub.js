@@ -76,7 +76,13 @@ const PROC_RATES = [
   { id: 'pr1', account_id: 'pa1', category: 'visa_mc_cp', monthly_volume: 100000, monthly_txns: 8000, current_rate_pct: 1.6, our_rate_pct: 1.2, buy_rate_pct: 0.9, our_txn_fee: 5, buy_txn_fee: 3 },
 ];
 const WEIGHTS = [{ stage: 'qualified', probability: 0.25 }, { stage: 'demo_booked', probability: 0.4 }, { stage: 'proposal_sent', probability: 0.7 }, { stage: 'negotiation', probability: 0.85 }];
-export const TABLES = { deal_stage_weights: WEIGHTS, deal_trading: [], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };
+const COST_TEMPLATES = [
+  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', note: 'Seeded from the hardcoded rates',
+    rows: { cp_vm_credit: { buy_rate_pct: 0.65, buy_txn_fee: 6, split_pct: 15 }, cp_vm_debit: { buy_rate_pct: 0.55, buy_txn_fee: 6, split_pct: 82 },
+            cp_amex: { buy_rate_pct: 2.0, buy_txn_fee: 10, split_pct: 3 }, cnp_vm_credit: { buy_rate_pct: 0.65, buy_txn_fee: 6, split_pct: 35 },
+            cnp_vm_debit: { buy_rate_pct: 0.55, buy_txn_fee: 6, split_pct: 60 }, cnp_amex: { buy_rate_pct: 2.0, buy_txn_fee: 10, split_pct: 5 } } },
+];
+export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };
 export const MEMBERS_LIST = MEMBERS;
 
 function makeQuery(table) {
