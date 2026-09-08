@@ -582,8 +582,15 @@ function CostTemplates({ profile, onEdit, editing, onClose }) {
                 <span className="text-sm font-semibold text-paper w-8">{region}</span>
                 {t ? (
                   <>
+                    {/* The BUY rate, not just interchange: interchange alone is not
+                        what a card costs us, and this line used to read as though it
+                        were. It also hardcoded pence, on a row that can be American. */}
                     <span className="text-xs text-muted flex-1">
-                      {RATE_CATEGORIES.filter(c => c.channel === 'cp').map(c => `${c.label} ${t.rows?.[c.key]?.ic_rate_pct ?? '—'}%`).join(' · ')} + {t.markup?.rate_pct ?? '—'}% + {t.markup?.txn_minor ?? '—'}p
+                      in-store {RATE_CATEGORIES.filter(c => c.channel === 'cp').map(c => {
+                        const cost = costFor(t, c.key);
+                        const u = region === 'US' ? 'c' : 'p';
+                        return `${c.label} ${cost.buy == null ? '—' : `${cost.buy}% + ${cost.buyTxn}${u}`}`;
+                      }).join(' · ')}
                     </span>
                     <span className="text-[10px] text-dim">from {new Date(t.effective_from + 'T00:00:00').toLocaleDateString('en-GB')} · {versions} version{versions === 1 ? '' : 's'}</span>
                   </>
@@ -610,7 +617,9 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
   const seed = () => Object.fromEntries(RATE_CATEGORIES.map(c => {
     const r = from?.rows?.[c.key];
     return [c.key, {
-      ic_rate_pct: r?.ic_rate_pct ?? '', ic_txn_minor: r?.ic_txn_minor ?? '', split_pct: r?.split_pct ?? c.split,
+      ic_rate_pct: r?.ic_rate_pct ?? '', ic_txn_minor: r?.ic_txn_minor ?? '',
+      scheme_rate_pct: r?.scheme_rate_pct ?? '', scheme_txn_minor: r?.scheme_txn_minor ?? '',
+      split_pct: r?.split_pct ?? c.split,
     }];
   }));
   const [vals, setVals] = useState(seed);
@@ -631,6 +640,8 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
     const rows = Object.fromEntries(Object.entries(vals).map(([k, v]) => [k, {
       ic_rate_pct: v.ic_rate_pct === '' ? null : Number(v.ic_rate_pct),
       ic_txn_minor: v.ic_txn_minor === '' ? null : Number(v.ic_txn_minor),
+      scheme_rate_pct: v.scheme_rate_pct === '' ? null : Number(v.scheme_rate_pct),
+      scheme_txn_minor: v.scheme_txn_minor === '' ? null : Number(v.scheme_txn_minor),
       split_pct: v.split_pct === '' ? null : Number(v.split_pct),
     }]));
     const { error } = await supabase.from('processing_cost_templates')
@@ -668,7 +679,10 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
                 <input type="number" step="0.01" className={cell} value={markup.rate_pct} onChange={e => setMarkup(m => ({ ...m, rate_pct: e.target.value }))} /></div>
               <div className="w-24"><span className="text-[9px] text-dim block">Per txn ({minor})</span>
                 <input type="number" step="0.1" className={cell} value={markup.txn_minor} onChange={e => setMarkup(m => ({ ...m, txn_minor: e.target.value }))} /></div>
-              <div className="text-[11px] text-dim pb-2">Added to interchange on every card. Our cost is interchange + {markup.rate_pct || 0}% + {markup.txn_minor || 0}{minor}.</div>
+              <div className="text-[11px] text-dim pb-2">Added to interchange on every card. Our cost is interchange + scheme fees + {markup.rate_pct || 0}% + {markup.txn_minor || 0}{minor}.</div>
+            </div>
+            <div className="text-[11px] text-dim mt-2 pt-2 border-t border-bdr">
+              <b>Scheme fees</b> are what Visa and Mastercard charge on top of interchange (assessments, authorisation, clearing). Fill them in if your acquirer passes them through separately, which is the usual <b>IC++</b> arrangement. Leave them empty under <b>IC+</b>, where the markup above already absorbs them. A settlement invoice settles it: three fee lines means IC++, two means IC+.
             </div>
           </div>
           {CHANNELS.map(ch => (
@@ -676,21 +690,27 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
               <div className={label}>{ch.label} <span className="normal-case tracking-normal font-normal">({ch.sub})</span></div>
               <div className="space-y-1.5">
                 {RATE_CATEGORIES.filter(c => c.channel === ch.key).map(c => (
-                  <div key={c.key} className="grid grid-cols-[minmax(0,1.2fr)_repeat(3,minmax(0,1fr))_minmax(0,1.1fr)] gap-2 items-center">
+                  <div key={c.key} className="grid grid-cols-[minmax(0,1.15fr)_repeat(5,minmax(0,1fr))_minmax(0,1.2fr)] gap-2 items-center">
                     <span className="text-sm text-paper truncate">{c.label}</span>
                     <div><span className="text-[9px] text-dim block">Interchange %</span>
                       <input type="number" step="0.01" className={cell} value={vals[c.key].ic_rate_pct ?? ''} onChange={e => set(c.key, 'ic_rate_pct', e.target.value)} /></div>
                     <div><span className="text-[9px] text-dim block">Interchange ({minor})</span>
                       <input type="number" step="0.1" className={cell} value={vals[c.key].ic_txn_minor ?? ''} onChange={e => set(c.key, 'ic_txn_minor', e.target.value)} /></div>
+                    <div><span className="text-[9px] text-dim block">Scheme %</span>
+                      <input type="number" step="0.001" className={cell} value={vals[c.key].scheme_rate_pct ?? ''} onChange={e => set(c.key, 'scheme_rate_pct', e.target.value)} /></div>
+                    <div><span className="text-[9px] text-dim block">Scheme ({minor})</span>
+                      <input type="number" step="0.1" className={cell} value={vals[c.key].scheme_txn_minor ?? ''} onChange={e => set(c.key, 'scheme_txn_minor', e.target.value)} /></div>
                     <div><span className="text-[9px] text-dim block">Card mix %</span>
                       <input type="number" step="1" className={cell} value={vals[c.key].split_pct ?? ''} onChange={e => set(c.key, 'split_pct', e.target.value)} /></div>
-                    {/* The sum, as it is typed, so nobody has to do it in their head. */}
+                    {/* The sum, as it is typed, so nobody has to do it in their head.
+                        Computed by costFor, the same function the rate cards use, so
+                        the editor and the card can never disagree by a rounding step. */}
                     <div className="text-right">
                       <span className="text-[9px] text-dim block">We buy at</span>
-                      <span className="text-sm font-mono text-paper">
-                        {vals[c.key].ic_rate_pct === '' || vals[c.key].ic_rate_pct === null ? '—'
-                          : `${(Number(vals[c.key].ic_rate_pct) + (Number(markup.rate_pct) || 0)).toFixed(2)}% + ${((Number(vals[c.key].ic_txn_minor) || 0) + (Number(markup.txn_minor) || 0)).toFixed(1)}${minor}`}
-                      </span>
+                      <span className="text-sm font-mono text-paper">{(() => {
+                        const cost = costFor({ markup, rows: { [c.key]: vals[c.key] } }, c.key);
+                        return cost.buy == null ? '—' : `${cost.buy}% + ${cost.buyTxn}${minor}`;
+                      })()}</span>
                     </div>
                   </div>
                 ))}

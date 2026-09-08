@@ -83,14 +83,20 @@ const PROC_RATES = [
 ];
 const WEIGHTS = [{ stage: 'qualified', probability: 0.25 }, { stage: 'demo_booked', probability: 0.4 }, { stage: 'proposal_sent', probability: 0.7 }, { stage: 'negotiation', probability: 0.85 }];
 const COST_TEMPLATES = [
-  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', note: 'UK IFR caps', markup: { rate_pct: 0.10, txn_minor: 5 },
-    rows: { cp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, split_pct: 15 }, cp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, split_pct: 82 },
-            cp_amex: { ic_rate_pct: null, ic_txn_minor: null, split_pct: 3 }, cnp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, split_pct: 35 },
-            cnp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, split_pct: 60 }, cnp_amex: { ic_rate_pct: null, ic_txn_minor: null, split_pct: 5 } } },
-  { id: 'ct-us', region_code: 'US', effective_from: '2026-01-01', note: 'US interchange, verified Sep 2026', markup: { rate_pct: 0.10, txn_minor: 5 },
-    rows: { cp_vm_credit: { ic_rate_pct: 2.20, ic_txn_minor: 4, split_pct: 35 }, cp_vm_debit: { ic_rate_pct: 0.46, ic_txn_minor: 17.3, split_pct: 55 },
-            cp_amex: { ic_rate_pct: 2.50, ic_txn_minor: 10, split_pct: 10 }, cnp_vm_credit: { ic_rate_pct: 2.40, ic_txn_minor: 4, split_pct: 45 },
-            cnp_vm_debit: { ic_rate_pct: 0.62, ic_txn_minor: 19.2, split_pct: 45 }, cnp_amex: { ic_rate_pct: 2.80, ic_txn_minor: 10, split_pct: 10 } } },
+  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', note: 'UK IFR caps + scheme fees', markup: { rate_pct: 0.10, txn_minor: 5 },
+    rows: { cp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, scheme_rate_pct: 0.04, scheme_txn_minor: 0.8, split_pct: 15 },
+            cp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, scheme_rate_pct: 0.03, scheme_txn_minor: 0.8, split_pct: 82 },
+            cp_amex: { ic_rate_pct: null, ic_txn_minor: null, split_pct: 3 },
+            cnp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, scheme_rate_pct: 0.07, scheme_txn_minor: 2.2, split_pct: 35 },
+            cnp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, scheme_rate_pct: 0.06, scheme_txn_minor: 2.2, split_pct: 60 },
+            cnp_amex: { ic_rate_pct: null, ic_txn_minor: null, split_pct: 5 } } },
+  { id: 'ct-us', region_code: 'US', effective_from: '2026-01-01', note: 'US interchange + scheme fees, verified Sep 2026', markup: { rate_pct: 0.10, txn_minor: 5 },
+    rows: { cp_vm_credit: { ic_rate_pct: 2.29, ic_txn_minor: 4, scheme_rate_pct: 0.139, scheme_txn_minor: 2, split_pct: 35 },
+            cp_vm_debit: { ic_rate_pct: 0.50, ic_txn_minor: 17.3, scheme_rate_pct: 0.135, scheme_txn_minor: 1.8, split_pct: 55 },
+            cp_amex: { ic_rate_pct: 2.50, ic_txn_minor: 10, scheme_rate_pct: 0.15, scheme_txn_minor: 2, split_pct: 10 },
+            cnp_vm_credit: { ic_rate_pct: 2.53, ic_txn_minor: 4, scheme_rate_pct: 0.139, scheme_txn_minor: 2, split_pct: 45 },
+            cnp_vm_debit: { ic_rate_pct: 0.68, ic_txn_minor: 19.2, scheme_rate_pct: 0.135, scheme_txn_minor: 1.8, split_pct: 45 },
+            cnp_amex: { ic_rate_pct: 2.80, ic_txn_minor: 10, scheme_rate_pct: 0.15, scheme_txn_minor: 2, split_pct: 10 } } },
 ];
 
 export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };

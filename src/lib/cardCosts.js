@@ -1,16 +1,32 @@
 /* What card processing COSTS us, per region.
  *
- * Our acquirer charges us INTERCHANGE plus a markup of their own. At the time
- * of writing that markup is 0.10% + 5p on every transaction, whatever the card.
- * So the buy rate for a card type is:
+ * A card costs us three things, not two:
  *
- *     buy %   = interchange %      + markup %
- *     buy fee = interchange fixed  + markup fixed
+ *     buy %   = interchange %     + scheme %     + markup %
+ *     buy fee = interchange fixed + scheme fixed + markup fixed
  *
- * They are stored apart because they change for different reasons: interchange
- * moves when a scheme or a regulator changes it, per card type and country;
- * the markup moves only when we renegotiate. Keeping them separate also means
- * the quote screen can show a rep exactly where a cost came from.
+ * INTERCHANGE goes to the card issuer. SCHEME FEES (assessments, authorisation
+ * and clearing fees) go to Visa and Mastercard. MARKUP is our acquirer's own
+ * cut, currently 0.10% + 5p.
+ *
+ * The scheme layer is separate because it is a pass-through we do not control
+ * and because it is easy to forget: quoting "interchange plus 0.10% and 5p"
+ * sounds complete, and it is not. On US credit the scheme layer is about
+ * 0.14% + 2c, which is roughly 6% of the margin on a $45 ticket. In the UK it
+ * is far smaller, nearer 0.03% + 0.8p card present, because Visa and
+ * Mastercard price Europe differently.
+ *
+ * Whether scheme fees sit inside a given acquirer's markup or on top of it is
+ * a CONTRACT question, not a research one. Under IC++ they are passed through
+ * at cost and belong here; under IC+ the markup absorbs them and these fields
+ * should be left empty. Set them to nothing and the maths is exactly what it
+ * was before this layer existed.
+ *
+ * All three are stored apart because they change for different reasons:
+ * interchange moves when a scheme or a regulator changes it, per card type and
+ * country; scheme fees move on the networks' own schedules; the markup moves
+ * only when we renegotiate. Keeping them separate also means the quote screen
+ * can show a rep exactly where a cost came from.
  *
  * Fixed amounts are in the region's MINOR unit: pence in the UK, cents in the
  * US. The rest of the app already works in pence for per-transaction fees.
@@ -63,15 +79,23 @@ const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v)
 export function costFor(template, key) {
   const row = template?.rows?.[key];
   const markup = template?.markup || DEFAULT_MARKUP;
-  if (!row) return { buy: null, buyTxn: null, split: null, ic: null, icTxn: null, markup };
+  if (!row) return { buy: null, buyTxn: null, split: null, ic: null, icTxn: null, scheme: null, schemeTxn: null, markup };
   const ic = num(row.ic_rate_pct);
   const icTxn = num(row.ic_txn_minor);
+  // An unset scheme fee means "we are not charged one separately", which is a
+  // real answer under IC+ pricing, so it adds nothing rather than voiding the
+  // buy rate. An unset INTERCHANGE is different: that is genuinely unknown,
+  // and the row stays null so it cannot read as free.
+  const scheme = num(row.scheme_rate_pct);
+  const schemeTxn = num(row.scheme_txn_minor);
   return {
     ic,
     icTxn,
+    scheme,
+    schemeTxn,
     markup,
-    buy: ic === null ? null : round2(ic + Number(markup.rate_pct || 0)),
-    buyTxn: icTxn === null ? null : round2(icTxn + Number(markup.txn_minor || 0)),
+    buy: ic === null ? null : round2(ic + Number(scheme || 0) + Number(markup.rate_pct || 0)),
+    buyTxn: icTxn === null ? null : round2(icTxn + Number(schemeTxn || 0) + Number(markup.txn_minor || 0)),
     split: num(row.split_pct),
   };
 }
@@ -83,5 +107,8 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 export function costExplain(template, key, symbol = 'p') {
   const c = costFor(template, key);
   if (c.ic === null) return 'No interchange set for this card type';
-  return `${c.ic}% + ${c.icTxn}${symbol} interchange, plus ${c.markup.rate_pct}% + ${c.markup.txn_minor}${symbol}`;
+  const parts = [`${c.ic}% + ${c.icTxn}${symbol} interchange`];
+  if (c.scheme != null || c.schemeTxn != null) parts.push(`${c.scheme ?? 0}% + ${c.schemeTxn ?? 0}${symbol} scheme fees`);
+  parts.push(`${c.markup.rate_pct}% + ${c.markup.txn_minor}${symbol} acquirer`);
+  return parts.join(', plus ');
 }
