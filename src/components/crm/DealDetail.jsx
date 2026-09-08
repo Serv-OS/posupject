@@ -319,7 +319,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                 </div>
               </Card>
 
-              <DealTradingCard dealId={dealId} canWrite={canWrite} onNavigate={onNavigate} />
+              <DealTradingCard dealId={dealId} currency={deal.currency || 'GBP'} canWrite={canWrite} onNavigate={onNavigate} />
 
               <Card title="Company">
                 {company ? (

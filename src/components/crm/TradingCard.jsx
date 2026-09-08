@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { gbp0 } from '../../lib/money';
+import { fmtMoney0 } from '../../lib/money';
+import { currencyForCountry } from '../../lib/region';
 import { transactionsFrom, estimateAccuracy } from '../../lib/trading';
 
 /* What the VENUE turns over — asked in discovery, not what we charge.
@@ -19,7 +20,7 @@ const n = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null
 const txt = (v) => (v === null || v === undefined ? '' : String(v));
 const count = (v) => (v === null ? '—' : Number(v).toLocaleString('en-GB'));
 
-function Row({ label, revenue, atv, editable, onSave }) {
+function Row({ label, revenue, atv, editable, onSave, fmt0 = (v) => fmtMoney0(v, 'GBP') }) {
   const [rev, setRev] = useState(txt(revenue));
   const [av, setAv] = useState(txt(atv));
   useEffect(() => { setRev(txt(revenue)); setAv(txt(atv)); }, [revenue, atv]);
@@ -53,16 +54,20 @@ function Row({ label, revenue, atv, editable, onSave }) {
         </div>
       </div>
       {n(rev) !== null && (
-        <div className="text-[11px] text-dim mt-2">{gbp0(n(rev) * 12)} a year</div>
+        <div className="text-[11px] text-dim mt-2">{fmt0(n(rev) * 12)} a year</div>
       )}
     </div>
   );
 }
 
 /** Location-level: the source of truth a deal rolls up from. */
-export function LocationTradingCard({ location, canWrite, onSaved }) {
+export function LocationTradingCard({ location, company, canWrite, onSaved }) {
   const [err, setErr] = useState('');
   if (!location) return null;
+  // A site in Provo trades in dollars. Take the country from the site, falling
+  // back to its company, rather than assuming everyone is in the UK.
+  const ccy = currencyForCountry(location.country || company?.country);
+  const gbp0 = (n) => fmtMoney0(n, ccy);
 
   const save = async (patch) => {
     const { error } = await supabase.from('locations')
@@ -89,13 +94,13 @@ export function LocationTradingCard({ location, canWrite, onSaved }) {
       <div className="p-5 space-y-3">
         {err && <div className="text-xs text-red-600">{err}</div>}
 
-        <Row label="Expected — what they told us" editable={canWrite}
+        <Row label="Expected — what they told us" editable={canWrite} fmt0={gbp0}
           revenue={location.est_monthly_revenue} atv={location.est_avg_transaction}
           onSave={({ revenue, atv }) => save(
             revenue !== undefined ? { est_monthly_revenue: revenue } : { est_avg_transaction: atv },
           )} />
 
-        <Row label="Actual — once trading" editable={canWrite}
+        <Row label="Actual — once trading" editable={canWrite} fmt0={gbp0}
           revenue={location.actual_monthly_revenue} atv={location.actual_avg_transaction}
           onSave={({ revenue, atv }) => save(
             revenue !== undefined ? { actual_monthly_revenue: revenue } : { actual_avg_transaction: atv },
@@ -121,7 +126,8 @@ export function LocationTradingCard({ location, canWrite, onSaved }) {
 }
 
 /** Deal-level: rolls up its sites, unless someone has typed an override. */
-export function DealTradingCard({ dealId, canWrite, onNavigate }) {
+export function DealTradingCard({ dealId, currency = 'GBP', canWrite, onNavigate }) {
+  const gbp0 = (n) => fmtMoney0(n, currency);
   const [row, setRow] = useState(null);
   const [sites, setSites] = useState([]);
   const [editing, setEditing] = useState(false);

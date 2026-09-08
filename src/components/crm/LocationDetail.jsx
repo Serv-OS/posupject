@@ -148,7 +148,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
     'name', 'address', 'city', 'postcode', 'phone', 'email', 'venue_type',
     'covers', 'status', 'owner_id', 'notes', 'kickoff_at',
     'expected_install_date', 'actual_install_date', 'go_live_date', 'activation_date',
-    'venue_code',
+    'venue_code', 'country',
   ];
 
   const save = async () => {
@@ -348,6 +348,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                 ] },
                 { title: 'Address & contact', fields: [
                   { key: 'address', label: 'Address' }, { key: 'city', label: 'City' }, { key: 'postcode', label: 'Postcode' },
+                  { key: 'country', label: 'Country', type: 'select', options: [['GB', 'United Kingdom'], ['US', 'United States']], hint: 'Sets the money this site trades in.' },
                   { key: 'phone', label: 'Phone', type: 'tel' }, { key: 'email', label: 'Email', type: 'email' },
                 ] },
                 { title: 'Key dates', summary: 'call, install, go-live', fields: [
@@ -375,6 +376,13 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                 <div><label className={label}>Covers</label><input className={input} type="number" value={draft.covers || ''} onChange={e => set('covers', e.target.value ? parseInt(e.target.value) : null)} /></div>
                 <div><label className={label}>Address</label><input className={input} value={draft.address || ''} onChange={e => set('address', e.target.value)} /></div>
                 <div><label className={label}>City</label><input className={input} value={draft.city || ''} onChange={e => set('city', e.target.value)} /></div>
+                <div>
+                  <label className={label}>Country</label>
+                  <select className={input} value={draft.country || 'GB'} onChange={e => set('country', e.target.value)}>
+                    <option value="GB">United Kingdom</option><option value="US">United States</option>
+                  </select>
+                  <div className="text-[10px] text-dim mt-1">Sets the money this site trades in. New sites default to the UK.</div>
+                </div>
                 <div><label className={label}>Postcode</label><input className={input} value={draft.postcode || ''} onChange={e => set('postcode', e.target.value)} /></div>
                 {/* The venue's ID in ServOS. Copied from the ServOS admin portal
                     when the venue is set up, and it is how the support chat knows
@@ -445,7 +453,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                 </div>
               </Card>
 
-              <LocationTradingCard location={location} canWrite={canWrite} onSaved={load} />
+              <LocationTradingCard location={location} company={company} canWrite={canWrite} onSaved={load} />
 
               <PosLinkCard locationId={locationId} code={location.venue_code} posId={location.pos_location_id}
                 profile={profile} onSaved={(v) => setLocation(l => ({ ...l, ...v }))} />
