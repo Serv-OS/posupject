@@ -557,10 +557,12 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
           </div>
           {belowCost.length > 0 && (
             <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700">
-              ⚠ You're priced <b>below your buy cost</b> on: {belowCost.map(c => `${c.channelLabel} ${c.label}`).join(', ')}. TXN fees are in <b>{minor === 'c' ? 'cents' : 'pence'}</b> — enter <b>8</b> for 8p (not 0.08); match the Buy txn column (6 / 10). Make sure Our % ≥ Buy % and Our txn ≥ Buy txn.
+              ⚠ You're priced <b>below what the card costs us</b> on: {belowCost.map(c => `${c.channelLabel} ${c.label}`).join(', ')}. TXN fees are in <b>{minor === 'c' ? 'cents' : 'pence'}</b> — enter <b>8</b> for 8{minor} (not 0.08). Make sure Our % ≥ Cost % and Our txn ≥ Cost txn.
             </div>
           )}
-          <div className="text-[10px] text-dim">“We earn” is your margin (our rate − buy rate, plus txn markup) — internal only, never shown on the customer quote. Volumes auto-split by industry-standard card mix; adjust Split % per row if you have the customer's real breakdown.</div>
+          <div className="text-[10px] text-dim">
+            <b>Cost</b> is the all-in cost of the transaction to us: interchange + scheme fees + our acquirer's markup. It is not a markup on its own — in US merchant services a "buy rate" usually means only the bit above interchange, and this is the whole thing. “We earn” is Cost subtracted from what we charge. Both are internal and never reach the customer's copy. Volumes auto-split by card mix; adjust Split % per row if you have their real breakdown.
+          </div>
 
           <div className="flex gap-2 pt-1"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save quote</button>
             <button onClick={onClose} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>
@@ -594,10 +596,10 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym =
               <th className="font-bold pb-1.5 px-1">Txns/mo</th>
               <th className="font-bold pb-1.5 px-1">Their %</th>
               <th className="font-bold pb-1.5 px-1">Our %</th>
-              <th className="font-bold pb-1.5 px-1">Buy %</th>
+              <th className="font-bold pb-1.5 px-1">Cost %</th>
               <th className="font-bold pb-1.5 px-1">Their txn {minor}</th>
               <th className="font-bold pb-1.5 px-1">Our txn {minor}</th>
-              <th className="font-bold pb-1.5 px-1">Buy txn {minor}</th>
+              <th className="font-bold pb-1.5 px-1">Cost txn {minor}</th>
               <th className="font-bold pb-1.5 pl-2 text-right">Saves/mo</th>
             </tr>
           </thead>
@@ -694,7 +696,7 @@ function CostTemplates({ profile, onEdit, editing, onClose }) {
                     <span className="text-[10px] text-dim">from {new Date(t.effective_from + 'T00:00:00').toLocaleDateString('en-GB')} · {versions} version{versions === 1 ? '' : 's'}</span>
                   </>
                 ) : (
-                  <span className="text-xs text-amber-600 flex-1">Not set up, so {region} rate cards start with no buy costs and show no margin.</span>
+                  <span className="text-xs text-amber-600 flex-1">Not set up, so {region} rate cards start with no costs and show no margin.</span>
                 )}
                 {canWrite && (
                   <button onClick={() => onEdit({ region, from: t })} className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-ember/15 text-ember-deep border border-ember/25 hover:bg-ember/25">

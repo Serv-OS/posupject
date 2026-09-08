@@ -127,7 +127,7 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
             <Metric value={totals.vol ? m0(totals.saving) : '—'} label="Customer saves / mo" tone={totals.saving >= 0 ? 'emerald' : 'red'} />
             <Metric value={totals.vol ? m0(totals.margin) : '—'} label="Our margin / mo" tone="emerald" />
           </div>
-          <div className="text-[11px] text-dim">Effective rate folds the per-transaction fee into a single % using each card type's average transaction size, so small-basket fees are reflected. Buy rate &amp; margin are internal and never shown to the customer.</div>
+          <div className="text-[11px] text-dim">Effective rate folds the per-transaction fee into a single % using each card type's average transaction size, so small-basket fees are reflected. Cost and margin are internal and never shown to the customer.</div>
           {(acc.partner || acc.merchant_ref) && (
             <div className="text-xs text-muted">Partner: <span className="text-paper">{acc.partner || '—'}</span> · MID: <span className="text-paper font-mono">{acc.merchant_ref || '—'}</span></div>
           )}

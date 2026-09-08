@@ -298,7 +298,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                           <span className="text-xs text-muted">Payments ARR from the rate card</span>
                           <span className="text-sm font-mono text-paper">{fmt(calc.arr)}</span>
                         </div>
-                        <div className="text-[10px] text-dim mt-0.5">Our rate minus the buy rate, times twelve, across {calc.priced} priced card type{calc.priced === 1 ? '' : 's'}.</div>
+                        <div className="text-[10px] text-dim mt-0.5">What we charge minus what the cards cost us, times twelve, across {calc.priced} priced card type{calc.priced === 1 ? '' : 's'}.</div>
                         {canWrite && off && (
                           <button onClick={async () => {
                             const { error } = await supabase.from('deals').update({ payments_arr: Math.round(calc.arr * 100) / 100 }).eq('id', dealId);

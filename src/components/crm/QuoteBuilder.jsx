@@ -494,7 +494,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                     </div>
                   );
                 })()}
-                <div className="text-[10px] text-dim">The customer sees only our rate card. Their saving, the buy rate and “We earn” never appear on their copy.</div>
+                <div className="text-[10px] text-dim">The customer sees only our rate card. Their saving, our cost and “We earn” never appear on their copy.</div>
               </>)}
             </div>
 
