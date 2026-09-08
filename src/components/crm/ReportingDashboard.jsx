@@ -35,7 +35,7 @@ const LEAD_QUALIFIED_STAGES = ['sql','deal'];
 const LEAD_STALE_DAYS = 5;
 
 export default function ReportingDashboard({ profile, onNavigate }) {
-  const [deals, setDeals] = useState([]);
+  const [rawDeals, setDeals] = useState([]);
   const [onboardings, setOnboardings] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -121,6 +121,31 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   };
 
   // Lead metrics — period-scoped funnel, sources, owners, stale detection
+  // Payments ARR that reporting can actually use.
+  //
+  // A rate card belongs to a CUSTOMER and usually covers several of their deals,
+  // so adding it to each deal would multiply it. It is attributed to one deal —
+  // the furthest along, ignoring lost ones — and a figure typed on the deal
+  // always wins over the card. Every total below then just reads payments_arr.
+  const deals = useMemo(() => {
+    const cardBy = new Map();
+    for (const acc of procAccounts) {
+      const arr = paymentsArrFromRates(acc.rates).arr;
+      if (arr > 0 && acc.company_id) cardBy.set(acc.company_id, (cardBy.get(acc.company_id) || 0) + arr);
+    }
+    if (!cardBy.size) return rawDeals;
+    const claimed = new Set(rawDeals.filter(d => Number(d.payments_arr || 0) > 0).map(d => d.company_id));
+    const rank = (d) => DEAL_STAGE_ORDER.indexOf(d.stage);
+    const carrier = new Map();
+    for (const d of rawDeals) {
+      if (!d.company_id || !cardBy.has(d.company_id) || claimed.has(d.company_id) || d.stage === 'closed_lost') continue;
+      const cur = carrier.get(d.company_id);
+      if (!cur || rank(d) > rank(cur)) carrier.set(d.company_id, d);
+    }
+    const carries = new Map([...carrier.values()].map(d => [d.id, cardBy.get(d.company_id)]));
+    return rawDeals.map(d => (carries.has(d.id) ? { ...d, payments_arr: carries.get(d.id), payments_from_card: true } : d));
+  }, [rawDeals, procAccounts]);
+
   const leadMetrics = useMemo(() => {
     const now = Date.now();
     const cut = now - leadDays * 86400000;
@@ -702,10 +727,8 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                       <div className="text-lg font-bold text-paper tabular-nums">{formatCurrency(v)}</div>
                       {/* A zero here reads as a bug when the money is really sitting on a
                           rate card that no deal has claimed. Say so, rather than show nothing. */}
-                      {l === 'Payments ARR' && money.per.some(x => x.unclaimedArr > 0) && (
-                        <div className="text-[10px] mt-0.5" style={{ color: 'rgb(var(--c-amber-deep))' }}>
-                          plus {money.per.filter(x => x.unclaimedArr > 0).map(x => `${x.symbol}${Math.round(x.unclaimedArr).toLocaleString('en-GB')}`).join(' and ')} on rate cards, not on a deal
-                        </div>
+                      {l === 'Payments ARR' && deals.some(d => d.payments_from_card) && (
+                        <div className="text-[10px] mt-0.5 text-dim">from rate cards, counted once per customer</div>
                       )}
                       <div className="h-[5px] mt-1 rounded-full overflow-hidden" style={{ background: 'var(--ink-line)' }}>
                         <div className="h-full bg-ember" style={{ width: `${pipelineMetrics.all.total ? Math.round((v / pipelineMetrics.all.total) * 100) : 0}%` }} />
