@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { X, Pencil, Plus, Trash2, Building2, PiggyBank } from 'lucide-react';
+import { X, Pencil, Plus, Trash2, Building2, PiggyBank, AlertTriangle } from 'lucide-react';
 import { AccountModal, ccyOf, moneyFor, isPriced, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
 
 const thisMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
@@ -58,6 +58,25 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
   };
   const delVolume = async (id) => { await supabase.from('processing_volumes').delete().eq('id', id); loadVolumes(); onChanged?.(); };
 
+  // Deleting a card. The database will NOT stop you: quotes.processing_account_id
+  // is ON DELETE SET NULL, so removing an attached card silently blanks the
+  // savings section of a quote a customer may already be reading. So we look
+  // first, refuse if anything points at it, and say which quotes to detach.
+  const [deleting, setDeleting] = useState(false);
+  const [blockedBy, setBlockedBy] = useState(null);
+  const removeAccount = async () => {
+    setDeleting(true); setBlockedBy(null);
+    const { data: attached, error } = await supabase
+      .from('quotes').select('id, quote_number, status').eq('processing_account_id', acc.id);
+    if (error) { setDeleting(false); alert(error.message); return; }
+    if (attached?.length) { setBlockedBy(attached); setDeleting(false); return; }
+    if (!confirm(`Delete this card-processing quote?\n\n${name}\n\nIts rates and monthly volumes go with it. This cannot be undone.`)) { setDeleting(false); return; }
+    const { error: delErr } = await supabase.from('processing_accounts').delete().eq('id', acc.id);
+    setDeleting(false);
+    if (delErr) { alert(delErr.message); return; }
+    onChanged?.(); onClose();
+  };
+
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
   const lbl = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
@@ -76,8 +95,29 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
             </div>
           </div>
           {canWrite && <button onClick={() => setEditingAcc(true)} className="btn-ghost px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"><Pencil size={13} /> Edit</button>}
+          {canWrite && (
+            <button onClick={removeAccount} disabled={deleting}
+              className="btn-ghost px-3 py-1.5 rounded-xl text-xs flex items-center gap-1 text-red-600 hover:bg-red-50 disabled:opacity-40">
+              <Trash2 size={13} /> {deleting ? 'Checking…' : 'Delete'}
+            </button>
+          )}
           <button onClick={onClose} className="text-muted hover:text-paper"><X size={18} /></button>
         </div>
+        {blockedBy && (
+          <div className="mx-6 mt-4 rounded-xl border border-amber-300 bg-amber-50/70 p-3 text-[12px] text-amber-800">
+            <div className="flex items-center gap-1.5 font-semibold mb-1"><AlertTriangle size={14} /> Still attached to {blockedBy.length} quote{blockedBy.length === 1 ? '' : 's'}</div>
+            <div className="mb-1.5">Deleting it would blank the savings section on {blockedBy.length === 1 ? 'that quote' : 'those quotes'}, so detach it there first.</div>
+            <ul className="space-y-0.5">
+              {blockedBy.map(q => (
+                <li key={q.id}>
+                  <button onClick={() => { onNavigate?.('quote', q.id); onClose(); }} className="underline hover:text-amber-900">
+                    {q.quote_number ? `Quote #${q.quote_number}` : 'Quote'}{q.status ? ` · ${q.status}` : ''}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="p-6 space-y-5">
           {/* Savings hero */}
