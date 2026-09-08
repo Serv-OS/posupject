@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-react';
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
 import { loadCostTemplate, costFor, regionForCountry } from '../../lib/cardCosts';
+import { fmtMoney0 } from '../../lib/money';
 
 export const gbp0 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 });
 export const gbp2 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -277,6 +278,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     company_id: a.company_id || '', location_id: a.location_id || '', label: a.label || '', status: a.status || 'prospect',
     cp_volume: a.cp_volume ?? '', cnp_volume: a.cnp_volume ?? '', avg_txn_size: a.avg_txn_size ?? '',
     partner: a.partner || '', merchant_ref: a.merchant_ref || '',
+    region_code: a.region_code || '',
   });
   const [rates, setRates] = useState(emptyRates());
   const [template, setTemplate] = useState(null);
@@ -285,8 +287,17 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
   const num = (v) => v === '' || v == null ? null : Number(v);
   const locs = locations.filter(l => l.company_id === f.company_id);
 
-  // The cost base for this customer's region, by their company's country.
-  const region = regionForCountry(companies.find(c => c.id === f.company_id)?.country);
+  // Which country's costs this card is priced against. An explicit choice wins;
+  // otherwise the SITE's country, then the company's. The site matters more:
+  // the cards are taken where the venue is, and a US site can sit under a
+  // company with no country set, which used to read silently as the UK.
+  const suggested = regionForCountry(
+    locations.find(l => l.id === f.location_id)?.country
+    || companies.find(c => c.id === f.company_id)?.country,
+  );
+  const region = f.region_code || suggested;
+  const sym = region === 'US' ? '$' : '£';
+  const minor = region === 'US' ? 'c' : 'p';
   useEffect(() => {
     let live = true;
     loadCostTemplate(supabase, region).then(t => {
@@ -335,7 +346,8 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     const row = {
       company_id: f.company_id, location_id: f.location_id || null, label: f.label.trim() || null, status: f.status,
       cp_volume: num(f.cp_volume), cnp_volume: num(f.cnp_volume), avg_txn_size: num(f.avg_txn_size),
-      partner: f.partner.trim() || null, merchant_ref: f.merchant_ref.trim() || null, updated_at: new Date().toISOString(),
+      partner: f.partner.trim() || null, merchant_ref: f.merchant_ref.trim() || null,
+      region_code: region, updated_at: new Date().toISOString(),
     };
     let accId = a.id;
     if (a.id) await supabase.from('processing_accounts').update(row).eq('id', a.id);
@@ -392,18 +404,26 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
                 <option value="">All / not set</option>{locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select></div>
             <div><label className={label}>Label (optional)</label><input className={input} value={f.label} onChange={e => set('label', e.target.value)} placeholder="Merchant name" /></div>
+            <div>
+              <label className={label}>Costs</label>
+              <select className={input} value={f.region_code || ''} onChange={e => set('region_code', e.target.value)}>
+                <option value="">{suggested === 'US' ? 'United States (from the site)' : 'United Kingdom (from the site)'}</option>
+                <option value="UK">United Kingdom</option>
+                <option value="US">United States</option>
+              </select>
+            </div>
             <div><label className={label}>Status</label><select className={input} value={f.status} onChange={e => set('status', e.target.value)}>
               <option value="prospect">Prospect</option><option value="live">Live</option><option value="churned">Churned</option></select></div>
           </div>
 
           {/* The three figures that drive everything */}
           <div className="glass-inner rounded-xl p-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div><label className={label}>Total in-store volume £/mo</label><input className={input} value={f.cp_volume} onChange={e => set('cp_volume', e.target.value)} placeholder="30000" /></div>
-            <div><label className={label}>Total online volume £/mo</label><input className={input} value={f.cnp_volume} onChange={e => set('cnp_volume', e.target.value)} placeholder="10000" /></div>
-            <div><label className={label}>Avg transaction size £</label><input className={input} value={f.avg_txn_size} onChange={e => set('avg_txn_size', e.target.value)} placeholder="20" /></div>
+            <div><label className={label}>Total in-store volume {sym}/mo</label><input className={input} value={f.cp_volume} onChange={e => set('cp_volume', e.target.value)} placeholder="30000" /></div>
+            <div><label className={label}>Total online volume {sym}/mo</label><input className={input} value={f.cnp_volume} onChange={e => set('cnp_volume', e.target.value)} placeholder="10000" /></div>
+            <div><label className={label}>Avg transaction size {sym}</label><input className={input} value={f.avg_txn_size} onChange={e => set('avg_txn_size', e.target.value)} placeholder="20" /></div>
           </div>
 
-          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} channelTotal={channelTotal(ch.key)} avgTxn={f.avg_txn_size} splitSum={splitSum(ch.key)} />)}
+          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} channelTotal={channelTotal(ch.key)} avgTxn={f.avg_txn_size} splitSum={splitSum(ch.key)} sym={sym} minor={minor} />)}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div><label className={label}>Processing partner</label><input className={input} value={f.partner} onChange={e => set('partner', e.target.value)} placeholder="e.g. Adyen" /></div>
@@ -412,7 +432,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
 
           {/* Live preview incl. what WE make (internal) */}
           <div className="glass-inner rounded-xl p-4 grid grid-cols-2 md:grid-cols-5 gap-3 text-center">
-            <Mini value={gbp0(totals.vol)} label="Monthly volume" />
+            <Mini value={fmtMoney0(totals.vol, region === 'US' ? 'USD' : 'GBP')} label="Monthly volume" />
             <Mini value={totals.vol ? pct2(totals.currentEff) + ' → ' + pct2(totals.ourEff) : '—'} label="Eff. rate (their → ours)" />
             <Mini value={totals.vol ? gbp2(totals.saving) : '—'} label="Customer saves / mo" tone="emerald" />
             <Mini value={totals.vol ? gbp0(totals.savingYr) : '—'} label="Customer saves / yr" tone="emerald" />
@@ -420,7 +440,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
           </div>
           {belowCost.length > 0 && (
             <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700">
-              ⚠ You're priced <b>below your buy cost</b> on: {belowCost.map(c => `${c.channelLabel} ${c.label}`).join(', ')}. TXN fees are in <b>pence</b> — enter <b>8</b> for 8p (not 0.08); match the Buy txn column (6 / 10). Make sure Our % ≥ Buy % and Our txn ≥ Buy txn.
+              ⚠ You're priced <b>below your buy cost</b> on: {belowCost.map(c => `${c.channelLabel} ${c.label}`).join(', ')}. TXN fees are in <b>{minor === 'c' ? 'cents' : 'pence'}</b> — enter <b>8</b> for 8p (not 0.08); match the Buy txn column (6 / 10). Make sure Our % ≥ Buy % and Our txn ≥ Buy txn.
             </div>
           )}
           <div className="text-[10px] text-dim">“We earn” is your margin (our rate − buy rate, plus txn markup) — internal only, never shown on the customer quote. Volumes auto-split by industry-standard card mix; adjust Split % per row if you have the customer's real breakdown.</div>
@@ -435,7 +455,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
 
 const cell = "w-full px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper text-right focus:outline-none focus:border-ember";
 
-function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum }) {
+function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym = '£', minor = 'p' }) {
   return (
     <div className="glass-inner rounded-xl p-3">
       <div className="flex items-center justify-between mb-2">
@@ -448,14 +468,14 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum }) {
             <tr className="text-[9px] font-mono font-bold uppercase tracking-[0.1em] text-dim">
               <th className="text-left font-bold pb-1.5">Card type</th>
               <th className="font-bold pb-1.5 px-1">Split %</th>
-              <th className="font-bold pb-1.5 px-1">Vol £/mo</th>
+              <th className="font-bold pb-1.5 px-1">Vol {sym}/mo</th>
               <th className="font-bold pb-1.5 px-1">Txns/mo</th>
               <th className="font-bold pb-1.5 px-1">Their %</th>
               <th className="font-bold pb-1.5 px-1">Our %</th>
               <th className="font-bold pb-1.5 px-1">Buy %</th>
-              <th className="font-bold pb-1.5 px-1">Their txn p</th>
-              <th className="font-bold pb-1.5 px-1">Our txn p</th>
-              <th className="font-bold pb-1.5 px-1">Buy txn p</th>
+              <th className="font-bold pb-1.5 px-1">Their txn {minor}</th>
+              <th className="font-bold pb-1.5 px-1">Our txn {minor}</th>
+              <th className="font-bold pb-1.5 px-1">Buy txn {minor}</th>
               <th className="font-bold pb-1.5 pl-2 text-right">Saves/mo</th>
             </tr>
           </thead>

@@ -162,7 +162,7 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
                 sections={[
                 { title: 'Identity', fields: [
                   { key: 'name', label: 'Name' }, { key: 'domain', label: 'Domain' }, { key: 'website', label: 'Website' }, { key: 'industry', label: 'Industry' },
-                  { key: 'country', label: 'Country', type: 'select', options: [['GB', 'United Kingdom'], ['US', 'United States']], hint: 'Drives invoice and quote currency defaults' },
+                  { key: 'country', label: 'Country', type: 'select', options: [['', 'Not set — treated as United Kingdom'], ['GB', 'United Kingdom'], ['US', 'United States']], hint: 'Drives invoice and quote currency defaults' },
                 ] },
                 { title: 'Address & contact', fields: [
                   { key: 'phone', label: 'Phone', type: 'tel' }, { key: 'email', label: 'Email', type: 'email' },
@@ -189,7 +189,8 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
                 <div><label className={label}>City</label><input className={input} value={draft.city || ''} onChange={e => set('city', e.target.value)} /></div>
                 <div><label className={label}>Postcode</label><input className={input} value={draft.postcode || ''} onChange={e => set('postcode', e.target.value)} /></div>
                 {/* Drives invoice/quote currency defaults (GB→GBP, US→USD) */}
-                <div><label className={label}>Country</label><select className={input} value={draft.country || 'GB'} onChange={e => set('country', e.target.value)}>
+                <div><label className={label}>Country</label><select className={input} value={draft.country || ''} onChange={e => set('country', e.target.value || null)}>
+                  <option value="">Not set — treated as United Kingdom</option>
                   <option value="GB">United Kingdom</option><option value="US">United States</option></select></div>
                 <div><label className={label}>Employees</label><input className={input} type="number" value={draft.employee_count || ''} onChange={e => set('employee_count', e.target.value ? parseInt(e.target.value) : null)} /></div>
                 <div><label className={label}>Source</label><input className={input} value={draft.source || ''} onChange={e => set('source', e.target.value)} /></div>
