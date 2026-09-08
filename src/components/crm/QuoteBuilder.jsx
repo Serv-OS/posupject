@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
 import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
+import { paymentsArrFromRates } from '../../lib/paymentsArr';
 import { Card, Mono, MobileSheet, SheetRow, EditSheet, PrimaryBtn, GhostBtn } from './ui.jsx';
 
 // Build the customer-safe card-processing breakdown frozen onto the quote.
@@ -155,11 +156,19 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
 
   // Mark the quote won -> close the deal -> auto onboarding (interim manual path until Stripe phase)
   const markWon = async () => {
-    if (!confirm('Mark this quote as Won? This closes the deal and starts onboarding.')) return;
+    // Winning is the moment the rate card becomes real money, so the deal takes
+    // its payments ARR from the attached account rather than waiting for someone
+    // to type it. Without this the pipeline reports payments ARR as zero forever.
+    const acc = procAccounts.find(x => x.id === quote.processing_account_id);
+    const our = acc ? paymentsArrFromRates(acc.rates) : null;
+    const arrNote = our?.priced ? `\n\nPayments ARR of ${gbp0(our.arr)} will be set on the deal from the attached rate card.` : '';
+    if (!confirm(`Mark this quote as Won? This closes the deal and starts onboarding.${arrNote}`)) return;
     await save();
     await supabase.from('quotes').update({ status: 'won' }).eq('id', quoteId);
     if (quote.deal_id) {
-      await supabase.from('deals').update({ stage: 'closed_won', closed_at: new Date().toISOString() }).eq('id', quote.deal_id);
+      const patch = { stage: 'closed_won', closed_at: new Date().toISOString() };
+      if (our?.priced) patch.payments_arr = Math.round(our.arr * 100) / 100;
+      await supabase.from('deals').update(patch).eq('id', quote.deal_id);
       await supabase.from('stage_history').insert({ object_type: 'deal', object_id: quote.deal_id, to_stage: 'closed_won', changed_by: profile.id });
       try { await handleClosedWon(quote.deal_id, profile.id); } catch (e) { console.error(e); }
     }
@@ -287,6 +296,20 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
           <MobileSheet title="Card-processing savings" sub="Shown to the customer as their savings" onClose={() => setSheet(null)}>
             {!company ? <div className="text-[13px] text-dim px-1">Add a company to the quote to attach a savings proposal.</div> : (
               <>
+                {(() => {
+                  const a = procAccounts.find(x => x.id === quote.processing_account_id);
+                  const our = a ? paymentsArrFromRates(a.rates) : null;
+                  if (!our?.priced) return null;
+                  return (
+                    <div className="rounded-[12px] px-[15px] py-3 border" style={{ background: 'rgb(var(--c-amber) / .10)', borderColor: 'rgb(var(--c-amber) / .30)' }}>
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[13px] font-semibold" style={{ color: 'rgb(var(--c-amber-deep))' }}>We earn</span>
+                        <span className="text-[16px] font-bold tabular-nums" style={{ color: 'rgb(var(--c-amber-deep))' }}>{gbp0(our.arr)}/yr</span>
+                      </div>
+                      <div className="text-[11px] text-dim mt-0.5">Internal only. Never on the customer’s copy.</div>
+                    </div>
+                  );
+                })()}
                 <SheetRow active={!quote.processing_account_id} onClick={() => { setQ('processing_account_id', null); setSheet(null); }}>None</SheetRow>
                 {procAccounts.map(a => <SheetRow key={a.id} active={quote.processing_account_id === a.id} sub={`saves ${gbp0(accountSavings(a.rates).saving)}/mo`} onClick={() => { setQ('processing_account_id', a.id); setSheet(null); }}>{a.label || a.location?.name || 'Proposal'}</SheetRow>)}
               </>
@@ -437,7 +460,24 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                     </div>
                   );
                 })()}
-                <div className="text-[10px] text-dim">Shown to the customer on the quote as their savings. Buy rate &amp; margin are never shown.</div>
+                {(() => {
+                  // What the account is worth to US. Internal only: this figure
+                  // never reaches cardSnapshot, so it cannot land on the customer's copy.
+                  const a = procAccounts.find(x => x.id === quote.processing_account_id);
+                  if (!a) return null;
+                  const our = paymentsArrFromRates(a.rates);
+                  if (!our.priced) return null;
+                  return (
+                    <div className="rounded-xl p-3 border" style={{ background: 'rgb(var(--c-amber) / .10)', borderColor: 'rgb(var(--c-amber) / .30)' }}>
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[11px] font-semibold" style={{ color: 'rgb(var(--c-amber-deep))' }}>We earn</span>
+                        <span className="text-base font-bold tabular-nums" style={{ color: 'rgb(var(--c-amber-deep))' }}>{gbp0(our.arr)}<span className="text-[11px]"> /yr</span></span>
+                      </div>
+                      <div className="text-[10px] text-dim mt-0.5">{gbp2(our.marginMonthly)}/mo margin across {our.priced} priced card type{our.priced === 1 ? '' : 's'}. This is the deal's payments ARR.</div>
+                    </div>
+                  );
+                })()}
+                <div className="text-[10px] text-dim">The customer sees only our rate card. Their saving, the buy rate and “We earn” never appear on their copy.</div>
               </>)}
             </div>
 

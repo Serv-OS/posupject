@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
+import { paymentsArrFromRates } from '../../lib/paymentsArr';
 import { pipelineTotals, DEFAULT_STAGE_WEIGHTS } from '../../lib/trading';
 
 // The deal stages, in order, with the names the rest of the app uses.
@@ -50,6 +51,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   const [pipeOwner, setPipeOwner] = useState('all');
   const [pipeWindow, setPipeWindow] = useState('all');
   const [weights, setWeights] = useState(DEFAULT_STAGE_WEIGHTS);
+  const [procAccounts, setProcAccounts] = useState([]);
   const [tab, setTab] = useState('leads');
   const [leads, setLeads] = useState([]);
   const [leadDays, setLeadDays] = useState(30);
@@ -75,6 +77,8 @@ export default function ReportingDashboard({ profile, onNavigate }) {
       supabase.from('leads').select('*'),
       supabase.from('deal_trading').select('*'),
       supabase.from('deal_stage_weights').select('stage, probability'),
+      supabase.from('processing_accounts').select('id, label, status, company_id'),
+      supabase.from('processing_rates').select('*'),
     ]);
     setDeals(results[0].data || []);
     setTrading(results[14]?.data || []);
@@ -94,6 +98,12 @@ export default function ReportingDashboard({ profile, onNavigate }) {
     setMembers(results[11].data || []);
     setActivities(results[12].data || []);
     setLeads(results[13].data || []);
+    // Rate cards with their rows: card margin is real recurring money whether or
+    // not a deal has been raised for it.
+    {
+      const accs = results[16]?.data || [], rows = results[17]?.data || [];
+      setProcAccounts(accs.map(x => ({ ...x, rates: rows.filter(r => r.account_id === x.id) })));
+    }
     setLoading(false);
   };
 
@@ -420,6 +430,31 @@ export default function ReportingDashboard({ profile, onNavigate }) {
     return { open, all, byStage, rows, noDate: rows.filter(r => r.undated).length, late: rows.filter(r => r.late).length };
   }, [deals, companies, stageHistory, weights, pipeOwner, pipeWindow]);
 
+  // What the business actually earns, gathered from every source that holds a
+  // number, so it does not have to be added up by hand across four screens.
+  const money = useMemo(() => {
+    const won = deals.filter(d => d.stage === 'closed_won');
+    const open = deals.filter(d => OPEN_STAGES.includes(d.stage));
+    const sum = (list, f) => list.reduce((t, d) => t + Number(f(d) || 0), 0);
+    const card = procAccounts.map(x => ({ ...x, calc: paymentsArrFromRates(x.rates) }));
+    const cardArr = card.reduce((t, x) => t + x.calc.arr, 0);
+    // Rate-card margin nobody has put on a deal yet: real money the pipeline misses.
+    const dealCompanies = new Set(deals.filter(d => Number(d.payments_arr || 0) > 0).map(d => d.company_id));
+    const unclaimed = card.filter(x => x.calc.priced && !dealCompanies.has(x.company_id));
+    return {
+      wonRecurring: sum(won, d => d.saas_arr) + sum(won, d => d.payments_arr),
+      wonSaas: sum(won, d => d.saas_arr), wonPayments: sum(won, d => d.payments_arr),
+      wonOneOff: sum(won, d => d.hardware_value) + sum(won, d => d.services_value),
+      openRecurring: sum(open, d => d.saas_arr) + sum(open, d => d.payments_arr),
+      openSaas: sum(open, d => d.saas_arr), openPayments: sum(open, d => d.payments_arr),
+      openOneOff: sum(open, d => d.hardware_value) + sum(open, d => d.services_value),
+      weightedRecurring: open.reduce((t, d) => t + (Number(d.saas_arr || 0) + Number(d.payments_arr || 0)) * (weights[d.stage] ?? 0), 0),
+      cardArr, cardAccounts: card.filter(x => x.calc.priced).length,
+      unclaimedArr: unclaimed.reduce((t, x) => t + x.calc.arr, 0), unclaimed,
+      wonCount: won.length, openCount: open.length,
+    };
+  }, [deals, procAccounts, weights]);
+
   const formatCurrency = (v) => `£${Math.round(v).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
 
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim";
@@ -438,6 +473,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
       </div>
 
       <div className="px-6 py-2 border-b border-bdr flex gap-1 overflow-x-auto">
+        {tabBtn('money', 'What we make')}
         {tabBtn('leads', 'Leads')}
         {tabBtn('pipeline', 'Pipeline')}
         {tabBtn('sales', 'Sales')}
@@ -549,6 +585,59 @@ export default function ReportingDashboard({ profile, onNavigate }) {
           )}
 
 
+          {tab === 'money' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-4 gap-4">
+                <MetricCard label="Recurring, won" value={formatCurrency(money.wonRecurring)} sub={`${money.wonCount} closed deal${money.wonCount === 1 ? '' : 's'}`} color="text-emerald-600" />
+                <MetricCard label="Recurring, in play" value={formatCurrency(money.openRecurring)} sub={`${formatCurrency(money.weightedRecurring)} weighted`} />
+                <MetricCard label="Card margin on the books" value={formatCurrency(money.cardArr)} sub={`${money.cardAccounts} priced rate card${money.cardAccounts === 1 ? '' : 's'}`} color="text-amber-600" />
+                <MetricCard label="One-off in play" value={formatCurrency(money.openOneOff)} sub={`${formatCurrency(money.wonOneOff)} already won`} />
+              </div>
+
+              {money.unclaimedArr > 0 && (
+                <div className="glass-card rounded-2xl p-4 border" style={{ borderColor: 'rgb(var(--c-amber) / .35)', background: 'rgb(var(--c-amber) / .06)' }}>
+                  <div className="flex items-baseline gap-3 flex-wrap">
+                    <span className="text-sm font-bold" style={{ color: 'rgb(var(--c-amber-deep))' }}>{formatCurrency(money.unclaimedArr)} of card margin is not on any deal</span>
+                    <span className="text-xs text-muted">{money.unclaimed.map(x => x.label || 'Rate card').join(', ')}</span>
+                  </div>
+                  <div className="text-[11px] text-dim mt-1">
+                    These rate cards are priced, so we know what they earn, but no deal carries the figure. Open the deal and use “Payments ARR from the rate card”, or mark its quote won.
+                  </div>
+                </div>
+              )}
+
+              <div className="glass-card rounded-2xl p-5">
+                <div className="text-[9px] font-mono uppercase tracking-[0.18em] text-dim mb-3">Where it comes from</div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-[10px] font-mono uppercase tracking-[0.18em] text-dim">
+                      <th className="text-left font-medium pb-2">Stream</th>
+                      <th className="text-right font-medium pb-2">Won</th>
+                      <th className="text-right font-medium pb-2">In play</th>
+                      <th className="text-right font-medium pb-2">Kind</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      ['SaaS', money.wonSaas, money.openSaas, 'a year'],
+                      ['Payments', money.wonPayments, money.openPayments, 'a year'],
+                      ['Hardware and services', money.wonOneOff, money.openOneOff, 'one-off'],
+                    ].map(([label, won, open, kind]) => (
+                      <tr key={label} className="border-t border-bdr">
+                        <td className="py-2 text-paper">{label}</td>
+                        <td className="py-2 text-right font-mono text-paper">{formatCurrency(won)}</td>
+                        <td className="py-2 text-right font-mono text-muted">{formatCurrency(open)}</td>
+                        <td className="py-2 text-right text-[11px] text-dim">{kind}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="text-[11px] text-dim mt-3">
+                  SaaS and payments are annual recurring, counted once at their yearly rate. Payments is our margin: what the customer pays us minus what the processing costs us.
+                </div>
+              </div>
+            </div>
+          )}
           {tab === 'pipeline' && (
             <>
               <div className="flex items-center gap-2 flex-wrap">
