@@ -434,27 +434,39 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   // What the business actually earns, gathered from every source that holds a
   // number, so it does not have to be added up by hand across four screens.
   const money = useMemo(() => {
+    const CCY = { GBP: '£', USD: '$' };
+    const ccyOfDeal = (d) => (d.currency === 'USD' ? 'USD' : 'GBP');
+    const ccyOfCompany = (id) => (companies.find(c => c.id === id)?.country === 'US' ? 'USD' : 'GBP');
     const won = deals.filter(d => d.stage === 'closed_won');
     const open = deals.filter(d => OPEN_STAGES.includes(d.stage));
     const sum = (list, f) => list.reduce((t, d) => t + Number(f(d) || 0), 0);
-    const card = procAccounts.map(x => ({ ...x, calc: paymentsArrFromRates(x.rates) }));
-    const cardArr = card.reduce((t, x) => t + x.calc.arr, 0);
+    const card = procAccounts.map(x => ({ ...x, calc: paymentsArrFromRates(x.rates), ccy: ccyOfCompany(x.company_id) }));
     // Rate-card margin nobody has put on a deal yet: real money the pipeline misses.
     const dealCompanies = new Set(deals.filter(d => Number(d.payments_arr || 0) > 0).map(d => d.company_id));
     const unclaimed = card.filter(x => x.calc.priced && !dealCompanies.has(x.company_id));
-    return {
-      wonRecurring: sum(won, d => d.saas_arr) + sum(won, d => d.payments_arr),
-      wonSaas: sum(won, d => d.saas_arr), wonPayments: sum(won, d => d.payments_arr),
-      wonOneOff: sum(won, d => d.hardware_value) + sum(won, d => d.services_value),
-      openRecurring: sum(open, d => d.saas_arr) + sum(open, d => d.payments_arr),
-      openSaas: sum(open, d => d.saas_arr), openPayments: sum(open, d => d.payments_arr),
-      openOneOff: sum(open, d => d.hardware_value) + sum(open, d => d.services_value),
-      weightedRecurring: open.reduce((t, d) => t + (Number(d.saas_arr || 0) + Number(d.payments_arr || 0)) * (weights[d.stage] ?? 0), 0),
-      cardArr, cardAccounts: card.filter(x => x.calc.priced).length,
-      unclaimedArr: unclaimed.reduce((t, x) => t + x.calc.arr, 0), unclaimed,
-      wonCount: won.length, openCount: open.length,
-    };
-  }, [deals, procAccounts, weights]);
+    // Never blend currencies: a pound and a dollar are different money, and we
+    // hold no FX rate. Each currency is totalled and shown on its own.
+    const used = [...new Set([...deals.map(ccyOfDeal), ...card.filter(x => x.calc.priced).map(x => x.ccy)])];
+    const per = (used.length ? used : ['GBP']).map(ccy => {
+      const w = won.filter(d => ccyOfDeal(d) === ccy), o = open.filter(d => ccyOfDeal(d) === ccy);
+      const cards = card.filter(x => x.ccy === ccy && x.calc.priced);
+      const mine = unclaimed.filter(x => x.ccy === ccy);
+      return {
+        ccy, symbol: CCY[ccy] || '',
+        wonCount: w.length, openCount: o.length,
+        wonSaas: sum(w, d => d.saas_arr), wonPayments: sum(w, d => d.payments_arr),
+        wonOneOff: sum(w, d => d.hardware_value) + sum(w, d => d.services_value),
+        openSaas: sum(o, d => d.saas_arr), openPayments: sum(o, d => d.payments_arr),
+        openOneOff: sum(o, d => d.hardware_value) + sum(o, d => d.services_value),
+        wonRecurring: sum(w, d => d.saas_arr) + sum(w, d => d.payments_arr),
+        openRecurring: sum(o, d => d.saas_arr) + sum(o, d => d.payments_arr),
+        weightedRecurring: o.reduce((t, d) => t + (Number(d.saas_arr || 0) + Number(d.payments_arr || 0)) * (weights[d.stage] ?? 0), 0),
+        cardArr: cards.reduce((t, x) => t + x.calc.arr, 0), cardAccounts: cards.length,
+        unclaimedArr: mine.reduce((t, x) => t + x.calc.arr, 0), unclaimed: mine,
+      };
+    }).filter(x => x.wonRecurring || x.openRecurring || x.wonOneOff || x.openOneOff || x.cardArr || x.ccy === 'GBP');
+    return { per };
+  }, [deals, procAccounts, weights, companies]);
 
   const formatCurrency = (v) => `£${Math.round(v).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
 
@@ -587,56 +599,74 @@ export default function ReportingDashboard({ profile, onNavigate }) {
 
 
           {tab === 'money' && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-4 gap-4">
-                <MetricCard label="Recurring, won" value={formatCurrency(money.wonRecurring)} sub={`${money.wonCount} closed deal${money.wonCount === 1 ? '' : 's'}`} color="text-emerald-600" />
-                <MetricCard label="Recurring, in play" value={formatCurrency(money.openRecurring)} sub={`${formatCurrency(money.weightedRecurring)} weighted`} />
-                <MetricCard label="Card margin on the books" value={formatCurrency(money.cardArr)} sub={`${money.cardAccounts} priced rate card${money.cardAccounts === 1 ? '' : 's'}`} color="text-amber-600" />
-                <MetricCard label="One-off in play" value={formatCurrency(money.openOneOff)} sub={`${formatCurrency(money.wonOneOff)} already won`} />
-              </div>
+            <div className="space-y-6">
+              {money.per.map(m => {
+                const fmt = (v) => `${m.symbol}${Math.round(v).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
+                return (
+                  <div key={m.ccy} className="space-y-4">
+                    {money.per.length > 1 && (
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-sm font-bold text-paper">{m.ccy === 'USD' ? 'United States' : 'United Kingdom'}</span>
+                        <span className="text-[11px] text-dim">{m.ccy} · shown on its own, never converted</span>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-4 gap-4">
+                      <MetricCard label="Recurring, won" value={fmt(m.wonRecurring)} sub={`${m.wonCount} closed deal${m.wonCount === 1 ? '' : 's'}`} color="text-emerald-600" />
+                      <MetricCard label="Recurring, in play" value={fmt(m.openRecurring)} sub={`${fmt(m.weightedRecurring)} weighted`} />
+                      <MetricCard label="Card margin on the books" value={fmt(m.cardArr)} sub={`${m.cardAccounts} priced rate card${m.cardAccounts === 1 ? '' : 's'}`} color="text-amber-600" />
+                      <MetricCard label="One-off in play" value={fmt(m.openOneOff)} sub={`${fmt(m.wonOneOff)} already won`} />
+                    </div>
 
-              {money.unclaimedArr > 0 && (
-                <div className="glass-card rounded-2xl p-4 border" style={{ borderColor: 'rgb(var(--c-amber) / .35)', background: 'rgb(var(--c-amber) / .06)' }}>
-                  <div className="flex items-baseline gap-3 flex-wrap">
-                    <span className="text-sm font-bold" style={{ color: 'rgb(var(--c-amber-deep))' }}>{formatCurrency(money.unclaimedArr)} of card margin is not on any deal</span>
-                    <span className="text-xs text-muted">{money.unclaimed.map(x => x.label || 'Rate card').join(', ')}</span>
-                  </div>
-                  <div className="text-[11px] text-dim mt-1">
-                    These rate cards are priced, so we know what they earn, but no deal carries the figure. Open the deal and use “Payments ARR from the rate card”, or mark its quote won.
-                  </div>
-                </div>
-              )}
+                    {m.unclaimedArr > 0 && (
+                      <div className="glass-card rounded-2xl p-4 border" style={{ borderColor: 'rgb(var(--c-amber) / .35)', background: 'rgb(var(--c-amber) / .06)' }}>
+                        <div className="flex items-baseline gap-3 flex-wrap">
+                          <span className="text-sm font-bold" style={{ color: 'rgb(var(--c-amber-deep))' }}>{fmt(m.unclaimedArr)} of card margin is not counted on any deal</span>
+                          <span className="text-xs text-muted">{m.unclaimed.map(x => x.label || companies.find(c => c.id === x.company_id)?.name || 'Rate card').join(', ')}</span>
+                        </div>
+                        <div className="text-[11px] text-dim mt-1">
+                          These rate cards are priced, so we know what they earn. One rate card usually covers several deals for the same customer,
+                          so it is counted once here per customer rather than added to every deal. To put it on a specific deal, open that deal and
+                          use “Payments ARR from the rate card”, or mark its quote won.
+                        </div>
+                      </div>
+                    )}
 
-              <div className="glass-card rounded-2xl p-5">
-                <div className="text-[9px] font-mono uppercase tracking-[0.18em] text-dim mb-3">Where it comes from</div>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-[10px] font-mono uppercase tracking-[0.18em] text-dim">
-                      <th className="text-left font-medium pb-2">Stream</th>
-                      <th className="text-right font-medium pb-2">Won</th>
-                      <th className="text-right font-medium pb-2">In play</th>
-                      <th className="text-right font-medium pb-2">Kind</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      ['SaaS', money.wonSaas, money.openSaas, 'a year'],
-                      ['Payments', money.wonPayments, money.openPayments, 'a year'],
-                      ['Hardware and services', money.wonOneOff, money.openOneOff, 'one-off'],
-                    ].map(([label, won, open, kind]) => (
-                      <tr key={label} className="border-t border-bdr">
-                        <td className="py-2 text-paper">{label}</td>
-                        <td className="py-2 text-right font-mono text-paper">{formatCurrency(won)}</td>
-                        <td className="py-2 text-right font-mono text-muted">{formatCurrency(open)}</td>
-                        <td className="py-2 text-right text-[11px] text-dim">{kind}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="text-[11px] text-dim mt-3">
-                  SaaS and payments are annual recurring, counted once at their yearly rate. Payments is our margin: what the customer pays us minus what the processing costs us.
-                </div>
-              </div>
+                    <div className="glass-card rounded-2xl p-5">
+                      <div className="text-[9px] font-mono uppercase tracking-[0.18em] text-dim mb-3">Where it comes from</div>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-[10px] font-mono uppercase tracking-[0.18em] text-dim">
+                            <th className="text-left font-medium pb-2">Stream</th>
+                            <th className="text-right font-medium pb-2">Won</th>
+                            <th className="text-right font-medium pb-2">In play</th>
+                            <th className="text-right font-medium pb-2">Kind</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[
+                            ['SaaS', m.wonSaas, m.openSaas, 'a year'],
+                            ['Payments, on deals', m.wonPayments, m.openPayments, 'a year'],
+                            ['Payments, on rate cards', 0, m.cardArr, 'a year'],
+                            ['Hardware and services', m.wonOneOff, m.openOneOff, 'one-off'],
+                          ].map(([l, w, o, kind]) => (
+                            <tr key={l} className="border-t border-bdr">
+                              <td className="py-2 text-paper">{l}</td>
+                              <td className="py-2 text-right font-mono text-paper">{fmt(w)}</td>
+                              <td className="py-2 text-right font-mono text-muted">{fmt(o)}</td>
+                              <td className="py-2 text-right text-[11px] text-dim">{kind}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className="text-[11px] text-dim mt-3">
+                        SaaS and payments are annual recurring, counted once at their yearly rate. Payments is our margin: what the customer pays us
+                        minus what the processing costs us. The two payments lines are different things and should not be added together: the first is
+                        what deals carry, the second is what the rate cards are worth.
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
           {tab === 'pipeline' && (
@@ -670,6 +700,13 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                     <div key={l}>
                       <div className="text-[10px] text-dim uppercase tracking-wide">{l}</div>
                       <div className="text-lg font-bold text-paper tabular-nums">{formatCurrency(v)}</div>
+                      {/* A zero here reads as a bug when the money is really sitting on a
+                          rate card that no deal has claimed. Say so, rather than show nothing. */}
+                      {l === 'Payments ARR' && money.per.some(x => x.unclaimedArr > 0) && (
+                        <div className="text-[10px] mt-0.5" style={{ color: 'rgb(var(--c-amber-deep))' }}>
+                          plus {money.per.filter(x => x.unclaimedArr > 0).map(x => `${x.symbol}${Math.round(x.unclaimedArr).toLocaleString('en-GB')}`).join(' and ')} on rate cards, not on a deal
+                        </div>
+                      )}
                       <div className="h-[5px] mt-1 rounded-full overflow-hidden" style={{ background: 'var(--ink-line)' }}>
                         <div className="h-full bg-ember" style={{ width: `${pipelineMetrics.all.total ? Math.round((v / pipelineMetrics.all.total) * 100) : 0}%` }} />
                       </div>
