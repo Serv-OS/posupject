@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
-import { AccountModal, accountSavings, gbp0, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
+import { AccountModal, accountSavings, gbp0, gbp2, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
 import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
 import { Card, Mono, MobileSheet, SheetRow, EditSheet, PrimaryBtn, GhostBtn } from './ui.jsx';
