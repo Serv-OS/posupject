@@ -28,6 +28,8 @@ function startOfWeek() { const d = startOfToday(); const day = (d.getDay() + 6) 
 
 // Lead funnel stages for this CRM's pipeline (see LeadBoard).
 const LEAD_OPEN_STAGES = ['new_lead','attempting','mql','sql'];
+// Deal stages still in play. Module level: several memos need it.
+const OPEN_STAGES = DEAL_STAGE_ORDER.filter(s => s !== 'closed_won' && s !== 'closed_lost');
 const LEAD_ENGAGED_STAGES = ['attempting','mql'];
 const LEAD_QUALIFIED_STAGES = ['sql','deal'];
 const LEAD_STALE_DAYS = 5;
@@ -388,7 +390,6 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   // worth weighted by the stage's own probability. Money rules come from
   // lib/dealValue so this never re-invents what a deal is worth.
   const pipelineMetrics = useMemo(() => {
-    const OPEN_STAGES = DEAL_STAGE_ORDER.filter(s => s !== 'closed_won' && s !== 'closed_lost');
     const lastMoved = {};
     for (const h of stageHistory || []) {
       if (h.object_type !== 'deal') continue;
