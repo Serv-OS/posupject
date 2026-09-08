@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-react';
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
 import { loadCostTemplate, costFor, regionForCountry } from '../../lib/cardCosts';
+import { STATEMENT_LINES, blankStatement, statementTotals, statementToRates } from '../../lib/statement';
 import { fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 
 export const gbp0 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 });
@@ -281,6 +282,81 @@ const emptyRates = (template = null) => Object.fromEntries(RATE_CATEGORIES.map(c
   }];
 }));
 
+function StatementImport({ sym, minor, m2, defaultDebitShare, onApply }) {
+  const [open, setOpen] = useState(false);
+  const [st, setSt] = useState(blankStatement);
+  const [debit, setDebit] = useState(String(defaultDebitShare ?? 55));
+  const set = (k, field, v) => setSt(p => ({ ...p, [k]: { ...p[k], [field]: v } }));
+  const t = statementTotals(st);
+  const cell = "px-2 py-1 bg-card border border-bdr rounded-lg text-sm text-paper w-full focus:outline-none focus:border-ember";
+
+  if (!open) return (
+    <button type="button" onClick={() => setOpen(true)} className="w-full text-left glass-inner rounded-xl px-4 py-3 hover:border-ember/40 border border-transparent">
+      <div className="text-[13px] font-semibold text-paper">Enter their statement</div>
+      <div className="text-[11px] text-dim mt-0.5">Type the four lines off their processing statement and this fills the whole card, volumes and card mix included.</div>
+    </button>
+  );
+
+  return (
+    <div className="glass-inner rounded-xl p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <div className="text-[13px] font-semibold text-paper">Their statement</div>
+        <button type="button" onClick={() => setOpen(false)} className="ml-auto text-[11px] text-dim hover:text-paper">Hide</button>
+      </div>
+      <div className="text-[11px] text-dim">
+        Straight off the statement. Most US processors bill Visa, Mastercard, Discover and debit as one line, so that is how this is entered.
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px]">
+          <thead><tr className="text-[9px] font-mono font-bold uppercase tracking-[0.1em] text-dim">
+            <th className="text-left font-bold pb-1.5">Line</th>
+            <th className="font-bold pb-1.5 px-1">Rate %</th>
+            <th className="font-bold pb-1.5 px-1">+ {minor}</th>
+            <th className="font-bold pb-1.5 px-1">Txns</th>
+            <th className="font-bold pb-1.5 px-1">Volume {sym}</th>
+            <th className="font-bold pb-1.5 px-1 text-right">They pay</th>
+          </tr></thead>
+          <tbody>
+            {STATEMENT_LINES.map(l => {
+              const r = st[l.key];
+              const paid = Number(r.volume || 0) * (Number(r.rate) || 0) / 100 + Number(r.txns || 0) * (Number(r.fee) || 0) / 100;
+              return (
+                <tr key={l.key}>
+                  <td className="py-1 pr-2"><div className="text-sm text-paper leading-tight">{l.label}</div><div className="text-[10px] text-dim">{l.sub}</div></td>
+                  <td className="px-1"><input className={cell} value={r.rate} onChange={e => set(l.key, 'rate', e.target.value)} placeholder="2.49" /></td>
+                  <td className="px-1"><input className={cell} value={r.fee} onChange={e => set(l.key, 'fee', e.target.value)} placeholder="15" /></td>
+                  <td className="px-1"><input className={cell} value={r.txns} onChange={e => set(l.key, 'txns', e.target.value)} placeholder="2269" /></td>
+                  <td className="px-1"><input className={cell} value={r.volume} onChange={e => set(l.key, 'volume', e.target.value)} placeholder="92922" /></td>
+                  <td className="px-1 text-right text-sm tabular-nums text-muted">{paid > 0 ? m2(paid) : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex flex-wrap items-end gap-3 pt-1">
+        <div className="w-40">
+          <span className="text-[9px] text-dim block">Debit share of Visa/MC %</span>
+          <input className={cell} value={debit} onChange={e => setDebit(e.target.value)} />
+        </div>
+        <div className="text-[11px] text-dim flex-1 min-w-[220px] pb-1">
+          The one thing the statement cannot tell us, because they are billed one rate for both. It does not change what they pay, only what the book costs <b>us</b>.
+        </div>
+        <button type="button" disabled={!t.vol} onClick={() => onApply(statementToRates(st, debit))}
+          className="px-4 py-2 rounded-xl text-sm font-semibold bg-ember/15 text-ember-deep border border-ember/25 hover:bg-ember/25 disabled:opacity-40">
+          Fill the card
+        </button>
+      </div>
+      {t.vol > 0 && (
+        <div className="rounded-xl px-3 py-2 bg-card/60 border border-bdr text-[12px] text-paper">
+          They pay <b>{m2(t.cost)}</b> a month on <b>{m2(t.vol)}</b> across <b>{t.txns.toLocaleString()}</b> transactions.
+          Effective rate <b>{t.eff.toFixed(3)}%</b>, average ticket <b>{m2(t.avg)}</b>.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AccountModal({ account, companies, locations, onClose, onSaved }) {
   const a = account || {};
   const [f, setF] = useState({
@@ -384,10 +460,12 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
           await supabase.from('processing_rates').upsert({
             account_id: accId, category: c.key,
             current_rate_pct: num(r.current_rate_pct), our_rate_pct: num(r.our_rate_pct),
-            buy_rate_pct: num(r.buy_rate_pct) ?? c.buy,
+            // Fall back to the REGION's cost, never the old hardcoded UK presets:
+            // saving a US card used to write UK buy rates into the database.
+            buy_rate_pct: num(r.buy_rate_pct) ?? costFor(template, c.key).buy,
             current_txn_fee: num(r.current_txn_fee), our_txn_fee: num(r.our_txn_fee),
-            buy_txn_fee: num(r.buy_txn_fee) ?? c.buyTxn,
-            volume_split_pct: num(r.split) ?? c.split,
+            buy_txn_fee: num(r.buy_txn_fee) ?? costFor(template, c.key).buyTxn,
+            volume_split_pct: num(r.split) ?? costFor(template, c.key).split ?? c.split,
             monthly_volume: d.monthly_volume, monthly_txns: d.monthly_txns,
           }, { onConflict: 'account_id,category' });
         } else {
@@ -396,6 +474,18 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
       }
     }
     onSaved();
+  };
+
+  // Fill the card from four statement lines. Only what the statement actually
+  // evidences is written: what they pay, how much they take, and the card mix.
+  // Our own price and buy costs are left exactly as they were.
+  const applyStatement = ({ rows, cp_volume, cnp_volume, avg_txn_size }) => {
+    setF(p => ({ ...p, cp_volume: String(cp_volume || ''), cnp_volume: String(cnp_volume || ''), avg_txn_size: String(avg_txn_size || '') }));
+    setRates(prev => {
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(rows)) next[k] = { ...next[k], ...v };
+      return next;
+    });
   };
 
   // live preview: derive each row's volume/txns from the channel totals + split + avg txn
@@ -445,6 +535,10 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
             <div><label className={label}>Total online volume {sym}/mo</label><input className={input} value={f.cnp_volume} onChange={e => set('cnp_volume', e.target.value)} placeholder="10000" /></div>
             <div><label className={label}>Avg transaction size {sym}</label><input className={input} value={f.avg_txn_size} onChange={e => set('avg_txn_size', e.target.value)} placeholder="20" /></div>
           </div>
+
+          <StatementImport sym={sym} minor={minor} m2={m2}
+            defaultDebitShare={costFor(template, 'cp_vm_debit').split ?? 55}
+            onApply={applyStatement} />
 
           {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} channelTotal={channelTotal(ch.key)} avgTxn={f.avg_txn_size} splitSum={splitSum(ch.key)} sym={sym} minor={minor} m0={m0} template={template} />)}
 
@@ -525,7 +619,12 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym =
                   <td className="px-1"><input className={cell} value={r.current_txn_fee} onChange={e => setRate(c.key, 'current_txn_fee', e.target.value)} placeholder="0" /></td>
                   <td className="px-1"><input className={cell} value={r.our_txn_fee} onChange={e => setRate(c.key, 'our_txn_fee', e.target.value)} placeholder="—" /></td>
                   <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_txn_fee} onChange={e => setRate(c.key, 'buy_txn_fee', e.target.value)} placeholder={ph(cost.buyTxn)} /></td>
-                  <td className={`pl-2 text-right text-sm font-semibold tabular-nums ${calc.saving < -0.5 ? 'text-red-600' : 'text-emerald-600'}`}>{calc.vol ? m0(calc.saving) : '—'}</td>
+                  {/* Only a row we have actually priced can show a saving. Without
+                      this an unpriced row reads our rate as zero and claims we save
+                      the customer everything they pay, which is how a rate card
+                      filled from a statement would flatter itself the moment it
+                      was imported. The totals already skip unpriced rows. */}
+                  <td className={`pl-2 text-right text-sm font-semibold tabular-nums ${calc.saving < -0.5 ? 'text-red-600' : 'text-emerald-600'}`}>{calc.vol && isPriced(r) ? m0(calc.saving) : '—'}</td>
                 </tr>
               );
             })}

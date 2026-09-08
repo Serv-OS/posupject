@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { X, Pencil, Plus, Trash2, Building2, PiggyBank } from 'lucide-react';
-import { AccountModal, ccyOf, moneyFor, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
+import { AccountModal, ccyOf, moneyFor, isPriced, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
 
 const thisMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const periodLabel = (p) => new Date(p).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
@@ -114,7 +114,7 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
                       <span className="w-20 text-right tabular-nums text-muted">{calc.vol ? m0(calc.vol) : '—'}</span>
                       <span className="w-16 text-right tabular-nums text-muted">{calc.vol ? pct2(calc.currentEff) : pct2(r.current_rate_pct)}</span>
                       <span className="w-16 text-right tabular-nums text-paper">{calc.vol ? pct2(calc.ourEff) : pct2(r.our_rate_pct)}</span>
-                      <span className="w-20 text-right tabular-nums font-semibold text-emerald-600">{calc.vol ? m2(calc.saving) : '—'}</span>
+                      <span className="w-20 text-right tabular-nums font-semibold text-emerald-600">{calc.vol && isPriced(r) ? m2(calc.saving) : '—'}</span>
                     </div>
                   );
                 })}
