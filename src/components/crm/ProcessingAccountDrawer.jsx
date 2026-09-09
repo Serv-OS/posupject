@@ -156,7 +156,9 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
                   </button>
                 ))}
               </div>
-              <div className="text-[10px] text-dim mt-2">Changing a rate here changes it on every one of these.</div>
+              <div className="text-[10px] text-dim mt-2">
+                Each quote froze its own copy of the rates when it was last saved, so editing here does <b>not</b> change what these customers can already see. Re-save a quote to bring it up to date.
+              </div>
             </div>
           )}
 

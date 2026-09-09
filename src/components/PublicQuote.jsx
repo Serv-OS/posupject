@@ -184,7 +184,7 @@ export default function PublicQuote({ token }) {
                 <tr key={i} className="border-b border-slate-100">
                   <td className="py-2 text-slate-700">{r.label}{r.channel ? <span className="text-slate-400 text-xs"> · {r.channel}</span> : ''}</td>
                   <td className="py-2 text-right text-slate-800 font-medium">{pct(r.rate)}</td>
-                  <td className="py-2 text-right text-slate-800 font-medium">{r.txn != null ? `${r.txn}${cur === 'USD' ? '¢' : 'p'}` : '—'}</td>
+                  <td className="py-2 text-right text-slate-800 font-medium">{r.txn != null ? `${r.txn}${(q.card_processing?.currency || cur) === 'USD' ? '¢' : 'p'}` : '—'}</td>
                 </tr>
               ))}
             </tbody>

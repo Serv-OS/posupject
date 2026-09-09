@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
+import { ccyOf } from './PaymentsPanel.jsx';
 import { pipelineTotals, DEFAULT_STAGE_WEIGHTS } from '../../lib/trading';
 
 // The deal stages, in order, with the names the rest of the app uses.
@@ -54,6 +55,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   const [pipeWindow, setPipeWindow] = useState('all');
   const [weights, setWeights] = useState(DEFAULT_STAGE_WEIGHTS);
   const [procAccounts, setProcAccounts] = useState([]);
+  const [cardQuotes, setCardQuotes] = useState([]);
   const [tab, setTab] = useState('leads');
   const [leads, setLeads] = useState([]);
   const [leadDays, setLeadDays] = useState(30);
@@ -79,8 +81,12 @@ export default function ReportingDashboard({ profile, onNavigate }) {
       supabase.from('leads').select('*'),
       supabase.from('deal_trading').select('*'),
       supabase.from('deal_stage_weights').select('stage, probability'),
-      supabase.from('processing_accounts').select('id, label, status, company_id'),
+      supabase.from('processing_accounts').select('id, label, status, company_id, region_code'),
       supabase.from('processing_rates').select('*'),
+      // The quotes are the only record of which DEAL a card is being sold on.
+      // A card can now cover a group of companies, so its owner and the deal
+      // selling it are routinely different companies.
+      supabase.from('quotes').select('id, deal_id, processing_account_id'),
     ]);
     setDeals(results[0].data || []);
     setTrading(results[14]?.data || []);
@@ -105,6 +111,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
     {
       const accs = results[16]?.data || [], rows = results[17]?.data || [];
       setProcAccounts(accs.map(x => ({ ...x, rates: rows.filter(r => r.account_id === x.id) })));
+      setCardQuotes(results[18]?.data || []);
     }
     setLoading(false);
   };
@@ -127,24 +134,50 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   // so adding it to each deal would multiply it. It is attributed to one deal —
   // the furthest along, ignoring lost ones — and a figure typed on the deal
   // always wins over the card. Every total below then just reads payments_arr.
-  const deals = useMemo(() => {
-    const cardBy = new Map();
+  // Which deal each card's margin belongs to.
+  //
+  // This used to key on the CARD's company, which was only ever safe while a
+  // card could not leave it. One card now covers a whole group — Coffee Boy is
+  // six sites across three companies — so the card's owner and the deal selling
+  // it are routinely different, and keying on company counted the same card on
+  // two deals AND reported it as belonging to none.
+  //
+  // The quotes are the ground truth: a quote names both the card and the deal.
+  // Fall back to the card owner's own deals only when no quote carries it yet.
+  const cardAttribution = useMemo(() => {
+    const byId = new Map(rawDeals.map(d => [d.id, d]));
+    const dealsOfCard = new Map();
+    for (const q of cardQuotes) {
+      if (!q.processing_account_id || !q.deal_id) continue;
+      if (!dealsOfCard.has(q.processing_account_id)) dealsOfCard.set(q.processing_account_id, new Set());
+      dealsOfCard.get(q.processing_account_id).add(q.deal_id);
+    }
+    const rank = (d) => DEAL_STAGE_ORDER.indexOf(d.stage);
+    const alive = (d) => d && d.stage !== 'closed_lost';
+    const typed = (d) => Number(d.payments_arr || 0) > 0;
+    const carries = new Map();      // deal id -> card margin carried
+    const placed = new Set();       // card ids whose margin is counted somewhere
     for (const acc of procAccounts) {
       const arr = paymentsArrFromRates(acc.rates).arr;
-      if (arr > 0 && acc.company_id) cardBy.set(acc.company_id, (cardBy.get(acc.company_id) || 0) + arr);
+      if (!(arr > 0)) continue;
+      const attached = [...(dealsOfCard.get(acc.id) || [])].map(id => byId.get(id)).filter(alive);
+      // A figure already on one of its own deals wins: that is what was sold.
+      if (attached.some(typed)) { placed.add(acc.id); continue; }
+      // No quote names it yet, so fall back to the owner's own unclaimed deals.
+      const pool = attached.length ? attached : rawDeals.filter(d => d.company_id === acc.company_id && alive(d) && !typed(d));
+      if (!pool.length) continue;   // genuinely not on any deal
+      const best = pool.reduce((a, b) => (rank(b) > rank(a) ? b : a));
+      carries.set(best.id, (carries.get(best.id) || 0) + arr);
+      placed.add(acc.id);
     }
-    if (!cardBy.size) return rawDeals;
-    const claimed = new Set(rawDeals.filter(d => Number(d.payments_arr || 0) > 0).map(d => d.company_id));
-    const rank = (d) => DEAL_STAGE_ORDER.indexOf(d.stage);
-    const carrier = new Map();
-    for (const d of rawDeals) {
-      if (!d.company_id || !cardBy.has(d.company_id) || claimed.has(d.company_id) || d.stage === 'closed_lost') continue;
-      const cur = carrier.get(d.company_id);
-      if (!cur || rank(d) > rank(cur)) carrier.set(d.company_id, d);
-    }
-    const carries = new Map([...carrier.values()].map(d => [d.id, cardBy.get(d.company_id)]));
+    return { carries, placed };
+  }, [rawDeals, procAccounts, cardQuotes]);
+
+  const deals = useMemo(() => {
+    const { carries } = cardAttribution;
+    if (!carries.size) return rawDeals;
     return rawDeals.map(d => (carries.has(d.id) ? { ...d, payments_arr: carries.get(d.id), payments_from_card: true } : d));
-  }, [rawDeals, procAccounts]);
+  }, [rawDeals, cardAttribution]);
 
   const leadMetrics = useMemo(() => {
     const now = Date.now();
@@ -461,14 +494,17 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   const money = useMemo(() => {
     const CCY = { GBP: '£', USD: '$' };
     const ccyOfDeal = (d) => (d.currency === 'USD' ? 'USD' : 'GBP');
-    const ccyOfCompany = (id) => (companies.find(c => c.id === id)?.country === 'US' ? 'USD' : 'GBP');
+    // A card's currency is the region it was PRICED in. Reading it off the
+    // company's country disagreed with every other screen, which uses
+    // region_code, the moment anyone set the Costs dropdown by hand.
     const won = deals.filter(d => d.stage === 'closed_won');
     const open = deals.filter(d => OPEN_STAGES.includes(d.stage));
     const sum = (list, f) => list.reduce((t, d) => t + Number(f(d) || 0), 0);
-    const card = procAccounts.map(x => ({ ...x, calc: paymentsArrFromRates(x.rates), ccy: ccyOfCompany(x.company_id) }));
-    // Rate-card margin nobody has put on a deal yet: real money the pipeline misses.
-    const dealCompanies = new Set(deals.filter(d => Number(d.payments_arr || 0) > 0).map(d => d.company_id));
-    const unclaimed = card.filter(x => x.calc.priced && !dealCompanies.has(x.company_id));
+    const card = procAccounts.map(x => ({ ...x, calc: paymentsArrFromRates(x.rates), ccy: ccyOf(x) }));
+    // Rate-card margin nobody has put on a deal yet: real money the pipeline
+    // misses. Decided by the same attribution the pipeline used, so a card
+    // counted on another company's deal can no longer also be called missing.
+    const unclaimed = card.filter(x => x.calc.priced && !cardAttribution.placed.has(x.id));
     // Never blend currencies: a pound and a dollar are different money, and we
     // hold no FX rate. Each currency is totalled and shown on its own.
     const used = [...new Set([...deals.map(ccyOfDeal), ...card.filter(x => x.calc.priced).map(x => x.ccy)])];
@@ -491,7 +527,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
       };
     }).filter(x => x.wonRecurring || x.openRecurring || x.wonOneOff || x.openOneOff || x.cardArr || x.ccy === 'GBP');
     return { per };
-  }, [deals, procAccounts, weights, companies]);
+  }, [deals, procAccounts, weights, cardAttribution]);
 
   const formatCurrency = (v) => `£${Math.round(v).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
 

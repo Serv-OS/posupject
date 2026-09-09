@@ -23,7 +23,11 @@ const cardSnapshot = (acc) => {
       txn: (r.our_txn_fee === '' || r.our_txn_fee == null) ? null : Number(r.our_txn_fee),
     };
   }).filter(Boolean);
-  return rows.length ? { rows } : null;
+  // The per-transaction fee is in the CARD's minor unit, cents on a US card and
+  // pence on a UK one, and a card can now be attached to a quote of the other
+  // currency. Without this the customer's copy took its suffix from the QUOTE
+  // and printed 15 cents as 15p.
+  return rows.length ? { rows, currency: ccyOf(acc) } : null;
 };
 
 const CAT_LABEL = { hardware: 'Hardware', services: 'Services', saas: 'SaaS', payments: 'Payments' };
@@ -196,16 +200,27 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
       }
     }
 
+    // deals.payments_arr is a bare number read everywhere as the DEAL's currency,
+    // and a card can now be attached to a quote of another one. Writing a
+    // dollar figure onto a pound deal is not a rounding error, it is a wrong
+    // number in every pipeline total, so it is refused rather than converted:
+    // we hold no exchange rate and inventing one would be worse.
+    const cardCcy = acc ? ccyOf(acc) : null;
+    const dealCcy = quote.currency || 'GBP';
+    const ccyClash = !!(our?.priced && cardCcy && cardCcy !== dealCcy);
+
     const arrNote = !our?.priced ? ''
-      : claimedBy
-        ? `\n\nThe attached rate card is already earning on "${claimedBy.name}", so its payments ARR stays there. This deal closes without it, otherwise the same card would be counted twice.`
-        : `\n\nPayments ARR of ${moneyFor(ccyOf(acc)).m0(our.arr)} will be set on the deal from the attached rate card.`;
+      : ccyClash
+        ? `\n\nThe rate card is priced in ${cardCcy} and this quote is in ${dealCcy}, so its payments ARR is NOT being written to the deal. Put the card on a ${cardCcy} quote, or price a ${dealCcy} card for this customer.`
+        : claimedBy
+          ? `\n\nThe attached rate card is already earning on "${claimedBy.name}", so its payments ARR stays there. This deal closes without it, otherwise the same card would be counted twice.`
+          : `\n\nPayments ARR of ${moneyFor(ccyOf(acc)).m0(our.arr)} will be set on the deal from the attached rate card.`;
     if (!confirm(`Mark this quote as Won? This closes the deal and starts onboarding.${arrNote}`)) return;
     await save();
     await supabase.from('quotes').update({ status: 'won' }).eq('id', quoteId);
     if (quote.deal_id) {
       const patch = { stage: 'closed_won', closed_at: new Date().toISOString() };
-      if (our?.priced && !claimedBy) patch.payments_arr = Math.round(our.arr * 100) / 100;
+      if (our?.priced && !claimedBy && !ccyClash) patch.payments_arr = Math.round(our.arr * 100) / 100;
       await supabase.from('deals').update(patch).eq('id', quote.deal_id);
       await supabase.from('stage_history').insert({ object_type: 'deal', object_id: quote.deal_id, to_stage: 'closed_won', changed_by: profile.id });
       try { await handleClosedWon(quote.deal_id, profile.id); } catch (e) { console.error(e); }
