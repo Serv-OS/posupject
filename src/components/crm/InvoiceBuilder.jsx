@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ArrowLeft, Send, Link2, Trash2, Plus, Check, Ban, Repeat, FileDown } from 'lucide-react';
-import { money, invStatus, INV_BADGE } from './InvoicesPanel.jsx';
+import { money, invStatus, INV_BADGE, CATALOGUE_CCY, catalogueListPrice, catalogueUnitPrice } from './InvoicesPanel.jsx';
 import { taxLabelFor, defaultTaxRateFor, currencySymbol, currencyLocale } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { downloadInvoicePdf } from '../../lib/invoicePdf';
@@ -250,13 +250,13 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
                         const p = products.find(x => x.id === e.target.value);
                         if (p) setLines(prev => {
                           const blank = prev.length === 1 && !(prev[0].name || '').trim();
-                          const line = { _new: true, name: p.name, description: p.description || '', qty: 1, unit_price: Number(p.default_price) || 0, tax_rate: defaultTaxRateFor(cur) };
+                          const line = { _new: true, name: p.name, description: p.description || '', qty: 1, unit_price: catalogueUnitPrice(p, cur), tax_rate: defaultTaxRateFor(cur) };
                           return blank ? [line] : [...prev, line];
                         });
                       }}>
                       <option value="">+ Add from products…</option>
                       {products.map(p => <option key={p.id} value={p.id}>
-                        {p.name} — {m(p.default_price)}{stockCounts[p.id] != null ? ` (${stockCounts[p.id]} in stock)` : ''}
+                        {p.name} — {catalogueListPrice(p)}{cur !== CATALOGUE_CCY ? ' list' : ''}{stockCounts[p.id] != null ? ` (${stockCounts[p.id]} in stock)` : ''}
                       </option>)}
                     </select>
                   ) : (
@@ -267,6 +267,9 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
                 </div>
               )}
             </div>
+            {!locked && products.length > 0 && cur !== CATALOGUE_CCY && (
+              <div className="text-[11px] text-dim italic">Catalogue prices are GBP list. Enter the {currencySymbol(cur)} price on each line.</div>
+            )}
             {lines.length === 0 && <div className="text-xs text-dim italic py-4 text-center">No line items yet. Add from products or start a blank line.</div>}
             {lines.map((l, i) => (
               <div key={l.id || `n${i}`} className="glass-inner rounded-xl p-3 space-y-2">

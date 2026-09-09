@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { sumByCurrency, fmtMoney0 } from '../../lib/money';
+import { currencyForCountry } from '../../lib/region';
 import { handleClosedWon } from '../../lib/dealHelpers';
 
 const STAGES = [
@@ -37,7 +38,7 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
   const load = async () => {
     const [d, c, l, m, a] = await Promise.all([
       supabase.from('deals').select('*').order('created_at', { ascending: false }),
-      supabase.from('companies').select('id, name').order('name'),
+      supabase.from('companies').select('id, name, country').order('name'),
       supabase.from('locations').select('id, name, company_id').order('name'),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('associations').select('*')
@@ -78,7 +79,9 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
     }
     return null;
   };
-  const fmt = (v) => v ? `\u{00A3}${Number(v).toLocaleString('en-GB', { minimumFractionDigits: 0 })}` : '';
+  // Board cards carry the DEAL's currency, never a bare pound: the column
+  // headers above are already per-currency, and List already uses fmtMoney0.
+  const fmt = (v, ccy) => v ? fmtMoney0(v, ccy || 'GBP') : '';
 
   const moveDeal = async (dealId, fromStage, toStage) => {
     if (fromStage === toStage) return;
@@ -122,6 +125,11 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
     }
   };
 
+  // A deal is stamped with its company's currency at birth. The column defaults
+  // to GBP and only recalc_deal_rollup corrects it (needs a quote), so without
+  // this every quote-less US deal sits in the £ bucket of every roll-up.
+  const newCurrency = currencyForCountry(companies.find(c => c.id === newCompany)?.country);
+
   const create = async (e) => {
     e.preventDefault();
     if (!newName.trim()) { alert('Please enter a deal name.'); return; }
@@ -130,6 +138,7 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
       name: newName.trim(),
       company_id: newCompany,
       value: newValue ? parseFloat(newValue) : null,
+      currency: newCurrency,
       owner_id: profile.id,
     }).select().single();
     if (error) { alert('Could not create deal: ' + error.message); return; }
@@ -197,7 +206,7 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
         <div className="px-6 py-3 border-b border-bdr max-h-[70vh] overflow-y-auto">
           <form onSubmit={create} className="flex flex-wrap gap-2 items-center">
             <input className={`${fld} flex-1 min-w-[180px]`} value={newName} onChange={e => setNewName(e.target.value)} placeholder="Deal name" autoFocus />
-            <input className={`${fld} w-32`} value={newValue} onChange={e => setNewValue(e.target.value)} placeholder="Value (GBP)" type="number" step="0.01" />
+            <input className={`${fld} w-32`} value={newValue} onChange={e => setNewValue(e.target.value)} placeholder={`Value (${newCurrency})`} type="number" step="0.01" />
             <select className={`${fld} w-60`} value={newLocation} onChange={e => handleLocationChange(e.target.value)}>
               <option value="">Select location...</option>
               {locations.map(l => {
@@ -267,12 +276,12 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
                           <tbody className="text-sm">
                             <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Company</td><td className="py-0.5 text-paper">{companyName(d.company_id) || '--'}</td></tr>
                             {loc && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Location</td><td className="py-0.5 text-paper">{loc.name}</td></tr>}
-                            {d.hardware_value > 0 && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Hardware</td><td className="py-0.5 text-paper font-mono">{fmt(d.hardware_value)}</td></tr>}
-                            {d.services_value > 0 && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Services</td><td className="py-0.5 text-paper font-mono">{fmt(d.services_value)}</td></tr>}
-                            {d.saas_arr > 0 && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">SAAS ARR</td><td className="py-0.5 text-paper font-mono">{fmt(d.saas_arr)}</td></tr>}
-                            {d.payments_arr > 0 && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Payments ARR</td><td className="py-0.5 text-paper font-mono">{fmt(d.payments_arr)}</td></tr>}
+                            {d.hardware_value > 0 && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Hardware</td><td className="py-0.5 text-paper font-mono">{fmt(d.hardware_value, d.currency)}</td></tr>}
+                            {d.services_value > 0 && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Services</td><td className="py-0.5 text-paper font-mono">{fmt(d.services_value, d.currency)}</td></tr>}
+                            {d.saas_arr > 0 && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">SAAS ARR</td><td className="py-0.5 text-paper font-mono">{fmt(d.saas_arr, d.currency)}</td></tr>}
+                            {d.payments_arr > 0 && <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Payments ARR</td><td className="py-0.5 text-paper font-mono">{fmt(d.payments_arr, d.currency)}</td></tr>}
                             {!d.hardware_value && !d.services_value && !d.saas_arr && !d.payments_arr && d.value > 0 && (
-                              <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Value</td><td className="py-0.5 text-paper font-mono">{fmt(d.value)}</td></tr>
+                              <tr><td className="py-0.5 text-muted font-medium pr-4 whitespace-nowrap">Value</td><td className="py-0.5 text-paper font-mono">{fmt(d.value, d.currency)}</td></tr>
                             )}
                           </tbody>
                         </table>

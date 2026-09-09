@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
-import { fmtMoney } from '../../lib/money';
+import { fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { ccyOf } from './PaymentsPanel.jsx';
 import { EditSheet } from './ui.jsx';
 import { currencyForCountry } from '../../lib/region';
 import { defaultTaxRateFor } from '../../lib/money';
@@ -167,18 +168,31 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
   const ownerName = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email.split('@')[0]) : 'Unassigned'; };
   // A deal carries its own currency (set from its quote), and the US ones are
   // in dollars. This used to print a pound sign on every figure on the page.
-  const fmt = (v) => (v ? fmtMoney(v, deal.currency === 'USD' ? 'USD' : 'GBP') : '');
+  const dealCcy = deal.currency === 'USD' ? 'USD' : 'GBP';
+  const otherCcy = dealCcy === 'USD' ? 'GBP' : 'USD';
+  const fmt = (v) => (v ? fmtMoney(v, dealCcy) : '');
 
   // What the rate cards on this deal's quotes are worth a year. A figure typed
   // on the deal is a deliberate override and wins; otherwise the card is the
   // number. Computed once so the Payments ARR line and the Total below it
   // cannot show different money.
+  //
+  // A card is priced in its OWN region's currency (region_code -> ccyOf), and
+  // a quote may attach a card from either region, so the cards are summed per
+  // currency and never blended: we hold no FX rate. Only the slice in the
+  // deal's currency may join its Total; a card in the other currency is shown
+  // as what it is and left out, the same rule QuoteBuilder applies.
+  const cardArrBy = sumByCurrency(procAccounts, x => paymentsArrFromRates(x.rates).arr, ccyOf);
   const cardCalc = procAccounts.reduce((acc, x) => {
     const r = paymentsArrFromRates(x.rates);
-    return { priced: acc.priced + r.priced, arr: acc.arr + r.arr, cards: acc.cards + (r.priced ? 1 : 0) };
-  }, { priced: 0, arr: 0, cards: 0 });
+    if (!r.priced) return acc;
+    const own = ccyOf(x) === dealCcy;
+    return { priced: acc.priced + r.priced, cards: acc.cards + 1, foreign: acc.foreign + (own ? 0 : 1) };
+  }, { priced: 0, cards: 0, foreign: 0 });
+  const cardArrSame = cardArrBy[dealCcy] || 0;
+  const cardArrAny = Object.values(cardArrBy).some(v => v > 0);
   const typedPayments = Number(deal.payments_arr || 0);
-  const paymentsArr = typedPayments > 0 ? typedPayments : cardCalc.arr;
+  const paymentsArr = typedPayments > 0 ? typedPayments : cardArrSame;
   const companyLocations = deal.company_id ? locations.filter(l => l.company_id === deal.company_id) : [];
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
@@ -316,14 +330,15 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                       normally nothing. That is why every deal carrying a card
                       showed zero. Deriving it means it cannot be wiped, and it
                       follows the card when a rate changes. */}
-                  {paymentsArr > 0 && (<>
-                    <div className="flex justify-between"><span className="text-xs text-muted">Payments ARR</span><span className="text-sm text-paper font-mono">{fmt(paymentsArr)}</span></div>
+                  {(paymentsArr > 0 || cardArrAny) && (<>
+                    <div className="flex justify-between"><span className="text-xs text-muted">Payments ARR</span><span className="text-sm text-paper font-mono">{typedPayments > 0 ? fmt(paymentsArr) : fmtByCurrency(cardArrBy)}</span></div>
                     <div className="text-[10px] text-dim -mt-1">
                       {typedPayments > 0
                         ? cardCalc.priced
-                          ? <>Typed on the deal, so it wins. The rate card says {fmt(cardCalc.arr)}.</>
+                          ? <>Typed on the deal, so it wins. The rate card says {fmtByCurrency(cardArrBy)}.</>
                           : <>Typed on the deal.</>
                         : <>From {cardCalc.cards === 1 ? 'the rate card' : `${cardCalc.cards} rate cards`} on this deal's quotes: what we charge minus what the cards cost us, times twelve, across {cardCalc.priced} priced card type{cardCalc.priced === 1 ? '' : 's'}.</>}
+                      {cardCalc.foreign > 0 && <> <b>{cardCalc.foreign} rate card{cardCalc.foreign === 1 ? ' is' : 's are'} priced in {otherCcy}</b>, which we do not convert, so that figure is shown here and left out of the Total.</>}
                       {sharedDeals > 1 && <> <b>Shared with {sharedDeals - 1} other deal{sharedDeals === 2 ? '' : 's'}</b>, so it shows on each of them and is counted once in reporting. Do not add them up.</>}
                     </div>
                   </>)}
@@ -336,7 +351,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                 </div>
               </Card>
 
-              <DealTradingCard dealId={dealId} currency={deal.currency || 'GBP'} canWrite={canWrite} onNavigate={onNavigate} />
+              <DealTradingCard dealId={dealId} currency={dealCcy} canWrite={canWrite} onNavigate={onNavigate} />
 
               <Card title="Company">
                 {company ? (
@@ -388,7 +403,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                         className="p-3 glass-inner rounded-xl cursor-pointer flex items-center gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium text-paper">Quote #{q.quote_number}</div>
-                          <div className="text-xs text-muted">£{Number(q.one_off_total || 0).toLocaleString('en-GB')} one-off{q.recurring_arr > 0 ? ` · £${Number(q.recurring_arr).toLocaleString('en-GB')} ARR` : ''}</div>
+                          <div className="text-xs text-muted">{fmtMoney0(q.one_off_total, q.currency || dealCcy)} one-off{q.recurring_arr > 0 ? ` · ${fmtMoney0(q.recurring_arr, q.currency || dealCcy)} ARR` : ''}</div>
                         </div>
                         <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-slate-100 text-slate-600 border border-slate-200">{q.status}</span>
                       </div>

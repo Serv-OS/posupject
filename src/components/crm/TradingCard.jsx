@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { fmtMoney0 } from '../../lib/money';
+import { CURRENCIES, fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { transactionsFrom, estimateAccuracy } from '../../lib/trading';
 
@@ -127,8 +127,8 @@ export function LocationTradingCard({ location, company, canWrite, onSaved }) {
 
 /** Deal-level: rolls up its sites, unless someone has typed an override. */
 export function DealTradingCard({ dealId, currency = 'GBP', canWrite, onNavigate }) {
-  const gbp0 = (n) => fmtMoney0(n, currency);
   const [row, setRow] = useState(null);
+  const [over, setOver] = useState({ rev: null, atv: null });   // typed on the deal itself
   const [sites, setSites] = useState([]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({ rev: '', atv: '' });
@@ -140,18 +140,26 @@ export function DealTradingCard({ dealId, currency = 'GBP', canWrite, onNavigate
       supabase.from('deals').select('est_monthly_revenue, est_avg_transaction').eq('id', dealId).maybeSingle(),
     ]);
     if (t.error) { setErr(t.error.message); return; }
-    setRow(t.data || null);
+    setOver({ rev: n(d.data?.est_monthly_revenue), atv: n(d.data?.est_avg_transaction) });
     setDraft({ rev: txt(d.data?.est_monthly_revenue), atv: txt(d.data?.est_avg_transaction) });
 
     // The sites behind the number, so it is never a figure with no explanation.
+    // They also decide the currency of every figure on the card, so the row is
+    // NOT set until they have arrived: setting it first painted the view's
+    // cross-country total with the deal's currency for one round-trip, a
+    // "£30,000" that flipped to "$30,000" a moment later.
     const { data: assoc } = await supabase.from('associations').select('*')
       .or(`and(from_type.eq.deal,from_id.eq.${dealId},to_type.eq.location),and(to_type.eq.deal,to_id.eq.${dealId},from_type.eq.location)`);
     const ids = (assoc || []).map((a) => (a.from_type === 'location' ? a.from_id : a.to_id));
+    let locs = [];
     if (ids.length) {
-      const { data: locs } = await supabase.from('locations')
-        .select('id, name, est_monthly_revenue, est_avg_transaction, est_monthly_transactions').in('id', ids);
-      setSites(locs || []);
-    } else setSites([]);
+      // Country decides the money a site trades in — same chain as LocationTradingCard.
+      const res = await supabase.from('locations')
+        .select('id, name, country, company:companies(country), est_monthly_revenue, est_avg_transaction, est_monthly_transactions').in('id', ids);
+      locs = res.data || [];
+    }
+    setSites(locs);
+    setRow(t.data || null);
   };
   useEffect(() => { load(); }, [dealId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -169,6 +177,25 @@ export function DealTradingCard({ dealId, currency = 'GBP', canWrite, onNavigate
 
   if (!row) return null;
   const has = row.est_monthly_revenue !== null && row.est_monthly_revenue !== undefined;
+
+  // A Leeds site takes pounds and a Provo site takes dollars, so the roll-up is
+  // summed per currency and never across it. The view's blended figure is only
+  // trusted when every site trades in the same money; a figure typed on the
+  // deal is one number and belongs to the deal's currency.
+  const siteCcy = (s) => currencyForCountry(s.country || s.company?.country);
+  const priced = sites.filter((s) => s.est_monthly_revenue != null);
+  const revByCcy = sumByCurrency(priced, (s) => s.est_monthly_revenue, siteCcy);
+  const txnByCcy = sumByCurrency(priced, (s) => s.est_monthly_transactions || 0, siteCcy);
+  const ccys = CURRENCIES.filter((c) => revByCcy[c]);
+  const mixed = ccys.length > 1;
+  const rollCcy = ccys.length === 1 ? ccys[0] : currency;
+  const revCcy = over.rev !== null ? currency : rollCcy;
+  const atvCcy = over.atv !== null ? currency : rollCcy;
+  const mixedRev = mixed && over.rev === null;
+  const mixedAtv = mixed && over.atv === null;
+  // Average inside each currency: pounds are never divided by dollar transactions.
+  const atvByCcy = ccys.filter((c) => txnByCcy[c] > 0)
+    .map((c) => fmtMoney(revByCcy[c] / txnByCcy[c], c)).join(' + ');
 
   return (
     <div className="glass-card rounded-2xl overflow-hidden">
@@ -192,9 +219,14 @@ export function DealTradingCard({ dealId, currency = 'GBP', canWrite, onNavigate
 
         {has && (
           <div className="grid grid-cols-3 gap-3">
-            <Stat label="Turnover / month" value={gbp0(row.est_monthly_revenue)} sub={`${gbp0(row.est_monthly_revenue * 12)} a year`} />
-            <Stat label="Avg transaction" value={row.est_avg_transaction ? gbp0(0).replace('0', Number(row.est_avg_transaction).toFixed(2)) : '—'}
-              sub={row.site_count > 1 ? 'blended across sites' : null} />
+            <Stat label="Turnover / month"
+              value={mixedRev ? fmtByCurrency(revByCcy, 0) : fmtMoney0(row.est_monthly_revenue, revCcy)}
+              sub={mixedRev
+                ? `${fmtByCurrency(Object.fromEntries(ccys.map((c) => [c, revByCcy[c] * 12])), 0)} a year`
+                : `${fmtMoney0(row.est_monthly_revenue * 12, revCcy)} a year`} />
+            <Stat label="Avg transaction"
+              value={mixedAtv ? (atvByCcy || '—') : (row.est_avg_transaction ? fmtMoney(row.est_avg_transaction, atvCcy) : '—')}
+              sub={mixedAtv ? 'per currency, never blended' : (row.site_count > 1 ? 'blended across sites' : null)} />
             <Stat label="Transactions / month" value={count(row.est_monthly_transactions)} />
           </div>
         )}
@@ -232,7 +264,7 @@ export function DealTradingCard({ dealId, currency = 'GBP', canWrite, onNavigate
                   className="flex items-center gap-2 px-3 py-2 glass-inner rounded-lg cursor-pointer text-xs">
                   <span className="flex-1 min-w-0 truncate text-paper">{s.name}</span>
                   <span className="text-muted tabular-nums shrink-0">
-                    {s.est_monthly_revenue ? gbp0(s.est_monthly_revenue) : <span className="text-dim italic">no figures</span>}
+                    {s.est_monthly_revenue ? fmtMoney0(s.est_monthly_revenue, siteCcy(s)) : <span className="text-dim italic">no figures</span>}
                   </span>
                   <span className="text-dim tabular-nums shrink-0 w-20 text-right">
                     {s.est_monthly_transactions ? `${count(s.est_monthly_transactions)} txns` : ''}

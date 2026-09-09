@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { MobileTable, MobileDock, DockField, Mono } from './ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download } from 'lucide-react';
-import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor } from '../../lib/money';
+import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, currencyLocale } from '../../lib/money';
 import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
 
@@ -10,6 +10,14 @@ import { downloadListPdf } from '../../lib/listPdf';
 // existing caller, money(v, inv.currency) renders the document's own currency.
 export const money = (v, currency = 'GBP') => fmtMoney(v, currency);
 export const curOf = (x) => x?.currency || 'GBP';
+// The products catalogue has ONE price column and no currency: default_price
+// is pounds (ProductsPanel labels it "Selling price (£)"). Print it with its
+// OWN symbol, never the document's, and never copy it onto a non-GBP document.
+// We hold no exchange rate, so a blank price the user must type is the only
+// honest line. A per-currency product price is the real fix and needs DDL.
+export const CATALOGUE_CCY = 'GBP';
+export const catalogueListPrice = (p) => fmtMoney(p?.default_price, CATALOGUE_CCY);
+export const catalogueUnitPrice = (p, docCcy) => ((docCcy || 'GBP') === CATALOGUE_CCY ? Number(p?.default_price) || 0 : 0);
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
 
 // Effective display status: sent/viewed past due = overdue
@@ -100,6 +108,9 @@ export default function InvoicesPanel({ profile, onNavigate }) {
       const subtotal = rows.reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
       const tax = rows.reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unit_price) || 0) * (Number(l.tax_rate) || 0) / 100, 0);
       const { downloadInvoicePdf } = await import('../../lib/invoicePdf');
+      // Tax label and date locale follow the invoice's own currency, exactly as
+      // the editor's PDF button does; a US invoice must never print 'VAT'.
+      const cur = curOf(inv);
       await downloadInvoicePdf({
         inv: { ...inv, terms: inv.terms || seller?.invoice_terms },
         lines: rows,
@@ -118,7 +129,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
           contactEmail: contact?.email,
           locationName: location?.name, locationAddress: addr(location),
         },
-        fmt: (v) => money(v, curOf(inv)), taxLabel: 'VAT', dateLocale: 'en-GB',
+        fmt: (v) => money(v, cur), taxLabel: taxLabelFor(cur), dateLocale: currencyLocale(cur),
       });
     } catch (err) { alert('Could not build that PDF: ' + err.message); }
     setPdfFor(null);
@@ -548,18 +559,21 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
                       const p = products.find(x => x.id === e.target.value);
                       if (p) setLines(prev => {
                         const blank = prev.length === 1 && !(prev[0].name || '').trim();
-                        const line = { name: p.name, description: p.description || '', qty: 1, unit_price: Number(p.default_price) || 0 };
+                        const line = { name: p.name, description: p.description || '', qty: 1, unit_price: catalogueUnitPrice(p, f.currency) };
                         return blank ? [line] : [...prev, line];
                       });
                     }}>
                     <option value="">+ From products…</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name} — {money(p.default_price, f.currency)}</option>)}
+                    {products.map(p => <option key={p.id} value={p.id}>{p.name} — {catalogueListPrice(p)}{f.currency !== CATALOGUE_CCY ? ' list' : ''}</option>)}
                   </select>
                 )}
                 <button onClick={() => setLines(p => [...p, { name: '', description: '', qty: 1, unit_price: 0 }])}
                   className="text-xs text-ember hover:text-ember-deep font-medium">+ Blank line</button>
               </div>
             </div>
+            {products.length > 0 && f.currency !== CATALOGUE_CCY && (
+              <div className="text-[11px] text-dim italic">Catalogue prices are GBP list. Enter the {currencySymbol(f.currency)} price on each line.</div>
+            )}
             {lines.map((l, i) => (
               <div key={i} className="glass-inner rounded-xl p-3 space-y-2">
                 <div className="flex items-center gap-2">

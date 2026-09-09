@@ -20,6 +20,8 @@ import InvoicesCard from './InvoicesCard.jsx';
 import LocationModulesCard from './LocationModulesCard.jsx';
 import EntityPicker from './EntityPicker.jsx';
 import { primaryLead } from '../../lib/leadStages';
+// Deals carry their own currency (GBP or USD, set from the quote): never a bare £.
+import { fmtMoney0 } from '../../lib/money';
 
 const STATUS_OPTIONS = ['prospect', 'onboarding', 'live', 'churned'];
 const STATUS_COLORS = {
@@ -530,7 +532,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                         className="p-3 glass-inner rounded-xl cursor-pointer">
                         <div className="text-sm font-medium text-paper">{d.name}</div>
                         <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-ember font-mono font-bold">{d.value ? `£${Number(d.value).toLocaleString()}` : ''}</span>
+                          <span className="text-xs text-ember font-mono font-bold">{d.value ? fmtMoney0(d.value, d.currency) : ''}</span>
                           <span className="text-[10px] text-muted uppercase">{DEAL_STAGES[d.stage] || d.stage}</span>
                         </div>
                       </div>

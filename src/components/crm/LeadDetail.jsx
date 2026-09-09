@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { currencyForCountry } from '../../lib/region';
 import { EditSheet } from './ui.jsx';
 import TimerButton from './TimerButton.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
@@ -9,6 +10,24 @@ import CallButton from '../CallButton.jsx';
 import ScheduleMeeting from './ScheduleMeeting.jsx';
 import LeadBadge from './LeadBadge.jsx';
 import { LEAD_STAGES, LEAD_STAGE_MAP } from '../../lib/leadStages';
+// Deals carry their own currency (GBP or USD, set from the quote): never a bare £.
+import { fmtMoney0 } from '../../lib/money';
+
+// A deal's currency is fixed at creation and every total reads it, so a lead
+// converted for a US customer must not come out as a pound deal. The site
+// decides, then the company; nothing set means the UK, as everywhere else.
+const currencyForLead = async (lead) => {
+  if (lead.location_id) {
+    const { data } = await supabase.from('locations').select('country, company:companies(country)').eq('id', lead.location_id).maybeSingle();
+    if (data) return currencyForCountry(data.country || data.company?.country);
+  }
+  if (lead.company_id) {
+    const { data } = await supabase.from('companies').select('country').eq('id', lead.company_id).maybeSingle();
+    if (data) return currencyForCountry(data.country);
+  }
+  return 'GBP';
+};
+
 
 const STAGE_FLOW = ['new_lead', 'attempting', 'mql', 'sql'];
 const SOURCE_OPTIONS = ['website', 'referral', 'cold_outreach', 'event', 'trade_show', 'social', 'inbound_call', 'inbound_email', 'pos_review_site', 'partner', 'other'];
@@ -58,7 +77,7 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
     setMembers(m.data || []);
     // The deal this lead became. Converting sets leads.deal_id, but nothing on
     // the page linked to it, so a lead badged DEAL was a dead end.
-    if (l.data?.deal_id) supabase.from('deals').select('id, name, stage, value').eq('id', l.data.deal_id).single().then(r => setDeal(r.data)); else setDeal(null);
+    if (l.data?.deal_id) supabase.from('deals').select('id, name, stage, value, currency').eq('id', l.data.deal_id).single().then(r => setDeal(r.data)); else setDeal(null);
     // Linked records still fetched for the header Call button
     if (l.data?.company_id) supabase.from('companies').select('id, name, phone, domain').eq('id', l.data.company_id).single().then(r => setCompany(r.data)); else setCompany(null);
     if (l.data?.location_id) supabase.from('locations').select('id, name, phone, city, venue_type').eq('id', l.data.location_id).single().then(r => setLocation(r.data)); else setLocation(null);
@@ -94,6 +113,7 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
     if (!confirm('Convert this lead into a deal?')) return;
     const { data: deal } = await supabase.from('deals').insert({
       name: `Deal: ${lead.name}`, company_id: lead.company_id, owner_id: lead.owner_id || profile.id, source: lead.source,
+      currency: await currencyForLead(lead),
     }).select().single();
     if (deal) {
       await supabase.from('stage_history').insert({ object_type: 'deal', object_id: deal.id, from_stage: null, to_stage: 'new_lead', changed_by: profile.id });
@@ -257,7 +277,7 @@ export default function LeadDetail({ leadId, profile, onClose, onNavigate }) {
                           <div className="flex-1 min-w-0">
                             <div className="text-sm font-semibold text-paper truncate">{deal.name}</div>
                             <div className="text-[11px] text-muted capitalize">
-                              {(deal.stage || '').replace(/_/g, ' ')}{deal.value != null ? ` \u00b7 \u00a3${Number(deal.value).toLocaleString('en-GB')}` : ''}
+                              {(deal.stage || '').replace(/_/g, ' ')}{deal.value != null ? ` \u00b7 ${fmtMoney0(deal.value, deal.currency)}` : ''}
                             </div>
                           </div>
                           <span className="text-dim text-xs">{'\u2192'}</span>

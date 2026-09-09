@@ -1,7 +1,24 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
+import { currencyForCountry } from '../../lib/region';
 import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
+
+// A deal's currency is fixed at creation and every total reads it, so a lead
+// converted for a US customer must not come out as a pound deal. The site
+// decides, then the company; nothing set means the UK, as everywhere else.
+const currencyForLead = async (lead) => {
+  if (lead.location_id) {
+    const { data } = await supabase.from('locations').select('country, company:companies(country)').eq('id', lead.location_id).maybeSingle();
+    if (data) return currencyForCountry(data.country || data.company?.country);
+  }
+  if (lead.company_id) {
+    const { data } = await supabase.from('companies').select('country').eq('id', lead.company_id).maybeSingle();
+    if (data) return currencyForCountry(data.country);
+  }
+  return 'GBP';
+};
+
 
 const STAGES = [
   { key: 'new_lead',      label: 'New Lead',          color: '#3b82f6' },
@@ -176,6 +193,7 @@ export default function LeadBoard({ profile, onNavigate, prefill, onPrefillConsu
       company_id: lead.company_id,
       owner_id: lead.owner_id || profile.id,
       source: lead.source,
+      currency: await currencyForLead(lead),
     }).select().single();
 
     if (deal) {

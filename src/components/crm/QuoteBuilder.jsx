@@ -31,6 +31,16 @@ const cardSnapshot = (acc) => {
 };
 
 const CAT_LABEL = { hardware: 'Hardware', services: 'Services', saas: 'SaaS', payments: 'Payments' };
+// The catalogue has ONE price column and no currency: products.default_price
+// is pounds (ProductsPanel labels it "Selling price (£)"). Print it with its
+// OWN symbol, never the QUOTE's, and never copy it onto a quote of another
+// currency. We hold no exchange rate, so a blank price the rep must type is
+// the only honest line, and it is the one price source on this screen that
+// the ccyOf(acc) !== cur guards below do not already cover. A per-currency
+// product price is the real fix and needs DDL.
+const CATALOGUE_CCY = 'GBP';
+const catPrice = (p) => fmtMoney(p?.default_price, CATALOGUE_CCY);
+const catUnitPrice = (p, docCcy) => ((docCcy || 'GBP') === CATALOGUE_CCY ? Number(p?.default_price) || 0 : 0);
 const STATUS_STYLES = {
   draft: 'bg-slate-100 text-slate-600 border border-slate-200',
   sent: 'bg-blue-100 text-blue-700 border border-blue-200',
@@ -124,7 +134,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const addCustom = () => setItems([...items, { product_id: null, name: '', description: '', category: 'hardware', billing_type: 'one_off', qty: 1, unit_price: 0, discount: 0, tax_rate: defaultTaxRateFor(cur) }]);
   const addProduct = (p) => setItems([...items, {
     product_id: p.id, name: p.name, description: p.description || '', category: p.category,
-    billing_type: p.billing_type, qty: 1, unit_price: p.default_price, discount: 0, tax_rate: defaultTaxRateFor(cur),
+    billing_type: p.billing_type, qty: 1, unit_price: catUnitPrice(p, cur), discount: 0, tax_rate: defaultTaxRateFor(cur),
   }]);
 
   const totals = useMemo(() => {
@@ -333,10 +343,10 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
             ]} />
         )}
         {sheet === 'add' && (
-          <MobileSheet title="Add item" sub="Search the catalogue, or add a custom line" onClose={() => setSheet(null)} tall>
+          <MobileSheet title="Add item" sub={cur !== CATALOGUE_CCY ? `Catalogue prices are GBP list. Enter the ${currencySymbol(cur)} price on the item.` : 'Search the catalogue, or add a custom line'} onClose={() => setSheet(null)} tall>
             <input autoFocus value={itemQ} onChange={e => setItemQ(e.target.value)} placeholder="Search products…" className="w-full px-[15px] py-[13px] rounded-[12px] border bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
             {products.filter(p => !itemQ.trim() || `${p.name} ${CAT_LABEL[p.category]}`.toLowerCase().includes(itemQ.trim().toLowerCase())).slice(0, 40).map(p => (
-              <SheetRow key={p.id} sub={`${CAT_LABEL[p.category]} · ${p.billing_type === 'monthly' ? 'monthly' : 'one-off'}`} trailing={<span className="font-mono text-[13px] text-paper">{money(p.default_price)}</span>} onClick={() => { addProduct(p); setSheet({ item: items.length }); }}>{p.name}</SheetRow>
+              <SheetRow key={p.id} sub={`${CAT_LABEL[p.category]} · ${p.billing_type === 'monthly' ? 'monthly' : 'one-off'}`} trailing={<span className="font-mono text-[13px] text-paper">{catPrice(p)}{cur !== CATALOGUE_CCY ? ' list' : ''}</span>} onClick={() => { addProduct(p); setSheet({ item: items.length }); }}>{p.name}</SheetRow>
             ))}
             <SheetRow onClick={() => { addCustom(); setSheet({ item: items.length }); }} sub="Name, price and tax by hand">+ Custom item</SheetRow>
           </MobileSheet>
@@ -430,13 +440,16 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                   <div className="ml-auto flex items-center gap-2">
                     <select className={cell + ' text-xs'} value="" onChange={e => { const p = products.find(x => x.id === e.target.value); if (p) addProduct(p); e.target.value = ''; }}>
                       <option value="">+ Add product…</option>
-                      {products.map(p => <option key={p.id} value={p.id}>{CAT_LABEL[p.category]}: {p.name} ({money(p.default_price)})</option>)}
+                      {products.map(p => <option key={p.id} value={p.id}>{CAT_LABEL[p.category]}: {p.name} ({catPrice(p)}{cur !== CATALOGUE_CCY ? ' list' : ''})</option>)}
                     </select>
                     <button onClick={addCustom} className="text-xs text-ember hover:text-ember-deep font-medium">+ Custom</button>
                   </div>
                 )}
               </div>
               <div className="p-3 space-y-2">
+                {canWrite && cur !== CATALOGUE_CCY && (
+                  <div className="text-[11px] text-dim italic">Catalogue prices are GBP list. Enter the {currencySymbol(cur)} price on each line.</div>
+                )}
                 {items.length === 0 && <div className="text-xs text-dim italic py-4 text-center">No line items yet. Add products from your catalogue.</div>}
                 {items.map((it, idx) => (
                   <div key={idx} className="glass-inner rounded-xl p-3 space-y-2">

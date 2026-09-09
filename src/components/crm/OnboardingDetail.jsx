@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+// Deals carry their own currency (GBP or USD, set from the quote): never a bare £.
+import { fmtMoney0 } from '../../lib/money';
 import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
@@ -351,7 +353,7 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
                     className="p-3 glass-inner rounded-xl cursor-pointer">
                     <div className="text-sm font-medium text-paper">{deal.name}</div>
                     <div className="flex items-center gap-2 mt-1">
-                      {deal.value && <span className="text-xs text-ember font-mono">{'\u{00A3}'}{Number(deal.value).toLocaleString()}</span>}
+                      {deal.value && <span className="text-xs text-ember font-mono">{fmtMoney0(deal.value, deal.currency)}</span>}
                       <span className="text-xs text-muted">{deal.stage?.replace(/_/g, ' ')}</span>
                     </div>
                   </div>

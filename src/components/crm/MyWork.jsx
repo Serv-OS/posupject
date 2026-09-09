@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import SlaBadge from './SlaBadge.jsx';
 import { LEAD_STAGE_MAP } from '../../lib/leadStages';
+import { fmtMoney0 } from '../../lib/money';
 
 const DEAL_OPEN = (s) => !['closed_won', 'closed_lost'].includes(s);
 const TICKET_OPEN = (s) => !['resolved', 'closed'].includes(s);
@@ -45,7 +46,6 @@ export default function MyWork({ profile, onNavigate }) {
 
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
   const isOverdue = (d) => d && new Date(d) < new Date(new Date().toDateString());
-  const money = (v) => v ? `£${Number(v).toLocaleString('en-GB')}` : '';
 
   return (
     <div className="h-full flex flex-col">
@@ -87,13 +87,14 @@ export default function MyWork({ profile, onNavigate }) {
               ))}
             </Section>
 
-            {/* Deals */}
+            {/* Deals: owner-scoped, not region-scoped, so a rep can hold GBP and USD deals
+                side by side. Format each row with its own currency, never a fixed £. */}
             <Section title="My open deals" count={deals.length} onAll={() => onNavigate('deal_list')}>
               {deals.length === 0 ? <Empty>No open deals</Empty> : deals.slice(0, 8).map(d => (
                 <Row key={d.id} onClick={() => onNavigate('deal', d.id)}>
                   <span className="text-sm text-paper truncate flex-1">{d.name}</span>
                   <span className="text-[10px] text-muted shrink-0">{(d.stage || '').replace(/_/g, ' ')}</span>
-                  {d.value > 0 && <span className="text-[10px] text-emerald-600 font-mono shrink-0">{money(d.value)}</span>}
+                  {d.value > 0 && <span className="text-[10px] text-emerald-600 font-mono shrink-0">{fmtMoney0(d.value, d.currency)}</span>}
                 </Row>
               ))}
             </Section>

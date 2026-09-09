@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { CreditCard } from 'lucide-react';
-import { CHANNELS, catsForChannel, rowCalc, accountSavings, marginPct, gbp0, pct2 } from './PaymentsPanel.jsx';
+import { CHANNELS, catsForChannel, rowCalc, accountSavings, marginPct, ccyOf, moneyFor, pct2 } from './PaymentsPanel.jsx';
 
 // Shows the card-processing rates assigned to a company or a specific location.
 // Renders nothing if there's no processing account, to avoid clutter.
@@ -41,6 +41,9 @@ export default function ProcessingRatesCard({ companyId, locationId, onNavigate 
       <div className="divide-y divide-bdr">
         {accounts.map(a => {
           const s = accountSavings(a.rates);
+          // Savings are money in the card's own currency (region_code), not the company's country.
+          // A US card must never render a pound sign; each card formats itself, nothing is summed across cards.
+          const { m0 } = moneyFor(ccyOf(a));
           const rateFor = (key) => a.rates.find(x => x.category === key) || {};
           return (
             <div key={a.id} className="p-4">
@@ -53,7 +56,7 @@ export default function ProcessingRatesCard({ companyId, locationId, onNavigate 
               </div>
 
               {s.vol > 0 && (
-                <div className="mb-2 text-xs text-emerald-600 font-semibold">Saves {gbp0(s.saving)}/mo ({gbp0(s.savingYr)}/yr) · {pct2(s.currentEff)} → {pct2(s.ourEff)}</div>
+                <div className="mb-2 text-xs text-emerald-600 font-semibold">Saves {m0(s.saving)}/mo ({m0(s.savingYr)}/yr) · {pct2(s.currentEff)} → {pct2(s.ourEff)}</div>
               )}
 
               {CHANNELS.map(ch => {

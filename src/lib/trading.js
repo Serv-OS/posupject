@@ -90,7 +90,13 @@ export const DEFAULT_STAGE_WEIGHTS = {
   closed_won: 1, closed_lost: 0,
 };
 
-/** Pipeline view of a set of deals: best case, likely case, and already won. */
+/**
+ * Pipeline view of a set of deals: best case, likely case, and already won.
+ *
+ * The money is added blind, so the list must be ONE currency. deal_trading
+ * holds GBP and USD rows side by side; split them with pipelineTotalsByCurrency
+ * rather than passing the whole view in here.
+ */
 export function pipelineTotals(deals, weights = DEFAULT_STAGE_WEIGHTS) {
   const out = {
     openCount: 0, wonCount: 0,
@@ -110,5 +116,22 @@ export function pipelineTotals(deals, weights = DEFAULT_STAGE_WEIGHTS) {
       out.weightedRevenue += rev * (p === null ? 0 : p);
     }
   }
+  return out;
+}
+
+/**
+ * pipelineTotals once per currency: { GBP: {…}, USD: {…} }, only the
+ * currencies actually present. Pounds and dollars are never added into one
+ * figure; the caller renders each entry with its own symbol. The counts inside
+ * may be added across entries, the money may not.
+ */
+export function pipelineTotalsByCurrency(deals, weights = DEFAULT_STAGE_WEIGHTS, currencyOf = (d) => d?.currency) {
+  const groups = {};
+  for (const d of deals || []) {
+    const c = currencyOf(d) || 'GBP';        // deals.currency is NOT NULL DEFAULT 'GBP'
+    (groups[c] = groups[c] || []).push(d);
+  }
+  const out = {};
+  for (const c of Object.keys(groups)) out[c] = pipelineTotals(groups[c], weights);
   return out;
 }
