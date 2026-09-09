@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import { AccountModal, accountSavings, ccyOf, moneyFor, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
+import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
 import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
 import { Card, Mono, MobileSheet, SheetRow, EditSheet, PrimaryBtn, GhostBtn } from './ui.jsx';
@@ -31,16 +32,9 @@ const cardSnapshot = (acc) => {
 };
 
 const CAT_LABEL = { hardware: 'Hardware', services: 'Services', saas: 'SaaS', payments: 'Payments' };
-// The catalogue has ONE price column and no currency: products.default_price
-// is pounds (ProductsPanel labels it "Selling price (£ GBP)"). Print it with its
-// OWN symbol, never the QUOTE's, and never copy it onto a quote of another
-// currency. We hold no exchange rate, so a blank price the rep must type is
-// the only honest line, and it is the one price source on this screen that
-// the ccyOf(acc) !== cur guards below do not already cover. A per-currency
-// product price is the real fix and needs DDL.
-const CATALOGUE_CCY = 'GBP';
-const catPrice = (p) => fmtMoney(p?.default_price, CATALOGUE_CCY);
-const catUnitPrice = (p, docCcy) => ((docCcy || 'GBP') === CATALOGUE_CCY ? Number(p?.default_price) || 0 : 0);
+// A product carries a pound price and a dollar price, different prices, not
+// conversions. A line takes the price in the QUOTE's currency; a product not
+// priced in it lands at 0 to be typed, and the screen says which ones.
 const STATUS_STYLES = {
   draft: 'bg-slate-100 text-slate-600 border border-slate-200',
   sent: 'bg-blue-100 text-blue-700 border border-blue-200',
@@ -74,6 +68,21 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
 
   // Quote currency drives every figure, label and tax default on this screen.
   const cur = quote?.currency || 'GBP';
+  const unpriced = products.filter(p => !isPricedIn(p, cur));
+  // Changing the quote's currency re-prices every catalogue line in the new
+  // money and moves lines still on the old default tax rate to the new one.
+  // A price is never carried across: £149 is not $149. Custom lines have no
+  // catalogue price to take, so they keep what was typed.
+  const changeCurrency = (next) => {
+    if (!next || next === cur || curLocked) return;
+    const oldDef = defaultTaxRateFor(cur), newDef = defaultTaxRateFor(next);
+    setItems(p => p.map(it => {
+      const prod = it.product_id ? products.find(x => x.id === it.product_id) : null;
+      const l = Number(it.tax_rate ?? oldDef) === oldDef ? { ...it, tax_rate: newDef } : { ...it };
+      return prod ? { ...l, unit_price: unitPriceFor(prod, next) } : l;
+    }));
+    setQ('currency', next);
+  };
   const money = (v) => fmtMoney(v, cur);
   // Draft only: a sent quote may already have a Stripe checkout out in the
   // wild, and flipping its currency behind that session is how a $ payment
@@ -134,7 +143,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const addCustom = () => setItems([...items, { product_id: null, name: '', description: '', category: 'hardware', billing_type: 'one_off', qty: 1, unit_price: 0, discount: 0, tax_rate: defaultTaxRateFor(cur) }]);
   const addProduct = (p) => setItems([...items, {
     product_id: p.id, name: p.name, description: p.description || '', category: p.category,
-    billing_type: p.billing_type, qty: 1, unit_price: catUnitPrice(p, cur), discount: 0, tax_rate: defaultTaxRateFor(cur),
+    billing_type: p.billing_type, qty: 1, unit_price: unitPriceFor(p, cur), discount: 0, tax_rate: defaultTaxRateFor(cur),
   }]);
 
   const totals = useMemo(() => {
@@ -328,7 +337,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
         </div>
 
         {sheet === 'settings' && (
-          <EditSheet title="Quote settings" values={quote} onChange={(k, v) => setQ(k, v)} onCancel={() => setSheet(null)} onSave={() => setSheet(null)} openSections={2}
+          <EditSheet title="Quote settings" values={quote} onChange={(k, v) => (k === 'currency' ? changeCurrency(v) : setQ(k, v))} onCancel={() => setSheet(null)} onSave={() => setSheet(null)} openSections={2}
             sections={[
               { title: 'Status & currency', fields: [
                 { key: 'status', label: 'Status', type: 'select', options: ['draft', 'sent', 'viewed', 'signed', 'paid', 'won', 'declined', 'expired', 'void'].map(x => [x, x]) },
@@ -343,10 +352,10 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
             ]} />
         )}
         {sheet === 'add' && (
-          <MobileSheet title="Add item" sub={cur !== CATALOGUE_CCY ? `Catalogue prices are GBP list. Enter the ${currencySymbol(cur)} price on the item.` : 'Search the catalogue, or add a custom line'} onClose={() => setSheet(null)} tall>
+          <MobileSheet title="Add item" sub={unpriced.length ? `${unpriced.length} product${unpriced.length === 1 ? ' has' : 's have'} no ${currencySymbol(cur)} price yet and will land at 0 to type. Set it under Products.` : 'Search the catalogue, or add a custom line'} onClose={() => setSheet(null)} tall>
             <input autoFocus value={itemQ} onChange={e => setItemQ(e.target.value)} placeholder="Search products…" className="w-full px-[15px] py-[13px] rounded-[12px] border bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
             {products.filter(p => !itemQ.trim() || `${p.name} ${CAT_LABEL[p.category]}`.toLowerCase().includes(itemQ.trim().toLowerCase())).slice(0, 40).map(p => (
-              <SheetRow key={p.id} sub={`${CAT_LABEL[p.category]} · ${p.billing_type === 'monthly' ? 'monthly' : 'one-off'}`} trailing={<span className="font-mono text-[13px] text-paper">{catPrice(p)}{cur !== CATALOGUE_CCY ? ' list' : ''}</span>} onClick={() => { addProduct(p); setSheet({ item: items.length }); }}>{p.name}</SheetRow>
+              <SheetRow key={p.id} sub={`${CAT_LABEL[p.category]} · ${p.billing_type === 'monthly' ? 'monthly' : 'one-off'}`} trailing={<span className="font-mono text-[13px] text-paper">{listPrice(p, cur)}</span>} onClick={() => { addProduct(p); setSheet({ item: items.length }); }}>{p.name}</SheetRow>
             ))}
             <SheetRow onClick={() => { addCustom(); setSheet({ item: items.length }); }} sub="Name, price and tax by hand">+ Custom item</SheetRow>
           </MobileSheet>
@@ -440,15 +449,15 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                   <div className="ml-auto flex items-center gap-2">
                     <select className={cell + ' text-xs'} value="" onChange={e => { const p = products.find(x => x.id === e.target.value); if (p) addProduct(p); e.target.value = ''; }}>
                       <option value="">+ Add product…</option>
-                      {products.map(p => <option key={p.id} value={p.id}>{CAT_LABEL[p.category]}: {p.name} ({catPrice(p)}{cur !== CATALOGUE_CCY ? ' list' : ''})</option>)}
+                      {products.map(p => <option key={p.id} value={p.id}>{CAT_LABEL[p.category]}: {p.name} ({listPrice(p, cur)})</option>)}
                     </select>
                     <button onClick={addCustom} className="text-xs text-ember hover:text-ember-deep font-medium">+ Custom</button>
                   </div>
                 )}
               </div>
               <div className="p-3 space-y-2">
-                {canWrite && cur !== CATALOGUE_CCY && (
-                  <div className="text-[11px] text-dim italic">Catalogue prices are GBP list. Enter the {currencySymbol(cur)} price on each line.</div>
+                {canWrite && unpriced.length > 0 && (
+                  <div className="text-[11px] text-dim italic">{unpriced.length} product{unpriced.length === 1 ? ' has' : 's have'} no {currencySymbol(cur)} price yet: {unpriced.map(p => p.name).join(', ')}. They land at 0 to type. Set the {currencySymbol(cur)} price under Products.</div>
                 )}
                 {items.length === 0 && <div className="text-xs text-dim italic py-4 text-center">No line items yet. Add products from your catalogue.</div>}
                 {items.map((it, idx) => (
@@ -506,15 +515,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={label}>Status</label><select className={input} value={quote.status} onChange={e => setQ('status', e.target.value)}>
                   {['draft','sent','viewed','signed','paid','won','declined','expired','void'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>
-                <div><label className={label}>Currency</label><select className={input} value={cur} onChange={e => {
-                  const next = e.target.value;
-                  if (next !== cur) {
-                    const oldDef = defaultTaxRateFor(cur), newDef = defaultTaxRateFor(next);
-                    // Lines still on the old DEFAULT rate follow the new default.
-                    setItems(p => p.map(it => Number(it.tax_rate ?? oldDef) === oldDef ? { ...it, tax_rate: newDef } : it));
-                    setQ('currency', next);
-                  }
-                }} disabled={curLocked}>
+                <div><label className={label}>Currency</label><select className={input} value={cur} onChange={e => changeCurrency(e.target.value)} disabled={curLocked}>
                   <option value="GBP">GBP £</option><option value="USD">USD $</option></select></div>
                 <div className="col-span-2"><label className={label}>Location (install site)</label>
                   <select className={input} value={quote.location_id || ''} onChange={e => setQ('location_id', e.target.value || null)}>

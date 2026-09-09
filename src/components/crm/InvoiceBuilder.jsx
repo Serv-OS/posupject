@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ArrowLeft, Send, Link2, Trash2, Plus, Check, Ban, Repeat, FileDown } from 'lucide-react';
-import { money, invStatus, INV_BADGE, CATALOGUE_CCY, catalogueListPrice, catalogueUnitPrice } from './InvoicesPanel.jsx';
+import { money, invStatus, INV_BADGE } from './InvoicesPanel.jsx';
+import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
 import { taxLabelFor, defaultTaxRateFor, currencySymbol, currencyLocale } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { downloadInvoicePdf } from '../../lib/invoicePdf';
@@ -32,7 +33,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       supabase.from('locations').select('id, name, company_id, address, city, postcode, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
       supabase.from('support_settings').select('invoice_terms, business_name, business_address, business_email, business_phone, logo_url, quote_accent').eq('id', 1).maybeSingle(),
-      supabase.from('products').select('id, name, description, default_price, category').eq('active', true).order('name'),
+      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, category').eq('active', true).order('name'),
       supabase.from('inv_serials').select('product_id').eq('status', 'in_stock'),
     ]);
     setInv(i.data);
@@ -61,9 +62,20 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
   const changeCurrency = (next) => {
     if (next === cur) return;
     const oldDef = defaultTaxRateFor(cur), newDef = defaultTaxRateFor(next);
-    setLines(p => p.map(l => Number(l.tax_rate ?? oldDef) === oldDef ? { ...l, tax_rate: newDef } : l));
+    // A price is never carried across currencies: a catalogue line takes the
+    // product's price in the new currency (0 if it has none there), and a
+    // typed line resets to 0, because its number was in the old money and no
+    // exchange rate exists. This also fires when the Company or Location
+    // picker flips the currency, which is why it says so on screen.
+    setLines(p => p.map(l => ({
+      ...l,
+      tax_rate: Number(l.tax_rate ?? oldDef) === oldDef ? newDef : l.tax_rate,
+      unit_price: l.product_id ? unitPriceFor(products.find(x => x.id === l.product_id), next) : 0,
+    })));
+    setFlipNote(`Currency changed to ${currencySymbol(next)}. Catalogue lines took their ${currencySymbol(next)} price; typed lines reset to 0.`);
     set('currency', next);
   };
+  const [flipNote, setFlipNote] = useState('');
   const set = (k, v) => setInv(p => ({ ...p, [k]: v }));
   const setLine = (i, k, v) => setLines(p => p.map((l, j) => j === i ? { ...l, [k]: v } : l));
   const locs = locations.filter(l => !inv.company_id || l.company_id === inv.company_id);
@@ -260,13 +272,13 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
                         const p = products.find(x => x.id === e.target.value);
                         if (p) setLines(prev => {
                           const blank = prev.length === 1 && !(prev[0].name || '').trim();
-                          const line = { _new: true, name: p.name, description: p.description || '', qty: 1, unit_price: catalogueUnitPrice(p, cur), tax_rate: defaultTaxRateFor(cur) };
+                          const line = { _new: true, product_id: p.id, name: p.name, description: p.description || '', qty: 1, unit_price: unitPriceFor(p, cur), tax_rate: defaultTaxRateFor(cur) };
                           return blank ? [line] : [...prev, line];
                         });
                       }}>
                       <option value="">+ Add from products…</option>
                       {products.map(p => <option key={p.id} value={p.id}>
-                        {p.name} — {catalogueListPrice(p)}{cur !== CATALOGUE_CCY ? ' list' : ''}{stockCounts[p.id] != null ? ` (${stockCounts[p.id]} in stock)` : ''}
+                        {p.name} — {listPrice(p, cur)}{stockCounts[p.id] != null ? ` (${stockCounts[p.id]} in stock)` : ''}
                       </option>)}
                     </select>
                   ) : (
@@ -277,8 +289,9 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
                 </div>
               )}
             </div>
-            {!locked && products.length > 0 && cur !== CATALOGUE_CCY && (
-              <div className="text-[11px] text-dim italic">Catalogue prices are GBP list. Enter the {currencySymbol(cur)} price on each line.</div>
+            {flipNote && <div className="text-[11px] text-amber-700">{flipNote}</div>}
+            {!locked && products.some(p => !isPricedIn(p, cur)) && (
+              <div className="text-[11px] text-dim italic">Some products have no {currencySymbol(cur)} price yet and land at 0 to type. Set it under Products.</div>
             )}
             {lines.length === 0 && <div className="text-xs text-dim italic py-4 text-center">No line items yet. Add from products or start a blank line.</div>}
             {lines.map((l, i) => (

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { costFor } from '../../lib/catalogue';
 import { ShoppingCart, Plus, X, Truck, Trash2 } from 'lucide-react';
 import { parseSerials, receiveShipment, fmtCost, supplierCurrency, shipmentCurrency, shippedByProduct } from '../../lib/inventoryOps';
 import { CURRENCIES, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
@@ -31,7 +32,7 @@ export default function PurchasingView({ profile, initialTab = 'orders' }) {
       supabase.from('inv_orders').select('*, lines:inv_order_lines(*)').order('created_at', { ascending: false }),
       supabase.from('inv_shipments').select('*, lines:inv_shipment_lines(*), warehouse:inv_warehouses(name)').order('created_at', { ascending: false }),
       supabase.from('inv_suppliers').select('*').order('name'),
-      supabase.from('products').select('id, name, inv_category, default_price, cost_price, cost_tax_rate').eq('active', true).order('name'),
+      supabase.from('products').select('id, name, inv_category, default_price, cost_price, cost_price_usd, cost_tax_rate').eq('active', true).order('name'),
       supabase.from('inv_warehouses').select('*'),
     ]);
     setOrders(o.data || []); setShipments(sh.data || []); setSuppliers(su.data || []);
@@ -184,18 +185,22 @@ function POModal({ products, suppliers, profile, onClose, onSaved }) {
   const set = (i, k, v) => setRows(p => p.map((r, x) => x === i ? { ...r, [k]: v } : r));
   // A product's cost_tax_rate is its UK purchase VAT rate, so it only seeds a GBP
   // line; a USD line starts at the US default (0) for the buyer to set.
-  const pick = (i, id) => { const p = products.find(x => x.id === id); setRows(prev => prev.map((r, x) => x === i ? { ...r, product_id: id, product_name: p?.name || '', category: p?.inv_category || '', unit_cost: r.unit_cost || (ccy === CATALOGUE_CCY ? p?.cost_price : '') || '', tax_rate: (r.tax_rate !== '' && r.tax_rate != null) ? r.tax_rate : (ccy === CATALOGUE_CCY ? (p?.cost_tax_rate ?? 20) : defaultTaxRateFor(ccy)) } : r)); };
+  const pick = (i, id) => { const p = products.find(x => x.id === id); setRows(prev => prev.map((r, x) => x === i ? { ...r, product_id: id, product_name: p?.name || '', category: p?.inv_category || '', unit_cost: r.unit_cost || (costFor(p, ccy) ?? '') || '', tax_rate: (r.tax_rate !== '' && r.tax_rate != null) ? r.tax_rate : (ccy === CATALOGUE_CCY ? (p?.cost_tax_rate ?? 20) : defaultTaxRateFor(ccy)) } : r)); };
   // Products can be picked before the supplier is typed. If the currency then
   // leaves GBP, drop any catalogue prefill still in place so a GBP list price
   // (or its VAT rate) never sits under a $ label. Typed values are kept.
   useEffect(() => {
-    if (ccy === CATALOGUE_CCY) return;
+    // The product now carries a cost in each currency, so a prefill swaps to
+    // the new currency's cost (or clears, if there is none) instead of only
+    // ever being dropped. The tax rate is UK purchase VAT and stays GBP-only.
+    const other = ccy === 'USD' ? 'GBP' : 'USD';
     setRows(prev => prev.map(r => {
       const p = products.find(x => x.id === r.product_id);
       if (!p) return r;
-      const costIsPrefill = p.cost_price != null && String(r.unit_cost) === String(p.cost_price);
-      const rateIsPrefill = String(r.tax_rate) === String(p.cost_tax_rate ?? 20);
-      return { ...r, unit_cost: costIsPrefill ? '' : r.unit_cost, tax_rate: rateIsPrefill ? defaultTaxRateFor(ccy) : r.tax_rate };
+      const prevCost = costFor(p, other);
+      const costIsPrefill = prevCost != null && String(r.unit_cost) === String(prevCost);
+      const rateIsPrefill = ccy !== CATALOGUE_CCY && String(r.tax_rate) === String(p.cost_tax_rate ?? 20);
+      return { ...r, unit_cost: costIsPrefill ? (costFor(p, ccy) ?? '') : r.unit_cost, tax_rate: rateIsPrefill ? defaultTaxRateFor(ccy) : r.tax_rate };
     }));
   }, [ccy, products]);
 
@@ -254,7 +259,7 @@ function POModal({ products, suppliers, profile, onClose, onSaved }) {
           <div><label className={label}>Expected by</label><input type="date" className={input} value={expectedBy} onChange={e => setExpectedBy(e.target.value)} /></div>
           <div><label className={label}>Tax ref</label><input className={input} value={taxRef} onChange={e => setTaxRef(e.target.value)} placeholder={`${taxLabel} invoice #`} /></div>
         </div>
-        {ccy !== CATALOGUE_CCY && <div className="text-[11px] text-dim">This supplier buys in {ccy}: enter costs in {sym}. Catalogue cost prices are GBP list and are not prefilled.</div>}
+        {ccy !== CATALOGUE_CCY && <div className="text-[11px] text-dim">This supplier buys in {ccy}: enter costs in {sym}. A product's {sym} cost is prefilled where it has one.</div>}
         {rows.map((r, i) => (
           <div key={i} className="grid grid-cols-[1fr_64px_84px_64px_32px] gap-2 items-end">
             <div><label className={label}>Product</label>

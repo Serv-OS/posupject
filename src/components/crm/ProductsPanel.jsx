@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { INV_CATEGORIES } from '../../lib/inventoryOps';
 import { supabase } from '../../lib/supabase';
+import { marginFor } from '../../lib/catalogue';
 import { fmtMoney, fmtMoney0, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 
 const CATEGORIES = [
@@ -21,7 +22,7 @@ const CATALOGUE_CCY = 'GBP';
 const SYM = currencySymbol(CATALOGUE_CCY);
 const TAX = taxLabelFor(CATALOGUE_CCY);
 
-const blank = { name: '', description: '', sku: '', category: 'hardware', billing_type: 'one_off', default_price: '', cost_price: '', cost_tax_rate: defaultTaxRateFor(CATALOGUE_CCY), unit: '', active: true, track_inventory: false, inv_category: '', default_threshold: '', supplier_id: '' };
+const blank = { name: '', description: '', sku: '', category: 'hardware', billing_type: 'one_off', default_price: '', cost_price: '', default_price_usd: '', cost_price_usd: '', cost_tax_rate: defaultTaxRateFor(CATALOGUE_CCY), unit: '', active: true, track_inventory: false, inv_category: '', default_threshold: '', supplier_id: '' };
 
 export default function ProductsPanel({ profile }) {
   const [products, setProducts] = useState([]);
@@ -53,14 +54,20 @@ export default function ProductsPanel({ profile }) {
   };
 
   const startNew = () => { setDraft(blank); setEditing('new'); };
-  const startEdit = (p) => { setDraft({ ...p, default_price: p.default_price ?? '', cost_price: p.cost_price ?? '', cost_tax_rate: p.cost_tax_rate ?? defaultTaxRateFor(CATALOGUE_CCY) }); setEditing(p.id); };
+  const startEdit = (p) => { setDraft({ ...p, default_price: p.default_price ?? '', cost_price: p.cost_price ?? '', default_price_usd: p.default_price_usd ?? '', cost_price_usd: p.cost_price_usd ?? '', cost_tax_rate: p.cost_tax_rate ?? defaultTaxRateFor(CATALOGUE_CCY) }); setEditing(p.id); };
 
   const save = async () => {
     if (!draft.name.trim()) { alert('Name is required.'); return; }
     const payload = {
       name: draft.name.trim(), description: draft.description?.trim() || null, sku: draft.sku?.trim() || null,
       category: draft.category, billing_type: draft.billing_type,
-      default_price: parseFloat(draft.default_price) || 0, cost_price: draft.cost_price === '' ? null : parseFloat(draft.cost_price),
+      // Empty is "not priced for the UK yet", not £0: a US-only product must not look priced at nothing on a pound quote.
+      default_price: draft.default_price === '' || draft.default_price == null ? null : parseFloat(draft.default_price),
+      cost_price: draft.cost_price === '' ? null : parseFloat(draft.cost_price),
+      // Dollar prices are their own prices, never derived from the pound ones.
+      // Empty means "not priced for the US yet", and a US document says so.
+      default_price_usd: draft.default_price_usd === '' || draft.default_price_usd == null ? null : parseFloat(draft.default_price_usd),
+      cost_price_usd: draft.cost_price_usd === '' || draft.cost_price_usd == null ? null : parseFloat(draft.cost_price_usd),
       cost_tax_rate: draft.cost_tax_rate === '' || draft.cost_tax_rate == null ? null : parseFloat(draft.cost_tax_rate),
       unit: draft.unit?.trim() || null, active: draft.active,
       track_inventory: !!draft.track_inventory, inv_category: draft.inv_category || null,
@@ -77,7 +84,8 @@ export default function ProductsPanel({ profile }) {
 
   // Whole pounds print whole (£299) and anything else at 2dp (£12.50); the old
   // hand-rolled formatter printed £12.5.
-  const money = (v) => (Number.isInteger(Number(v || 0)) ? fmtMoney0(v, CATALOGUE_CCY) : fmtMoney(v, CATALOGUE_CCY));
+  const moneyIn = (v, ccy) => (Number.isInteger(Number(v || 0)) ? fmtMoney0(v, ccy) : fmtMoney(v, ccy));
+  const money = (v) => moneyIn(v, CATALOGUE_CCY);
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
@@ -86,7 +94,7 @@ export default function ProductsPanel({ profile }) {
       <div className="px-6 py-4 border-b border-bdr flex items-center justify-between">
         <div>
           <div className="text-lg font-bold text-paper">Products</div>
-          <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">{products.length} items in your catalogue · {CATALOGUE_CCY} list prices</div>
+          <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">{products.length} items in your catalogue · £ and $ list prices</div>
         </div>
         {canWrite && editing === null && (
           <button onClick={startNew} className="px-3 py-1.5 bg-ember text-white text-sm font-semibold rounded-xl hover:bg-ember-deep transition">+ New product</button>
@@ -104,13 +112,21 @@ export default function ProductsPanel({ profile }) {
                   {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</select></div>
                 <div><label className={label}>Billing</label><select className={input} value={draft.billing_type} onChange={e => setDraft({ ...draft, billing_type: e.target.value })}>
                   {Object.entries(BILLING).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
-                <div><label className={label}>Selling price ({SYM} {CATALOGUE_CCY})</label><input type="number" className={input} value={draft.default_price} onChange={e => setDraft({ ...draft, default_price: e.target.value })} placeholder="0.00" /></div>
+                <div><label className={label}>Selling price ({SYM} {CATALOGUE_CCY})</label><input type="number" className={input} value={draft.default_price ?? ''} onChange={e => setDraft({ ...draft, default_price: e.target.value })} placeholder="not priced for the UK yet" /></div>
                 <div><label className={label}>Cost price ({SYM} {CATALOGUE_CCY})</label><input type="number" className={input} value={draft.cost_price} onChange={e => setDraft({ ...draft, cost_price: e.target.value })} placeholder="0.00" />
                   {draft.default_price !== '' && draft.cost_price !== '' && Number(draft.default_price) > 0 && (
                     <div className="text-[11px] text-emerald-600 font-semibold mt-1">
                       Margin: {fmtMoney(Number(draft.default_price) - Number(draft.cost_price), CATALOGUE_CCY)} ({Math.round(((Number(draft.default_price) - Number(draft.cost_price)) / Number(draft.default_price)) * 100)}%)
                     </div>
                   )}</div>
+                {/* A US price is a different price, not a conversion: items sell for
+                    more there. Both fields optional; empty means the product is not
+                    priced for the US yet and a dollar quote will say so. */}
+                <div><label className={label}>Selling price ($ USD)</label><input type="number" className={input} value={draft.default_price_usd ?? ''} onChange={e => setDraft({ ...draft, default_price_usd: e.target.value })} placeholder="not priced for the US yet" /></div>
+                <div><label className={label}>Cost price ($ USD)</label><input type="number" className={input} value={draft.cost_price_usd ?? ''} onChange={e => setDraft({ ...draft, cost_price_usd: e.target.value })} placeholder="0.00" />
+                  {(() => { const m = marginFor(draft, 'USD'); return m && (
+                    <div className="text-[11px] text-emerald-600 font-semibold mt-1">Margin: {fmtMoney(m.amount, 'USD')} ({m.pct}%)</div>
+                  ); })()}</div>
                 <div><label className={label}>Purchase {TAX} %</label><input type="number" className={input} value={draft.cost_tax_rate ?? ''} onChange={e => setDraft({ ...draft, cost_tax_rate: e.target.value })} placeholder={String(defaultTaxRateFor(CATALOGUE_CCY))} />
                   {draft.cost_price !== '' && draft.cost_price != null && draft.cost_tax_rate !== '' && draft.cost_tax_rate != null && (
                     <div className="text-[11px] text-dim mt-1">Cost inc {TAX}: {fmtMoney(Number(draft.cost_price) * (1 + Number(draft.cost_tax_rate) / 100), CATALOGUE_CCY)}</div>
@@ -118,7 +134,7 @@ export default function ProductsPanel({ profile }) {
                 <div><label className={label}>Unit (optional)</label><input className={input} value={draft.unit || ''} onChange={e => setDraft({ ...draft, unit: e.target.value })} placeholder="per till, per location…" /></div>
                 <div><label className={label}>SKU (optional)</label><input className={input} value={draft.sku || ''} onChange={e => setDraft({ ...draft, sku: e.target.value })} /></div>
               </div>
-              <div className="text-[11px] text-dim italic">Catalogue prices are {CATALOGUE_CCY} list. A USD quote or invoice takes the $ price typed on its own line.</div>
+              <div className="text-[11px] text-dim italic">A pound quote takes the £ price, a dollar quote takes the $ price. Leave the $ price empty and a US line lands at 0 to be typed.</div>
               <div><label className={label}>Description</label><textarea className={input + ' resize-none'} rows={2} value={draft.description || ''} onChange={e => setDraft({ ...draft, description: e.target.value })} /></div>
               <label className="flex items-center gap-2 text-sm text-paper cursor-pointer"><input type="checkbox" checked={draft.active} onChange={e => setDraft({ ...draft, active: e.target.checked })} /> Active (available on quotes)</label>
 
@@ -173,10 +189,19 @@ export default function ProductsPanel({ profile }) {
                         {p.supplier_id && <div className="text-[10px] text-dim mt-0.5">Supplier: {suppliers.find(s => s.id === p.supplier_id)?.name || '—'}</div>}
                       </div>
                       <div className="text-right shrink-0">
-                        <div className="text-sm font-mono text-paper">{money(p.default_price)}</div>
+                        {p.default_price != null
+                          ? <div className="text-sm font-mono text-paper">{money(p.default_price)}</div>
+                          : <div className="text-[10px] text-amber-600">no £ price yet</div>}
                         {p.cost_price != null && (
                           <div className="text-[10px] text-dim">cost {money(p.cost_price)}{p.default_price > 0 ? ` · ${Math.round(((p.default_price - p.cost_price) / p.default_price) * 100)}% margin` : ''}</div>
                         )}
+                        {/* The dollar price sits under the pound one, or says it is missing. */}
+                        {p.default_price_usd != null
+                          ? <div className="text-sm font-mono text-paper">{moneyIn(p.default_price_usd, 'USD')}</div>
+                          : <div className="text-[10px] text-amber-600">no $ price yet</div>}
+                        {p.cost_price_usd != null && (() => { const m = marginFor(p, 'USD'); return (
+                          <div className="text-[10px] text-dim">cost {moneyIn(p.cost_price_usd, 'USD')}{m ? ` · ${m.pct}% margin` : ''}</div>
+                        ); })()}
                         <div className="text-[10px] text-dim">{BILLING[p.billing_type]}{p.unit ? ` · ${p.unit}` : ''}</div>
                         {p.track_inventory && (() => {
                           const c = stockCounts[p.name] || { in_stock: 0, in_transit: 0, deployed: 0 };
