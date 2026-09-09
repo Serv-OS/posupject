@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-react';
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
-import { loadCostTemplate, costFor, costExplain, regionForCountry } from '../../lib/cardCosts';
+import { loadCostTemplate, costFor, costExplain, regionForCountry, defaultMarkupFor } from '../../lib/cardCosts';
 import { STATEMENT_LINES, blankStatement, statementTotals, statementToRates } from '../../lib/statement';
 import { fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 
@@ -583,7 +583,7 @@ const cell = "w-full px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm te
  * of error gets caught by the person who actually knows the contract.
  */
 function CostBuildUp({ template, region, minor }) {
-  const mk = template?.markup || { rate_pct: 0.10, txn_minor: 5 };
+  const mk = template?.markup || defaultMarkupFor(region);
   const lines = [
     ['Visa / Mastercard debit', 'cp_vm_debit'],
     ['Visa / Mastercard credit', 'cp_vm_credit'],
@@ -766,8 +766,8 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
   const [vals, setVals] = useState(seed);
   // What our acquirer adds on every transaction, whatever the card.
   const [markup, setMarkup] = useState(() => ({
-    rate_pct: from?.markup?.rate_pct ?? 0.10,
-    txn_minor: from?.markup?.txn_minor ?? 5,
+    rate_pct: from?.markup?.rate_pct ?? defaultMarkupFor(region).rate_pct,
+    txn_minor: from?.markup?.txn_minor ?? defaultMarkupFor(region).txn_minor,
   }));
   const minor = region === 'US' ? 'c' : 'p';
   // Scheme fees only exist as their own line under IC++ pricing. Ours are inside

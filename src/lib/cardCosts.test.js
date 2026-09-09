@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { costFor, costExplain, regionForCountry, DEFAULT_MARKUP } from './cardCosts.js';
+import { costFor, costExplain, regionForCountry, DEFAULT_MARKUP, defaultMarkupFor } from './cardCosts.js';
 
 // UK consumer debit is capped at 0.20% with no fixed interchange.
 // Our acquirer adds 0.10% + 5p, so we buy it at 0.30% + 5p.
 const UK = {
-  markup: { rate_pct: 0.10, txn_minor: 5 },
+  markup: { rate_pct: 0.10, txn_minor: 3 },
   rows: {
     cp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, split_pct: 82 },
     cp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, split_pct: 15 },
@@ -16,7 +16,7 @@ describe('costFor', () => {
     const c = costFor(UK, 'cp_vm_debit');
     expect(c.ic).toBe(0.20);
     expect(c.buy).toBe(0.30);      // 0.20 + 0.10
-    expect(c.buyTxn).toBe(5);      // 0 + 5p
+    expect(c.buyTxn).toBe(3);      // 0 + 3p, and UK interchange adds nothing per txn
     expect(c.split).toBe(82);
   });
 
@@ -59,7 +59,7 @@ describe('costFor', () => {
     const c = costFor(UK, 'cp_vm_debit');
     expect(c.scheme).toBeNull();
     expect(c.buy).toBe(0.30);
-    expect(c.buyTxn).toBe(5);
+    expect(c.buyTxn).toBe(3);
   });
 
   it('still reports unknown INTERCHANGE as unknown even when scheme fees are set', () => {
@@ -92,7 +92,7 @@ describe('costFor', () => {
 
 describe('costExplain', () => {
   it('shows a rep exactly where the buy rate came from', () => {
-    expect(costExplain(UK, 'cp_vm_debit')).toBe('0.2% + 0p interchange, plus 0.1% + 5p acquirer');
+    expect(costExplain(UK, 'cp_vm_debit')).toBe('0.2% + 0p interchange, plus 0.1% + 3p acquirer');
   });
   it('names the scheme layer when the region is charged one separately', () => {
     const US = { markup: { rate_pct: 0.10, txn_minor: 5 },
@@ -102,6 +102,21 @@ describe('costExplain', () => {
   });
   it('says plainly when nothing is set', () => {
     expect(costExplain(UK, 'cnp_amex')).toBe('No interchange set for this card type');
+  });
+});
+
+// The acquirer's fixed fee is 5 CENTS, which is about 3 PENCE. Swapping the
+// unit instead of converting the money put 5p on every UK card, and UK
+// interchange has no per-transaction element, so that fee IS the whole fixed
+// cost — being two thirds out on it is being two thirds out on the row.
+describe('defaultMarkupFor', () => {
+  it('is 3p in the UK and 5c in the US, not the same number in both', () => {
+    expect(defaultMarkupFor('UK')).toEqual({ rate_pct: 0.10, txn_minor: 3 });
+    expect(defaultMarkupFor('US')).toEqual({ rate_pct: 0.10, txn_minor: 5 });
+    expect(defaultMarkupFor('UK').txn_minor).not.toBe(defaultMarkupFor('US').txn_minor);
+  });
+  it('falls back for a region we do not trade in yet', () => {
+    expect(defaultMarkupFor('ZZ')).toEqual(DEFAULT_MARKUP);
   });
 });
 

@@ -43,15 +43,23 @@ export const DEFAULT_TZ_REGION = 'UK';
 /** 'GB' → 'UK'. Anything we do not trade in falls back to UK. */
 export const regionForCountry = (country) => (String(country || '').toUpperCase() === 'US' ? 'US' : 'UK');
 
-/** What our acquirer adds on top of interchange, if the template does not say. */
+/* What our acquirer adds on top of interchange, if the template does not say.
+ *
+ * The fixed part is 5 CENTS, and that is about 3 PENCE, so the two regions do
+ * NOT carry the same number. Substituting the unit rather than converting the
+ * money put 5p on every UK card, which is two thirds too much on a transaction
+ * whose entire fixed cost is this fee, because UK interchange has no
+ * per-transaction element at all. */
 export const DEFAULT_MARKUP = { rate_pct: 0.10, txn_minor: 5 };
+export const MARKUP_BY_REGION = { UK: { rate_pct: 0.10, txn_minor: 3 }, US: { rate_pct: 0.10, txn_minor: 5 } };
+export const defaultMarkupFor = (regionCode) => MARKUP_BY_REGION[regionCode] || DEFAULT_MARKUP;
 
 /**
  * The costs in force for a region today.
  * @returns {{ rows: object, markup: object, source: 'template'|'none', effectiveFrom: string|null, id: string|null }}
  */
 export async function loadCostTemplate(client, regionCode = 'UK', today = new Date()) {
-  const none = { rows: {}, markup: DEFAULT_MARKUP, source: 'none', effectiveFrom: null, id: null };
+  const none = { rows: {}, markup: defaultMarkupFor(regionCode), source: 'none', effectiveFrom: null, id: null };
   try {
     const { data, error } = await client
       .from('processing_cost_templates')
@@ -63,7 +71,7 @@ export async function loadCostTemplate(client, regionCode = 'UK', today = new Da
     if (error) return none;
     const row = (data || [])[0];
     if (!row || !row.rows || !Object.keys(row.rows).length) return none;
-    return { rows: row.rows, markup: row.markup || DEFAULT_MARKUP, source: 'template', effectiveFrom: row.effective_from, id: row.id };
+    return { rows: row.rows, markup: row.markup || defaultMarkupFor(regionCode), source: 'template', effectiveFrom: row.effective_from, id: row.id };
   } catch {
     return none;
   }

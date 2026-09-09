@@ -76,14 +76,14 @@ const PROC_ACCOUNTS = [
 // £100k/mo at 1.20% against a 0.90% buy, plus 8,000 txns at 5p vs 3p.
 // margin = (1200 + 400) - (900 + 240) = £460/mo -> £5,520 a year.
 const PROC_RATES = [
-  { id: 'pr1', account_id: 'pa1', category: 'cp_vm_debit', monthly_volume: 100000, monthly_txns: 8000, current_rate_pct: 1.6, our_rate_pct: 1.2, buy_rate_pct: 0.3, our_txn_fee: 8, buy_txn_fee: 5, volume_split_pct: 82 },
+  { id: 'pr1', account_id: 'pa1', category: 'cp_vm_debit', monthly_volume: 100000, monthly_txns: 8000, current_rate_pct: 1.6, our_rate_pct: 1.2, buy_rate_pct: 0.3, our_txn_fee: 8, buy_txn_fee: 3, volume_split_pct: 82 },
   // A US card, so every screen has to prove it renders dollars not pounds.
   { id: 'pr2', account_id: 'pa2', category: 'cp_vm_debit', monthly_volume: 60000, monthly_txns: 1700, current_rate_pct: 2.49, our_rate_pct: 1.4, buy_rate_pct: 0.60, our_txn_fee: 25, buy_txn_fee: 22.3, volume_split_pct: 55 },
   { id: 'pr3', account_id: 'pa2', category: 'cp_vm_credit', monthly_volume: 38000, monthly_txns: 1100, current_rate_pct: 2.49, our_rate_pct: 2.55, buy_rate_pct: 2.39, our_txn_fee: 12, buy_txn_fee: 9, volume_split_pct: 35 },
 ];
 const WEIGHTS = [{ stage: 'qualified', probability: 0.25 }, { stage: 'demo_booked', probability: 0.4 }, { stage: 'proposal_sent', probability: 0.7 }, { stage: 'negotiation', probability: 0.85 }];
 const COST_TEMPLATES = [
-  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', markup: { rate_pct: 0.10, txn_minor: 5 },
+  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', markup: { rate_pct: 0.10, txn_minor: 3 },
     note: 'UK interchange is percentage-only, IFR-capped, nothing per transaction. Our 0.10% + 5p is all-in above it (IC+).',
     rows: { cp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, split_pct: 15 },
             cp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, split_pct: 82 },
