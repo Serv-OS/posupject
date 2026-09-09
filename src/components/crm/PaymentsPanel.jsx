@@ -588,26 +588,26 @@ function CostBuildUp({ template, region, minor }) {
     ['Visa / Mastercard debit', 'cp_vm_debit'],
     ['Visa / Mastercard credit', 'cp_vm_credit'],
     ['American Express', 'cp_amex'],
-  ].map(([label, key]) => [label, costFor(template, key)]);
-  const anyFixedInterchange = lines.some(([, c]) => Number(c.icTxn) > 0);
+  ].map(([label, key]) => [label, key, costFor(template, key)]);
+  const anyFixedInterchange = lines.some(([, , c]) => Number(c.icTxn) > 0);
   return (
     <div className="glass-inner rounded-xl p-3 text-[11px] text-dim space-y-1">
       <div className="text-paper font-semibold text-[12px]">Where the cost comes from · {region}</div>
-      {lines.map(([label, c]) => (
+      {lines.map(([label, key, c]) => (
         <div key={label} className="flex gap-2">
           <span className="w-40 shrink-0 text-muted">{label}</span>
           <span>{c.offered === false
-            ? 'we do not sell it here, the merchant holds it direct with Amex'
+            ? 'we do not sell this card type here'
             : c.ic === null
-              ? 'no interchange set, so this card type shows no cost'
-              : `${c.ic}% + ${c.icTxn}${minor} interchange, plus ${mk.rate_pct}% + ${mk.txn_minor}${minor} from our acquirer = ${c.buy}% + ${c.buyTxn}${minor}`}</span>
+              ? 'nothing set, so this card type shows no cost'
+              : `${c.ic}% + ${c.icTxn}${minor} ${key === 'cp_amex' ? 'Amex wholesale rate' : 'interchange'}, plus ${mk.rate_pct}% + ${mk.txn_minor}${minor} from our acquirer = ${c.buy}% + ${c.buyTxn}${minor}`}</span>
         </div>
       ))}
       <div className="pt-1">
         {anyFixedInterchange
           ? <>Interchange here has a <b>per-transaction</b> part as well as a percentage. In the US that is the Durbin cap, 21c plus a 1c fraud adjustment on regulated debit, which is why the fixed cost looks large next to the UK. That part is interchange passed straight through, not our margin.</>
           : <>Interchange here is a <b>percentage only</b>, capped and with nothing per transaction, so the entire per-transaction cost is our acquirer's {mk.txn_minor}{minor}.</>}
-        {' '}Our acquirer's markup is all in above interchange, so scheme fees sit inside it and are never added again.
+        {' '}Amex is a three-party network, so its figure is a wholesale discount rate rather than interchange. Our acquirer's markup is all in above both, so scheme fees sit inside it and are never added again.
       </div>
     </div>
   );
