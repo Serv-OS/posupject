@@ -55,14 +55,21 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
     setProjects(prj.data || []);
     setTemplates(tpl.data || []);
     setJobTypes([...new Set((autos.data || []).map(a => a.condition?.job_type).filter(Boolean))].sort());
-    if (o.data?.company_id) {
-      const [c, l] = await Promise.all([
-        supabase.from('companies').select('*').eq('id', o.data.company_id).single(),
-        supabase.from('locations').select('*').eq('company_id', o.data.company_id).order('name'),
-      ]);
-      setCompany(c.data);
-      setLocations(l.data || []);
-    }
+    // The venue is fetched by ITS OWN id, never only through the company.
+    // Loading "the company's sites" and then looking the venue up in that list
+    // meant that the moment a job's company changed (or its venue was re-homed
+    // under another company) the venue silently vanished and the screen said
+    // "No venue set" about a job that had one all along. The company's other
+    // sites are still loaded, for context, and the venue is merged in so it is
+    // always found.
+    const [c, l, v] = await Promise.all([
+      o.data?.company_id ? supabase.from('companies').select('*').eq('id', o.data.company_id).single() : Promise.resolve({ data: null }),
+      o.data?.company_id ? supabase.from('locations').select('*').eq('company_id', o.data.company_id).order('name') : Promise.resolve({ data: [] }),
+      o.data?.location_id ? supabase.from('locations').select('*').eq('id', o.data.location_id).maybeSingle() : Promise.resolve({ data: null }),
+    ]);
+    setCompany(c.data);
+    const own = l.data || [];
+    setLocations(v.data && !own.some(x => x.id === v.data.id) ? [v.data, ...own] : own);
     // Contacts linked to this onboarding — the pack is emailed to one of them.
     const { data: assoc } = await supabase.from('associations')
       .select('from_type, from_id, to_type, to_id')
@@ -173,6 +180,11 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
             )}
             {!venue && (
               <span className="text-[10px] font-bold text-amber">No venue set — set one so the pack and files land on the site</span>
+            )}
+            {venue && company && venue.company_id !== company.id && (
+              <span className="text-[10px] font-bold text-amber" title="The venue belongs to a different company from this job. Move the job or the venue so they agree.">
+                Venue is under a different company
+              </span>
             )}
             {company && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-lg bg-slate-100 text-slate-600 border border-slate-200 cursor-pointer hover:border-slate-300"
