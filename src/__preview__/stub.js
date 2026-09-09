@@ -3,7 +3,7 @@ const d = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return x.to
 const ts = (n, h = 0) => { const x = new Date(); x.setDate(x.getDate() + n); x.setHours(x.getHours() - h); return x.toISOString(); };
 const ME = 'u-peter';
 export const MEMBERS = [{ id: 'u-peter', display_name: 'Peter', email: 'peter@posup.co.uk', role: 'owner' }, { id: 'u-sarah', display_name: 'Sarah', email: 'sarah@posup.co.uk', role: 'editor' }, { id: 'u-james', display_name: 'James', email: 'james@posup.co.uk', role: 'editor' }];
-const COMPANIES = [{ id: 'c1', name: 'Coffee Boy — Barnsley', country: 'GB' }, { id: 'c2', name: 'Lightspeed POS UK Ltd', country: 'GB' }, { id: 'c3', name: 'Mozz Pizza', country: null }];
+const COMPANIES = [{ id: 'c1', name: 'Coffee Boy — Barnsley', country: 'GB' }, { id: 'c2', name: 'Lightspeed POS UK Ltd', country: 'GB' }, { id: 'c3', name: 'Mozz Pizza', country: null }, { id: 'c4', name: 'Container Coffee Shops LTD', country: 'GB' }];
 const LOCATIONS = [{ id: 'l1', name: 'Verde — Macclesfield', company_id: 'c2', status: 'live', phone: '01625 442 118', email: 'verde@example.com', address: '14 Mill Street', city: 'Macclesfield', postcode: 'SK11 6NN', venue_type: 'restaurant', covers: 80, go_live_date: '2026-03-14', owner_id: ME, created_at: ts(-200) }, { id: 'l2', name: 'Mozz — Provo', company_id: 'c3', status: 'live', country: 'US', venue_type: 'restaurant', covers: 60, owner_id: ME, created_at: ts(-30) }];
 const LEADS = [{ id: 'lead1', name: 'Cafe Brigante - Leeds Center', stage: 'deal', deal_id: 'd1', source: 'website', priority: 'medium', venue_type: 'cafe', current_pos: 'Lightspeed', owner_id: ME, company_id: 'c1', location_id: 'l1', created_at: ts(-90) }];
 const DEALS = [
@@ -51,7 +51,9 @@ const BILLS = [
   { id: 'b2', bill_number: 4822, supplier_id: 's2', supplier: { name: 'Adyen N.V.' }, total: 612.4, amount_paid: 0, status: 'to_pay', due_date: d(9), cost_context: 'ongoing', recurring_id: 'r1', created_at: ts(-10) },
   { id: 'b3', bill_number: 4823, supplier_id: 's3', supplier: { name: 'Sumup Payments Ltd' }, total: 149, amount_paid: 0, status: 'draft', due_date: null, cost_context: 'deal', created_at: ts(-1) },
 ];
-const QUOTES = [{ id: 'q1', quote_number: 118, status: 'draft', company_id: 'c2', contact_id: 'ct1', location_id: 'l1', currency: 'GBP', valid_until: d(30), payment_terms: 'deposit', deposit_percent: 25, terms: 'Payment 14 days from invoice.', notes: '', public_token: 'abc123', tax_rate: 20, processing_account_id: 'pa1' }];
+const QUOTES = [{ id: 'q1', quote_number: 118, status: 'draft', company_id: 'c2', contact_id: 'ct1', location_id: 'l1', currency: 'GBP', valid_until: d(30), payment_terms: 'deposit', deposit_percent: 25, terms: 'Payment 14 days from invoice.', notes: '', public_token: 'abc123', tax_rate: 20, processing_account_id: 'pa1' },
+  // A DIFFERENT company on the SAME card: the Coffee Boy case, six sites across three companies.
+  { id: 'q2', quote_number: 119, status: 'sent', company_id: 'c4', location_id: null, currency: 'GBP', valid_until: d(21), payment_terms: 'deposit', deposit_percent: 25, terms: '', notes: '', public_token: 'def456', tax_rate: 20, processing_account_id: 'pa1' }];
 const QLINES = [
   { id: 'ql1', quote_id: 'q1', name: 'Lightspeed terminal', category: 'hardware', billing_type: 'one_off', qty: 2, unit_price: 390, discount: 0, tax_rate: 20, sort: 0 },
   { id: 'ql2', quote_id: 'q1', name: 'Card reader', category: 'hardware', billing_type: 'one_off', qty: 1, unit_price: 149, discount: 0, tax_rate: 20, sort: 1 },

@@ -87,13 +87,31 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     if (q.data?.contact_id) supabase.from('contacts').select('id, first_name, last_name, email').eq('id', q.data.contact_id).single().then(r => setContact(r.data));
   };
 
-  // Card-processing proposals for this company (with their per-row rates), for the attach picker + savings preview.
+  // Card-processing proposals for the attach picker + savings preview.
+  //
+  // Every card, not just this company's. A group is rarely one company: Coffee
+  // Boy is six sites across three of them, and one rate card covers the lot, so
+  // filtering by company_id left the Castleford quote with nothing to attach and
+  // no way to put Barnsley on the rate the rest of the estate already has.
+  // The picker labels whose card each one is instead, and puts this company's
+  // own at the top.
   const loadProc = async (companyId) => {
-    const { data: accs } = await supabase.from('processing_accounts').select('*, location:locations(name)').eq('company_id', companyId).order('created_at', { ascending: false });
+    const { data: accs } = await supabase
+      .from('processing_accounts').select('*, location:locations(name), company:companies(name)')
+      .order('created_at', { ascending: false });
     const ids = (accs || []).map(a => a.id);
     let rates = [];
     if (ids.length) { const { data } = await supabase.from('processing_rates').select('*').in('account_id', ids); rates = data || []; }
-    setProcAccounts((accs || []).map(a => ({ ...a, rates: rates.filter(r => r.account_id === a.id) })));
+    const own = (a) => (a.company_id === companyId ? 0 : 1);
+    setProcAccounts((accs || [])
+      .map(a => ({ ...a, rates: rates.filter(r => r.account_id === a.id), isOwn: a.company_id === companyId }))
+      .sort((a, b) => own(a) - own(b)));
+  };
+
+  /** How a card reads in the picker: its own name, plus whose it is when it is not this customer's. */
+  const procLabel = (a) => {
+    const name = a.label || a.location?.name || 'Proposal';
+    return a.isOwn ? name : `${name} · ${a.company?.name || 'another customer'}`;
   };
 
   const setQ = (k, v) => setQuote(prev => ({ ...prev, [k]: v }));
@@ -161,13 +179,33 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     // to type it. Without this the pipeline reports payments ARR as zero forever.
     const acc = procAccounts.find(x => x.id === quote.processing_account_id);
     const our = acc ? paymentsArrFromRates(acc.rates) : null;
-    const arrNote = our?.priced ? `\n\nPayments ARR of ${moneyFor(ccyOf(acc)).m0(our.arr)} will be set on the deal from the attached rate card.` : '';
+
+    // A rate card usually covers a whole group, so several quotes share it, and
+    // its margin is earned ONCE however many quotes are won on it. Without this
+    // check three Coffee Boy sites closing on one card would each write the full
+    // ARR to their own deal and treble it in the pipeline.
+    let claimedBy = null;
+    if (our?.priced && acc) {
+      const { data: siblings } = await supabase
+        .from('quotes').select('deal_id').eq('processing_account_id', acc.id).neq('id', quoteId).not('deal_id', 'is', null);
+      const dealIds = [...new Set((siblings || []).map(q => q.deal_id))];
+      if (dealIds.length) {
+        const { data: claimed } = await supabase
+          .from('deals').select('id, name, payments_arr').in('id', dealIds).gt('payments_arr', 0).limit(1);
+        claimedBy = claimed?.[0] || null;
+      }
+    }
+
+    const arrNote = !our?.priced ? ''
+      : claimedBy
+        ? `\n\nThe attached rate card is already earning on "${claimedBy.name}", so its payments ARR stays there. This deal closes without it, otherwise the same card would be counted twice.`
+        : `\n\nPayments ARR of ${moneyFor(ccyOf(acc)).m0(our.arr)} will be set on the deal from the attached rate card.`;
     if (!confirm(`Mark this quote as Won? This closes the deal and starts onboarding.${arrNote}`)) return;
     await save();
     await supabase.from('quotes').update({ status: 'won' }).eq('id', quoteId);
     if (quote.deal_id) {
       const patch = { stage: 'closed_won', closed_at: new Date().toISOString() };
-      if (our?.priced) patch.payments_arr = Math.round(our.arr * 100) / 100;
+      if (our?.priced && !claimedBy) patch.payments_arr = Math.round(our.arr * 100) / 100;
       await supabase.from('deals').update(patch).eq('id', quote.deal_id);
       await supabase.from('stage_history').insert({ object_type: 'deal', object_id: quote.deal_id, to_stage: 'closed_won', changed_by: profile.id });
       try { await handleClosedWon(quote.deal_id, profile.id); } catch (e) { console.error(e); }
@@ -311,7 +349,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                   );
                 })()}
                 <SheetRow active={!quote.processing_account_id} onClick={() => { setQ('processing_account_id', null); setSheet(null); }}>None</SheetRow>
-                {procAccounts.map(a => <SheetRow key={a.id} active={quote.processing_account_id === a.id} sub={`saves ${moneyFor(ccyOf(a)).m0(accountSavings(a.rates).saving)}/mo`} onClick={() => { setQ('processing_account_id', a.id); setSheet(null); }}>{a.label || a.location?.name || 'Proposal'}</SheetRow>)}
+                {procAccounts.map(a => <SheetRow key={a.id} active={quote.processing_account_id === a.id} sub={`saves ${moneyFor(ccyOf(a)).m0(accountSavings(a.rates).saving)}/mo${a.isOwn ? '' : ' · shared'}`} onClick={() => { setQ('processing_account_id', a.id); setSheet(null); }}>{procLabel(a)}</SheetRow>)}
               </>
             )}
           </MobileSheet>
@@ -447,7 +485,15 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               {!company ? <div className="text-[11px] text-dim">Add a company to the quote to attach a savings proposal.</div> : (<>
                 <select className={input} value={quote.processing_account_id || ''} onChange={e => setQ('processing_account_id', e.target.value || null)}>
                   <option value="">— None —</option>
-                  {procAccounts.map(a => <option key={a.id} value={a.id}>{(a.label || a.location?.name || 'Proposal')} · saves {moneyFor(ccyOf(a)).m0(accountSavings(a.rates).saving)}/mo</option>)}
+                  {[['This customer', true], ['Other customers', false]].map(([groupLabel, own]) => {
+                    const group = procAccounts.filter(a => !!a.isOwn === own);
+                    if (!group.length) return null;
+                    return (
+                      <optgroup key={groupLabel} label={groupLabel}>
+                        {group.map(a => <option key={a.id} value={a.id}>{procLabel(a)} · saves {moneyFor(ccyOf(a)).m0(accountSavings(a.rates).saving)}/mo</option>)}
+                      </optgroup>
+                    );
+                  })}
                 </select>
                 {(() => {
                   // A card is priced in its own region's currency. Attaching a US

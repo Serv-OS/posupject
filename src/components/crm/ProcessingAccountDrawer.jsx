@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { X, Pencil, Plus, Trash2, Building2, PiggyBank, AlertTriangle } from 'lucide-react';
 import { AccountModal, ccyOf, moneyFor, isPriced, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
@@ -64,6 +64,19 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
   // first, refuse if anything points at it, and say which quotes to detach.
   const [deleting, setDeleting] = useState(false);
   const [blockedBy, setBlockedBy] = useState(null);
+
+  // Which quotes lean on this card. One rate card usually covers a whole group,
+  // and a group is rarely one company: Coffee Boy is six sites across three of
+  // them. Without this the sharing is invisible, and editing a rate here would
+  // silently change what several customers have already been shown.
+  const [usedOn, setUsedOn] = useState([]);
+  const loadUsedOn = useCallback(async () => {
+    const { data } = await supabase
+      .from('quotes').select('id, quote_number, status, company:companies(name), location:locations(name)')
+      .eq('processing_account_id', acc.id).order('quote_number', { ascending: false });
+    setUsedOn(data || []);
+  }, [acc.id]);
+  useEffect(() => { loadUsedOn(); }, [loadUsedOn]);
   const removeAccount = async () => {
     setDeleting(true); setBlockedBy(null);
     const { data: attached, error } = await supabase
@@ -126,6 +139,26 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
             <div className="text-3xl font-bold tabular-nums text-emerald-600">{totals.vol ? m0(totals.savingYr) : '—'}<span className="text-base font-semibold text-emerald-700/70"> / yr</span></div>
             <div className="text-xs text-muted mt-0.5">{totals.vol ? `${m2(totals.saving)} / mo · ${pct2(totals.currentEff)} → ${pct2(totals.ourEff)} effective rate` : 'Add volumes & rates to calculate savings'}</div>
           </div>
+
+          {usedOn.length > 0 && (
+            <div className="glass-inner rounded-xl p-3">
+              <div className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-dim mb-1.5">
+                On {usedOn.length} quote{usedOn.length === 1 ? '' : 's'}
+                {new Set(usedOn.map(q => q.company?.name)).size > 1 && <span className="text-ember"> · shared across customers</span>}
+              </div>
+              <div className="space-y-1">
+                {usedOn.map(q => (
+                  <button key={q.id} onClick={() => { onNavigate?.('quote', q.id); onClose(); }}
+                    className="w-full text-left text-[12px] text-paper hover:text-ember flex items-baseline gap-2">
+                    <span className="font-mono text-muted shrink-0">#{q.quote_number}</span>
+                    <span className="truncate">{q.company?.name || 'No customer'}{q.location?.name ? ` · ${q.location.name}` : ''}</span>
+                    <span className="ml-auto text-[10px] text-dim shrink-0">{q.status}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="text-[10px] text-dim mt-2">Changing a rate here changes it on every one of these.</div>
+            </div>
+          )}
 
           {/* Per-channel rate breakdown */}
           {CHANNELS.map(ch => {
