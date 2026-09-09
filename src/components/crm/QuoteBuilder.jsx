@@ -5,6 +5,7 @@ import { AccountModal, accountSavings, ccyOf, moneyFor, pct2, RATE_CATEGORIES, r
 import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
 import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
+import { sortQuoteLines, saasStartText } from '../../lib/quoteLines';
 import { Card, Mono, MobileSheet, SheetRow, EditSheet, PrimaryBtn, GhostBtn } from './ui.jsx';
 
 // Build the customer-safe card-processing breakdown frozen onto the quote.
@@ -98,7 +99,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
       supabase.from('products').select('*').eq('active', true).order('category').order('name'),
     ]);
     setQuote(q.data);
-    setItems((li.data || []).map(x => ({ ...x })));
+    setItems(sortQuoteLines((li.data || []).map(x => ({ ...x }))));
     setProducts(pr.data || []);
     if (q.data?.company_id) {
       supabase.from('companies').select('id, name, country').eq('id', q.data.company_id).single().then(r => setCompany(r.data));
@@ -198,6 +199,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
       tax_rate: Number(quote.tax_rate) || 0, terms: quote.terms || null, notes: quote.notes || null,
       status: quote.status, location_id: quote.location_id || null,
       currency: cur,
+      // Days after go-live before software billing starts; shown to the customer and used by the go-live trigger.
+      saas_start_days: Math.max(0, Math.min(365, Number(quote.saas_start_days) || 0)),
       processing_account_id: quote.processing_account_id || null,
       card_processing: cardSnapshot(procAccounts.find(a => a.id === quote.processing_account_id)),
       one_off_subtotal: totals.oneOff, tax_amount: totals.tax, one_off_total: totals.oneOffTotal,
@@ -206,7 +209,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     // Replace line items
     await supabase.from('quote_line_items').delete().eq('quote_id', quoteId);
     if (items.length) {
-      await supabase.from('quote_line_items').insert(items.map((it, i) => ({
+      await supabase.from('quote_line_items').insert(sortQuoteLines(items).map((it, i) => ({
         quote_id: quoteId, product_id: it.product_id || null, name: it.name || 'Item',
         description: it.description || null, category: it.category, billing_type: it.billing_type,
         qty: Number(it.qty) || 0, unit_price: Number(it.unit_price) || 0, discount: Number(it.discount) || 0,
@@ -346,6 +349,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               ] },
               { title: 'Dates & terms', fields: [
                 { key: 'valid_until', label: 'Valid until', type: 'date' }, { key: 'go_live_date', label: 'Go-live date', type: 'date' },
+                { key: 'saas_start_days', label: 'Software billing starts (days after go-live)', type: 'number', hint: 'Billing is set up automatically when the site goes live. 0 = from the go-live day.' },
                 { key: 'payment_terms', label: 'Payment terms', type: 'select', options: [['pay_now', 'Charge full now'], ['deposit', 'Deposit'], ['invoice_later', 'Invoice later']] },
                 { key: 'deposit_percent', label: 'Deposit %', type: 'number' },
               ] },
@@ -507,7 +511,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               <Row k={`Recurring ARR (ex ${taxLabelFor(cur)})`} v={money(totals.recurringArr)} bold />
               {totals.recurringTax > 0 && <><Row k={`${taxLabelFor(cur)} on recurring`} v={money(totals.recurringTax)} sub />
               <Row k={`Recurring inc ${taxLabelFor(cur)}`} v={money(totals.recurringGross)} bold /></>}
-              <div className="text-[10px] text-dim mt-2 leading-relaxed">SaaS &amp; payments are the plan the customer agrees to (forecast ARR on the deal) — not charged here. One-off total is what Stripe captures.</div>
+              <div className="text-[10px] text-dim mt-2 leading-relaxed">{`Software is not charged here: a monthly schedule is created automatically when the site goes live, ${saasStartText(quote.saas_start_days)}. Payments is our margin, forecast on the deal. One-off total is what checkout captures.`}</div>
             </div>
 
             <div className="glass-card rounded-2xl p-4 space-y-3">
@@ -524,6 +528,11 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                   </select></div>
                 <div><label className={label}>Valid until</label><input type="date" className={input} value={quote.valid_until || ''} onChange={e => setQ('valid_until', e.target.value)} /></div>
                 <div><label className={label}>Go-live date</label><input type="date" className={input} value={quote.go_live_date || ''} onChange={e => setQ('go_live_date', e.target.value)} /></div>
+                <div><label className={label}>Software billing starts</label>
+                  <div className="flex items-center gap-2">
+                    <input type="number" min="0" max="365" className={input + ' !w-24'} value={quote.saas_start_days ?? 0} onChange={e => setQ('saas_start_days', e.target.value)} />
+                    <span className="text-xs text-muted">days after go-live</span>
+                  </div></div>
                 <div><label className={label}>Payment terms</label><select className={input} value={quote.payment_terms} onChange={e => setQ('payment_terms', e.target.value)}>
                   <option value="pay_now">Charge full now</option><option value="deposit">Deposit</option><option value="invoice_later">Invoice later</option></select></div>
                 {quote.payment_terms === 'deposit' && <div><label className={label}>Deposit %</label><input type="number" className={input} value={quote.deposit_percent || 0} onChange={e => setQ('deposit_percent', e.target.value)} /></div>}

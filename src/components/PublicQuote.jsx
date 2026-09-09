@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { groupQuoteLines, lineCaption, saasStartText, softwareMonthly } from '../lib/quoteLines';
 import { LogoLockup } from './ServOSLogo.jsx';
 import { fmtMoney, fmtMoney0, taxLabelFor } from '../lib/money';
 
@@ -126,18 +127,31 @@ export default function PublicQuote({ token }) {
             </tr>
           </thead>
           <tbody>
-            {(data.items || []).map(it => (
-              <tr key={it.id} className="border-b border-slate-100 align-top">
-                <td className="py-2.5 pr-2">
-                  <div className="font-medium text-slate-800">{it.name}</div>
-                  {it.description && <div className="text-xs text-slate-500 mt-0.5 whitespace-pre-line">{it.description}</div>}
-                  <div className="text-[10px] text-slate-400 mt-0.5">{CAT[it.category]}{it.billing_type === 'monthly' ? ' · billed monthly' : it.billing_type === 'annual' ? ' · billed annually' : ''}</div>
-                </td>
-                <td className="py-2.5 text-center text-slate-600">{it.qty}</td>
-                <td className="py-2.5 text-right text-slate-600">{money(it.unit_price, cur)}</td>
-                <td className="py-2.5 text-right text-slate-500">{it.discount > 0 ? `${it.discount}%` : '—'}</td>
-                <td className="py-2.5 text-right font-mono text-slate-800">{money(it.line_total, cur)}{it.billing_type === 'monthly' ? '/mo' : it.category === 'payments' ? '/yr' : ''}</td>
-              </tr>
+            {/* Hardware and setup first, then software, then card processing.
+                Each section says when it is paid, and every software line says
+                when its billing starts, because that is the promise being signed. */}
+            {groupQuoteLines(data.items || []).map(g => (
+              <Fragment key={g.category}>
+                <tr className="bg-slate-50">
+                  <td colSpan={5} className="pt-3 pb-1 pr-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    {g.title}
+                    <span className="normal-case tracking-normal font-normal text-slate-400"> · {g.category === 'saas' ? `billed monthly, ${saasStartText(q.saas_start_days)}` : g.note}</span>
+                  </td>
+                </tr>
+                {g.items.map(it => (
+                  <tr key={it.id} className="border-b border-slate-100 align-top">
+                    <td className="py-2.5 pr-2">
+                      <div className="font-medium text-slate-800">{it.name}</div>
+                      {it.description && <div className="text-xs text-slate-500 mt-0.5 whitespace-pre-line">{it.description}</div>}
+                      {lineCaption(it, q.saas_start_days) && <div className="text-[10px] text-slate-400 mt-0.5">{lineCaption(it, q.saas_start_days)}</div>}
+                    </td>
+                    <td className="py-2.5 text-center text-slate-600">{it.qty}</td>
+                    <td className="py-2.5 text-right text-slate-600">{money(it.unit_price, cur)}</td>
+                    <td className="py-2.5 text-right text-slate-500">{it.discount > 0 ? `${it.discount}%` : '—'}</td>
+                    <td className="py-2.5 text-right font-mono text-slate-800">{money(it.line_total, cur)}{it.billing_type === 'monthly' ? '/mo' : it.billing_type === 'annual' ? '/yr' : it.category === 'payments' ? '/yr' : ''}</td>
+                  </tr>
+                ))}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -157,7 +171,9 @@ export default function PublicQuote({ token }) {
               const rate = i.category === 'payments' && i.tax_rate == null ? 0 : Number(i.tax_rate) || 0;
               return s2 + yearly * rate / 100;
             }, 0);
+            const perMonth = softwareMonthly(data.items || []);
             return (<>
+              {perMonth > 0 && <Row k={`Software per month (ex ${taxLabelFor(cur)})`} v={money(perMonth, cur)} sub />}
               <Row k={`Ongoing per year (ex ${taxLabelFor(cur)})`} v={money(q.recurring_arr, cur)} sub />
               {vat > 0 && <Row k={`${taxLabelFor(cur)} on ongoing`} v={money(vat, cur)} sub />}
               {vat > 0 && <Row k={`Ongoing per year (inc ${taxLabelFor(cur)})`} v={money(q.recurring_arr + vat, cur)} sub />}
@@ -165,6 +181,7 @@ export default function PublicQuote({ token }) {
           })()}
         </div>
         {q.go_live_date && <div className="text-xs text-slate-500 mt-3">Planned go-live: <strong>{fmtDate(q.go_live_date)}</strong></div>}
+        {q.recurring_arr > 0 && <div className="text-xs text-slate-600 mt-1">Software is billed monthly, <strong>{saasStartText(q.saas_start_days)}</strong>. Nothing for software is charged today.</div>}
       </div>
 
       {/* Card-processing rates */}

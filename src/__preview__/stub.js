@@ -55,7 +55,7 @@ const BILLS = [
   { id: 'bus1', bill_number: 4830, supplier_id: 's2', supplier: { name: 'Adyen N.V.' }, total: 1320.5, amount_paid: 0, status: 'to_pay', currency: 'USD', due_date: d(6), cost_context: 'ongoing', created_at: ts(-3) },
   { id: 'b3', bill_number: 4823, supplier_id: 's3', supplier: { name: 'Sumup Payments Ltd' }, total: 149, amount_paid: 0, status: 'draft', due_date: null, cost_context: 'deal', created_at: ts(-1) },
 ];
-const QUOTES = [{ id: 'q1', quote_number: 118, deal_id: 'd1', status: 'draft', company_id: 'c2', contact_id: 'ct1', location_id: 'l1', currency: 'GBP', valid_until: d(30), payment_terms: 'deposit', deposit_percent: 25, terms: 'Payment 14 days from invoice.', notes: '', public_token: 'abc123', tax_rate: 20, processing_account_id: 'pa1' },
+const QUOTES = [{ id: 'q1', quote_number: 118, deal_id: 'd1', status: 'draft', saas_start_days: 30, company_id: 'c2', contact_id: 'ct1', location_id: 'l1', currency: 'GBP', valid_until: d(30), payment_terms: 'deposit', deposit_percent: 25, terms: 'Payment 14 days from invoice.', notes: '', public_token: 'abc123', tax_rate: 20, processing_account_id: 'pa1' },
   // A DIFFERENT company on the SAME card: the Coffee Boy case, six sites across three companies.
   { id: 'q2', quote_number: 119, status: 'sent', company_id: 'c4', location_id: null, currency: 'GBP', valid_until: d(21), payment_terms: 'deposit', deposit_percent: 25, terms: '', notes: '', public_token: 'def456', tax_rate: 20, processing_account_id: 'pa1' }];
 const QLINES = [
