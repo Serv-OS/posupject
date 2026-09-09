@@ -76,27 +76,29 @@ const PROC_ACCOUNTS = [
 // £100k/mo at 1.20% against a 0.90% buy, plus 8,000 txns at 5p vs 3p.
 // margin = (1200 + 400) - (900 + 240) = £460/mo -> £5,520 a year.
 const PROC_RATES = [
-  { id: 'pr1', account_id: 'pa1', category: 'cp_vm_debit', monthly_volume: 100000, monthly_txns: 8000, current_rate_pct: 1.6, our_rate_pct: 1.2, buy_rate_pct: 0.3, our_txn_fee: 2, buy_txn_fee: 1, volume_split_pct: 82 },
+  { id: 'pr1', account_id: 'pa1', category: 'cp_vm_debit', monthly_volume: 100000, monthly_txns: 8000, current_rate_pct: 1.6, our_rate_pct: 1.2, buy_rate_pct: 0.3, our_txn_fee: 8, buy_txn_fee: 5, volume_split_pct: 82 },
   // A US card, so every screen has to prove it renders dollars not pounds.
-  { id: 'pr2', account_id: 'pa2', category: 'cp_vm_debit', monthly_volume: 60000, monthly_txns: 1700, current_rate_pct: 2.49, our_rate_pct: 1.4, buy_rate_pct: 0.56, our_txn_fee: 25, buy_txn_fee: 22.3, volume_split_pct: 55 },
-  { id: 'pr3', account_id: 'pa2', category: 'cp_vm_credit', monthly_volume: 38000, monthly_txns: 1100, current_rate_pct: 2.49, our_rate_pct: 2.55, buy_rate_pct: 2.30, our_txn_fee: 12, buy_txn_fee: 9, volume_split_pct: 35 },
+  { id: 'pr2', account_id: 'pa2', category: 'cp_vm_debit', monthly_volume: 60000, monthly_txns: 1700, current_rate_pct: 2.49, our_rate_pct: 1.4, buy_rate_pct: 0.60, our_txn_fee: 25, buy_txn_fee: 22.3, volume_split_pct: 55 },
+  { id: 'pr3', account_id: 'pa2', category: 'cp_vm_credit', monthly_volume: 38000, monthly_txns: 1100, current_rate_pct: 2.49, our_rate_pct: 2.55, buy_rate_pct: 2.39, our_txn_fee: 12, buy_txn_fee: 9, volume_split_pct: 35 },
 ];
 const WEIGHTS = [{ stage: 'qualified', probability: 0.25 }, { stage: 'demo_booked', probability: 0.4 }, { stage: 'proposal_sent', probability: 0.7 }, { stage: 'negotiation', probability: 0.85 }];
 const COST_TEMPLATES = [
-  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', note: 'UK IFR caps + scheme fees', markup: { rate_pct: 0.10, txn_minor: 5 },
-    rows: { cp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, scheme_rate_pct: 0.04, scheme_txn_minor: 0.8, split_pct: 15 },
-            cp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, scheme_rate_pct: 0.03, scheme_txn_minor: 0.8, split_pct: 82 },
-            cp_amex: { ic_rate_pct: null, ic_txn_minor: null, split_pct: 3 },
-            cnp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, scheme_rate_pct: 0.07, scheme_txn_minor: 2.2, split_pct: 35 },
-            cnp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, scheme_rate_pct: 0.06, scheme_txn_minor: 2.2, split_pct: 60 },
-            cnp_amex: { ic_rate_pct: null, ic_txn_minor: null, split_pct: 5 } } },
-  { id: 'ct-us', region_code: 'US', effective_from: '2026-01-01', note: 'US interchange + scheme fees, verified Sep 2026', markup: { rate_pct: 0.10, txn_minor: 5 },
-    rows: { cp_vm_credit: { ic_rate_pct: 2.29, ic_txn_minor: 4, scheme_rate_pct: 0.139, scheme_txn_minor: 2, split_pct: 35 },
-            cp_vm_debit: { ic_rate_pct: 0.50, ic_txn_minor: 17.3, scheme_rate_pct: 0.135, scheme_txn_minor: 1.8, split_pct: 55 },
-            cp_amex: { ic_rate_pct: 2.50, ic_txn_minor: 10, scheme_rate_pct: 0.15, scheme_txn_minor: 2, split_pct: 10 },
-            cnp_vm_credit: { ic_rate_pct: 2.53, ic_txn_minor: 4, scheme_rate_pct: 0.139, scheme_txn_minor: 2, split_pct: 45 },
-            cnp_vm_debit: { ic_rate_pct: 0.68, ic_txn_minor: 19.2, scheme_rate_pct: 0.135, scheme_txn_minor: 1.8, split_pct: 45 },
-            cnp_amex: { ic_rate_pct: 2.80, ic_txn_minor: 10, scheme_rate_pct: 0.15, scheme_txn_minor: 2, split_pct: 10 } } },
+  { id: 'ct-uk', region_code: 'UK', effective_from: '2026-01-01', markup: { rate_pct: 0.10, txn_minor: 5 },
+    note: 'UK interchange is percentage-only, IFR-capped, nothing per transaction. Our 0.10% + 5p is all-in above it (IC+).',
+    rows: { cp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, split_pct: 15 },
+            cp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, split_pct: 82 },
+            cp_amex: { not_offered: true, split_pct: 3 },
+            cnp_vm_credit: { ic_rate_pct: 0.30, ic_txn_minor: 0, split_pct: 35 },
+            cnp_vm_debit: { ic_rate_pct: 0.20, ic_txn_minor: 0, split_pct: 60 },
+            cnp_amex: { not_offered: true, split_pct: 5 } } },
+  { id: 'ct-us', region_code: 'US', effective_from: '2026-01-01', markup: { rate_pct: 0.10, txn_minor: 5 },
+    note: 'US interchange carries a per-transaction element (Durbin 21c + 1c on regulated debit).',
+    rows: { cp_vm_credit: { ic_rate_pct: 2.29, ic_txn_minor: 4, split_pct: 35 },
+            cp_vm_debit: { ic_rate_pct: 0.50, ic_txn_minor: 17.3, split_pct: 55 },
+            cp_amex: { ic_rate_pct: 2.50, ic_txn_minor: 10, split_pct: 10 },
+            cnp_vm_credit: { ic_rate_pct: 2.53, ic_txn_minor: 4, split_pct: 45 },
+            cnp_vm_debit: { ic_rate_pct: 0.68, ic_txn_minor: 19.2, split_pct: 45 },
+            cnp_amex: { ic_rate_pct: 2.80, ic_txn_minor: 10, split_pct: 10 } } },
 ];
 
 export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };

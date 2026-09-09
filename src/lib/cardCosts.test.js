@@ -69,6 +69,21 @@ describe('costFor', () => {
     expect(c.buyTxn).toBeNull();
   });
 
+  // UK Amex is the case: the merchant holds their own agreement with American
+  // Express, so there is nothing for us to buy. That is not the same as a cost
+  // nobody has looked up yet, and the card should stop asking for it.
+  it('distinguishes a card type we do not sell from one we have not priced', () => {
+    const t = { markup: DEFAULT_MARKUP, rows: { cp_amex: { not_offered: true, split_pct: 3 } } };
+    const c = costFor(t, 'cp_amex');
+    expect(c.offered).toBe(false);
+    expect(c.buy).toBeNull();
+    expect(c.split).toBe(3);
+    expect(costExplain(t, 'cp_amex')).toMatch(/direct/);
+    // and a card type simply missing from the template is still "unknown"
+    expect(costFor(t, 'cnp_amex').offered).toBe(true);
+    expect(costExplain(t, 'cnp_amex')).toMatch(/No interchange set/);
+  });
+
   it('rounds to the penny rather than trailing float noise', () => {
     const t = { markup: { rate_pct: 0.10, txn_minor: 5 }, rows: { x: { ic_rate_pct: 0.29, ic_txn_minor: 0 } } };
     expect(costFor(t, 'x').buy).toBe(0.39);

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-react';
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
-import { loadCostTemplate, costFor, regionForCountry } from '../../lib/cardCosts';
+import { loadCostTemplate, costFor, costExplain, regionForCountry } from '../../lib/cardCosts';
 import { STATEMENT_LINES, blankStatement, statementTotals, statementToRates } from '../../lib/statement';
 import { fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 
@@ -560,8 +560,9 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
               ⚠ You're priced <b>below what the card costs us</b> on: {belowCost.map(c => `${c.channelLabel} ${c.label}`).join(', ')}. TXN fees are in <b>{minor === 'c' ? 'cents' : 'pence'}</b> — enter <b>8</b> for 8{minor} (not 0.08). Make sure Our % ≥ Cost % and Our txn ≥ Cost txn.
             </div>
           )}
+          <CostBuildUp template={template} region={region} minor={minor} />
           <div className="text-[10px] text-dim">
-            <b>Cost</b> is the all-in cost of the transaction to us: interchange + scheme fees + our acquirer's markup. It is not a markup on its own — in US merchant services a "buy rate" usually means only the bit above interchange, and this is the whole thing. “We earn” is Cost subtracted from what we charge. Both are internal and never reach the customer's copy. Volumes auto-split by card mix; adjust Split % per row if you have their real breakdown.
+            <b>Cost</b> is what the transaction costs us all in, not a markup on its own. In US merchant services a "buy rate" means only the part above interchange; this is the whole thing. “We earn” is Cost subtracted from what we charge. Both are internal and never reach the customer's copy. Volumes auto-split by card mix; adjust Split % per row if you have their real breakdown.
           </div>
 
           <div className="flex gap-2 pt-1"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save quote</button>
@@ -573,6 +574,44 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
 }
 
 const cell = "w-full px-2 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper text-right focus:outline-none focus:border-ember";
+
+/**
+ * Where a cost comes from, in words, generated from the region's own template.
+ * costExplain was written at the start and never rendered anywhere, so a rep
+ * looking at "0.40% + 5.8p" had no way to see that 0.8p of it was a scheme fee
+ * our acquirer's markup already covers. Showing the build-up is how that kind
+ * of error gets caught by the person who actually knows the contract.
+ */
+function CostBuildUp({ template, region, minor }) {
+  const mk = template?.markup || { rate_pct: 0.10, txn_minor: 5 };
+  const lines = [
+    ['Visa / Mastercard debit', 'cp_vm_debit'],
+    ['Visa / Mastercard credit', 'cp_vm_credit'],
+    ['American Express', 'cp_amex'],
+  ].map(([label, key]) => [label, costFor(template, key)]);
+  const anyFixedInterchange = lines.some(([, c]) => Number(c.icTxn) > 0);
+  return (
+    <div className="glass-inner rounded-xl p-3 text-[11px] text-dim space-y-1">
+      <div className="text-paper font-semibold text-[12px]">Where the cost comes from · {region}</div>
+      {lines.map(([label, c]) => (
+        <div key={label} className="flex gap-2">
+          <span className="w-40 shrink-0 text-muted">{label}</span>
+          <span>{c.offered === false
+            ? 'we do not sell it here, the merchant holds it direct with Amex'
+            : c.ic === null
+              ? 'no interchange set, so this card type shows no cost'
+              : `${c.ic}% + ${c.icTxn}${minor} interchange, plus ${mk.rate_pct}% + ${mk.txn_minor}${minor} from our acquirer = ${c.buy}% + ${c.buyTxn}${minor}`}</span>
+        </div>
+      ))}
+      <div className="pt-1">
+        {anyFixedInterchange
+          ? <>Interchange here has a <b>per-transaction</b> part as well as a percentage. In the US that is the Durbin cap, 21c plus a 1c fraud adjustment on regulated debit, which is why the fixed cost looks large next to the UK. That part is interchange passed straight through, not our margin.</>
+          : <>Interchange here is a <b>percentage only</b>, capped and with nothing per transaction, so the entire per-transaction cost is our acquirer's {mk.txn_minor}{minor}.</>}
+        {' '}Our acquirer's markup is all in above interchange, so scheme fees sit inside it and are never added again.
+      </div>
+    </div>
+  );
+}
 
 function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym = '£', minor = 'p', m0 = (n) => fmtMoney0(n, 'GBP'), template = null }) {
   // Placeholders are the region's own costs. They used to be hardcoded UK
@@ -617,10 +656,10 @@ function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym =
                   <td className="px-1 text-right text-sm tabular-nums text-dim">{d.monthly_txns || '—'}</td>
                   <td className="px-1"><input className={cell} value={r.current_rate_pct} onChange={e => setRate(c.key, 'current_rate_pct', e.target.value)} placeholder="—" /></td>
                   <td className="px-1"><input className={cell} value={r.our_rate_pct} onChange={e => setRate(c.key, 'our_rate_pct', e.target.value)} placeholder="—" /></td>
-                  <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_rate_pct} onChange={e => setRate(c.key, 'buy_rate_pct', e.target.value)} placeholder={ph(cost.buy)} /></td>
+                  <td className="px-1"><input title={costExplain(template, c.key, minor)} disabled={cost.offered === false} className={`${cell} text-dim disabled:opacity-40`} value={r.buy_rate_pct} onChange={e => setRate(c.key, 'buy_rate_pct', e.target.value)} placeholder={cost.offered === false ? 'n/a' : ph(cost.buy)} /></td>
                   <td className="px-1"><input className={cell} value={r.current_txn_fee} onChange={e => setRate(c.key, 'current_txn_fee', e.target.value)} placeholder="0" /></td>
                   <td className="px-1"><input className={cell} value={r.our_txn_fee} onChange={e => setRate(c.key, 'our_txn_fee', e.target.value)} placeholder="—" /></td>
-                  <td className="px-1"><input className={`${cell} text-dim`} value={r.buy_txn_fee} onChange={e => setRate(c.key, 'buy_txn_fee', e.target.value)} placeholder={ph(cost.buyTxn)} /></td>
+                  <td className="px-1"><input title={costExplain(template, c.key, minor)} disabled={cost.offered === false} className={`${cell} text-dim disabled:opacity-40`} value={r.buy_txn_fee} onChange={e => setRate(c.key, 'buy_txn_fee', e.target.value)} placeholder={cost.offered === false ? 'n/a' : ph(cost.buyTxn)} /></td>
                   {/* Only a row we have actually priced can show a saving. Without
                       this an unpriced row reads our rate as zero and claims we save
                       the customer everything they pay, which is how a rate card
@@ -720,6 +759,7 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
     return [c.key, {
       ic_rate_pct: r?.ic_rate_pct ?? '', ic_txn_minor: r?.ic_txn_minor ?? '',
       scheme_rate_pct: r?.scheme_rate_pct ?? '', scheme_txn_minor: r?.scheme_txn_minor ?? '',
+      not_offered: !!r?.not_offered,
       split_pct: r?.split_pct ?? c.split,
     }];
   }));
@@ -730,6 +770,11 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
     txn_minor: from?.markup?.txn_minor ?? 5,
   }));
   const minor = region === 'US' ? 'c' : 'p';
+  // Scheme fees only exist as their own line under IC++ pricing. Ours are inside
+  // the acquirer's markup, so the columns stay out of the way unless a region
+  // actually uses them, rather than inviting someone to double-count.
+  const [showScheme, setShowScheme] = useState(() =>
+    RATE_CATEGORIES.some(c => from?.rows?.[c.key]?.scheme_rate_pct != null || from?.rows?.[c.key]?.scheme_txn_minor != null));
   const [effective, setEffective] = useState(new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
@@ -743,6 +788,7 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
       ic_txn_minor: v.ic_txn_minor === '' ? null : Number(v.ic_txn_minor),
       scheme_rate_pct: v.scheme_rate_pct === '' ? null : Number(v.scheme_rate_pct),
       scheme_txn_minor: v.scheme_txn_minor === '' ? null : Number(v.scheme_txn_minor),
+      not_offered: v.not_offered || undefined,
       split_pct: v.split_pct === '' ? null : Number(v.split_pct),
     }]));
     const { error } = await supabase.from('processing_cost_templates')
@@ -782,25 +828,34 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
                 <input type="number" step="0.1" className={cell} value={markup.txn_minor} onChange={e => setMarkup(m => ({ ...m, txn_minor: e.target.value }))} /></div>
               <div className="text-[11px] text-dim pb-2">Added to interchange on every card. Our cost is interchange + scheme fees + {markup.rate_pct || 0}% + {markup.txn_minor || 0}{minor}.</div>
             </div>
-            <div className="text-[11px] text-dim mt-2 pt-2 border-t border-bdr">
-              <b>Scheme fees</b> are what Visa and Mastercard charge on top of interchange (assessments, authorisation, clearing). Fill them in if your acquirer passes them through separately, which is the usual <b>IC++</b> arrangement. Leave them empty under <b>IC+</b>, where the markup above already absorbs them. A settlement invoice settles it: three fee lines means IC++, two means IC+.
-            </div>
+            <label className="text-[11px] text-dim mt-2 pt-2 border-t border-bdr flex items-start gap-2 cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={showScheme} onChange={e => setShowScheme(e.target.checked)} />
+              <span>
+                <b>Scheme fees charged separately (IC++)</b>. Ours are not: the markup above is all in above interchange, so Visa and Mastercard's assessments sit inside it. Only tick this if a settlement invoice shows scheme fees as their own line, or the cost will be counted twice.
+              </span>
+            </label>
           </div>
           {CHANNELS.map(ch => (
             <div key={ch.key}>
               <div className={label}>{ch.label} <span className="normal-case tracking-normal font-normal">({ch.sub})</span></div>
               <div className="space-y-1.5">
                 {RATE_CATEGORIES.filter(c => c.channel === ch.key).map(c => (
-                  <div key={c.key} className="grid grid-cols-[minmax(0,1.15fr)_repeat(5,minmax(0,1fr))_minmax(0,1.2fr)] gap-2 items-center">
-                    <span className="text-sm text-paper truncate">{c.label}</span>
+                  <div key={c.key} className={`grid ${showScheme ? 'grid-cols-[minmax(0,1.15fr)_repeat(5,minmax(0,1fr))_minmax(0,1.3fr)]' : 'grid-cols-[minmax(0,1.15fr)_repeat(3,minmax(0,1fr))_minmax(0,1.3fr)]'} gap-2 items-center`}>
+                    <label className="text-sm text-paper truncate flex items-center gap-1.5">
+                      <input type="checkbox" checked={!vals[c.key].not_offered} onChange={e => set(c.key, 'not_offered', !e.target.checked)}
+                        title="Untick if we do not sell this card type here — UK Amex is normally the merchant's own agreement" />
+                      <span className={vals[c.key].not_offered ? 'line-through text-dim' : ''}>{c.label}</span>
+                    </label>
                     <div><span className="text-[9px] text-dim block">Interchange %</span>
-                      <input type="number" step="0.01" className={cell} value={vals[c.key].ic_rate_pct ?? ''} onChange={e => set(c.key, 'ic_rate_pct', e.target.value)} /></div>
+                      <input type="number" step="0.01" disabled={vals[c.key].not_offered} className={`${cell} disabled:opacity-40`} value={vals[c.key].ic_rate_pct ?? ''} onChange={e => set(c.key, 'ic_rate_pct', e.target.value)} /></div>
                     <div><span className="text-[9px] text-dim block">Interchange ({minor})</span>
-                      <input type="number" step="0.1" className={cell} value={vals[c.key].ic_txn_minor ?? ''} onChange={e => set(c.key, 'ic_txn_minor', e.target.value)} /></div>
-                    <div><span className="text-[9px] text-dim block">Scheme %</span>
-                      <input type="number" step="0.001" className={cell} value={vals[c.key].scheme_rate_pct ?? ''} onChange={e => set(c.key, 'scheme_rate_pct', e.target.value)} /></div>
-                    <div><span className="text-[9px] text-dim block">Scheme ({minor})</span>
-                      <input type="number" step="0.1" className={cell} value={vals[c.key].scheme_txn_minor ?? ''} onChange={e => set(c.key, 'scheme_txn_minor', e.target.value)} /></div>
+                      <input type="number" step="0.1" disabled={vals[c.key].not_offered} className={`${cell} disabled:opacity-40`} value={vals[c.key].ic_txn_minor ?? ''} onChange={e => set(c.key, 'ic_txn_minor', e.target.value)} /></div>
+                    {showScheme && <>
+                      <div><span className="text-[9px] text-dim block">Scheme %</span>
+                        <input type="number" step="0.001" disabled={vals[c.key].not_offered} className={`${cell} disabled:opacity-40`} value={vals[c.key].scheme_rate_pct ?? ''} onChange={e => set(c.key, 'scheme_rate_pct', e.target.value)} /></div>
+                      <div><span className="text-[9px] text-dim block">Scheme ({minor})</span>
+                        <input type="number" step="0.1" disabled={vals[c.key].not_offered} className={`${cell} disabled:opacity-40`} value={vals[c.key].scheme_txn_minor ?? ''} onChange={e => set(c.key, 'scheme_txn_minor', e.target.value)} /></div>
+                    </>}
                     <div><span className="text-[9px] text-dim block">Card mix %</span>
                       <input type="number" step="1" className={cell} value={vals[c.key].split_pct ?? ''} onChange={e => set(c.key, 'split_pct', e.target.value)} /></div>
                     {/* The sum, as it is typed, so nobody has to do it in their head.
@@ -810,6 +865,7 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
                       <span className="text-[9px] text-dim block">We buy at</span>
                       <span className="text-sm font-mono text-paper">{(() => {
                         const cost = costFor({ markup, rows: { [c.key]: vals[c.key] } }, c.key);
+                        if (cost.offered === false) return <span className="text-dim text-[11px] font-sans">not sold here</span>;
                         return cost.buy == null ? '—' : `${cost.buy}% + ${cost.buyTxn}${minor}`;
                       })()}</span>
                     </div>

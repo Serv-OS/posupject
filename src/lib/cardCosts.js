@@ -79,7 +79,7 @@ const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v)
 export function costFor(template, key) {
   const row = template?.rows?.[key];
   const markup = template?.markup || DEFAULT_MARKUP;
-  if (!row) return { buy: null, buyTxn: null, split: null, ic: null, icTxn: null, scheme: null, schemeTxn: null, markup };
+  if (!row) return { buy: null, buyTxn: null, split: null, ic: null, icTxn: null, scheme: null, schemeTxn: null, markup, offered: true };
   const ic = num(row.ic_rate_pct);
   const icTxn = num(row.ic_txn_minor);
   // An unset scheme fee means "we are not charged one separately", which is a
@@ -88,7 +88,14 @@ export function costFor(template, key) {
   // and the row stays null so it cannot read as free.
   const scheme = num(row.scheme_rate_pct);
   const schemeTxn = num(row.scheme_txn_minor);
+  // Some card types we simply do not sell in a region. UK Amex is the usual
+  // case: the merchant holds their own agreement with American Express, so
+  // there is nothing for us to buy and nothing to quote. That is a different
+  // answer from "we have not looked it up yet", and the rate card should not
+  // nag for a number that will never exist.
+  if (row.not_offered) return { buy: null, buyTxn: null, split: num(row.split_pct), ic: null, icTxn: null, scheme: null, schemeTxn: null, markup, offered: false };
   return {
+    offered: true,
     ic,
     icTxn,
     scheme,
@@ -106,6 +113,7 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 /** Human sentence for where a buy rate came from, for the rep on the quote. */
 export function costExplain(template, key, symbol = 'p') {
   const c = costFor(template, key);
+  if (c.offered === false) return 'We do not sell this card type here — the merchant holds it direct';
   if (c.ic === null) return 'No interchange set for this card type';
   const parts = [`${c.ic}% + ${c.icTxn}${symbol} interchange`];
   if (c.scheme != null || c.schemeTxn != null) parts.push(`${c.scheme ?? 0}% + ${c.schemeTxn ?? 0}${symbol} scheme fees`);
