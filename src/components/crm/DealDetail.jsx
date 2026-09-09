@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
+import { fmtMoney } from '../../lib/money';
 import { EditSheet } from './ui.jsx';
 import { currencyForCountry } from '../../lib/region';
 import { defaultTaxRateFor } from '../../lib/money';
@@ -30,6 +31,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
   const [projects, setProjects] = useState([]);
   const [quotes, setQuotes] = useState([]);
   const [procAccounts, setProcAccounts] = useState([]);
+  const [sharedDeals, setSharedDeals] = useState(0);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({});
 
@@ -46,7 +48,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
       supabase.from('stage_history').select('*').eq('object_type', 'deal').eq('object_id', dealId).order('changed_at', { ascending: false }),
       supabase.from('crm_projects').select('*').eq('subject_type', 'deal').eq('subject_id', dealId).order('created_at', { ascending: false }),
       supabase.from('quotes').select('*').eq('deal_id', dealId).order('created_at', { ascending: false }),
-      supabase.from('processing_accounts').select('id, label, company_id, location_id'),
+      supabase.from('processing_accounts').select('id, label, company_id, location_id, region_code'),
     ]);
     setDeal(d.data);
     setMembers(m.data || []);
@@ -55,13 +57,25 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
     setHistory(h.data || []);
     setProjects(prj.data || []);
     setQuotes(qz.data || []);
-    // Rate cards for this deal's company, with their rows, so payments ARR can
-    // be read off the rate card instead of guessed.
-    const accs = (pa.data || []).filter(x => !d.data?.company_id || x.company_id === d.data.company_id);
+    // The rate cards THIS deal is actually selling, read off its own quotes.
+    // Looking them up by the deal's company was wrong twice over: a card now
+    // covers a group, so a deal selling another company's card saw nothing,
+    // and a company's other cards were counted here whether this deal sold
+    // them or not. A quote names both the card and the deal, so it is the
+    // only honest source.
+    const attachedIds = [...new Set((qz.data || []).map(q => q.processing_account_id).filter(Boolean))];
+    const accs = (pa.data || []).filter(x => attachedIds.includes(x.id));
     if (accs.length) {
-      const { data: rr } = await supabase.from('processing_rates').select('*').in('account_id', accs.map(x => x.id));
+      const [{ data: rr }, { data: sib }] = await Promise.all([
+        supabase.from('processing_rates').select('*').in('account_id', accs.map(x => x.id)),
+        // The same card usually covers a group, so it appears on several deals.
+        // Its margin is earned ONCE, and four Coffee Boy deals each showing
+        // £1,717 invites someone to add them up.
+        supabase.from('quotes').select('deal_id').in('processing_account_id', accs.map(x => x.id)).not('deal_id', 'is', null),
+      ]);
       setProcAccounts(accs.map(x => ({ ...x, rates: (rr || []).filter(r => r.account_id === x.id) })));
-    } else setProcAccounts([]);
+      setSharedDeals(new Set((sib || []).map(q => q.deal_id)).size);
+    } else { setProcAccounts([]); setSharedDeals(0); }
     if (d.data?.company_id) setCompany(c.data?.find(co => co.id === d.data.company_id) || null);
   };
 
@@ -151,7 +165,20 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
   if (!deal) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading...</div>;
 
   const ownerName = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email.split('@')[0]) : 'Unassigned'; };
-  const fmt = (v) => v ? `\u{00A3}${Number(v).toLocaleString('en-GB', { minimumFractionDigits: 2 })}` : '';
+  // A deal carries its own currency (set from its quote), and the US ones are
+  // in dollars. This used to print a pound sign on every figure on the page.
+  const fmt = (v) => (v ? fmtMoney(v, deal.currency === 'USD' ? 'USD' : 'GBP') : '');
+
+  // What the rate cards on this deal's quotes are worth a year. A figure typed
+  // on the deal is a deliberate override and wins; otherwise the card is the
+  // number. Computed once so the Payments ARR line and the Total below it
+  // cannot show different money.
+  const cardCalc = procAccounts.reduce((acc, x) => {
+    const r = paymentsArrFromRates(x.rates);
+    return { priced: acc.priced + r.priced, arr: acc.arr + r.arr, cards: acc.cards + (r.priced ? 1 : 0) };
+  }, { priced: 0, arr: 0, cards: 0 });
+  const typedPayments = Number(deal.payments_arr || 0);
+  const paymentsArr = typedPayments > 0 ? typedPayments : cardCalc.arr;
   const companyLocations = deal.company_id ? locations.filter(l => l.company_id === deal.company_id) : [];
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
@@ -282,38 +309,28 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                   {deal.hardware_value > 0 && <div className="flex justify-between"><span className="text-xs text-muted">Hardware</span><span className="text-sm text-paper font-mono">{fmt(deal.hardware_value)}</span></div>}
                   {deal.services_value > 0 && <div className="flex justify-between"><span className="text-xs text-muted">Services</span><span className="text-sm text-paper font-mono">{fmt(deal.services_value)}</span></div>}
                   {deal.saas_arr > 0 && <div className="flex justify-between"><span className="text-xs text-muted">SaaS ARR</span><span className="text-sm text-paper font-mono">{fmt(deal.saas_arr)}</span></div>}
-                  {deal.payments_arr > 0 && <div className="flex justify-between"><span className="text-xs text-muted">Payments ARR</span><span className="text-sm text-paper font-mono">{fmt(deal.payments_arr)}</span></div>}
-                  {(() => {
-                    // What the rate card says this account is worth to us a year.
-                    const calc = procAccounts.reduce((acc, x) => {
-                      const r = paymentsArrFromRates(x.rates);
-                      return { priced: acc.priced + r.priced, arr: acc.arr + r.arr };
-                    }, { priced: 0, arr: 0 });
-                    if (!calc.priced) return null;
-                    const current = Number(deal.payments_arr || 0);
-                    const off = Math.abs(calc.arr - current) >= 1;
-                    return (
-                      <div className="pt-2 mt-1 border-t border-bdr">
-                        <div className="flex justify-between items-baseline">
-                          <span className="text-xs text-muted">Payments ARR from the rate card</span>
-                          <span className="text-sm font-mono text-paper">{fmt(calc.arr)}</span>
-                        </div>
-                        <div className="text-[10px] text-dim mt-0.5">What we charge minus what the cards cost us, times twelve, across {calc.priced} priced card type{calc.priced === 1 ? '' : 's'}.</div>
-                        {canWrite && off && (
-                          <button onClick={async () => {
-                            const { error } = await supabase.from('deals').update({ payments_arr: Math.round(calc.arr * 100) / 100 }).eq('id', dealId);
-                            if (!error) load();
-                          }} className="mt-1.5 text-[11px] font-semibold" style={{ color: 'rgb(var(--c-primary-deep))' }}>
-                            {current > 0 ? `Use this instead of ${fmt(current)}` : 'Use this figure'}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })()}
+                  {/* Payments ARR comes FROM the rate card. It used to be a
+                      suggestion with a "Use this figure" button that wrote the
+                      number onto the deal, where recalc_deal_rollup promptly
+                      reset it to the sum of the quote's payments line items,
+                      normally nothing. That is why every deal carrying a card
+                      showed zero. Deriving it means it cannot be wiped, and it
+                      follows the card when a rate changes. */}
+                  {paymentsArr > 0 && (<>
+                    <div className="flex justify-between"><span className="text-xs text-muted">Payments ARR</span><span className="text-sm text-paper font-mono">{fmt(paymentsArr)}</span></div>
+                    <div className="text-[10px] text-dim -mt-1">
+                      {typedPayments > 0
+                        ? cardCalc.priced
+                          ? <>Typed on the deal, so it wins. The rate card says {fmt(cardCalc.arr)}.</>
+                          : <>Typed on the deal.</>
+                        : <>From {cardCalc.cards === 1 ? 'the rate card' : `${cardCalc.cards} rate cards`} on this deal's quotes: what we charge minus what the cards cost us, times twelve, across {cardCalc.priced} priced card type{cardCalc.priced === 1 ? '' : 's'}.</>}
+                      {sharedDeals > 1 && <> <b>Shared with {sharedDeals - 1} other deal{sharedDeals === 2 ? '' : 's'}</b>, so it shows on each of them and is counted once in reporting. Do not add them up.</>}
+                    </div>
+                  </>)}
                   <div className="flex justify-between pt-2 border-t border-bdr">
                     <span className="text-xs text-paper font-semibold">Total</span>
                     <span className="text-base text-ember font-mono font-bold">{fmt(
-                      (deal.hardware_value || 0) + (deal.services_value || 0) + (deal.saas_arr || 0) + (deal.payments_arr || 0) || deal.value
+                      (deal.hardware_value || 0) + (deal.services_value || 0) + (deal.saas_arr || 0) + paymentsArr || deal.value
                     )}</span>
                   </div>
                 </div>
