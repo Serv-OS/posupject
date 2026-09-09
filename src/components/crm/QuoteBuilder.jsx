@@ -144,9 +144,31 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
         paymentsArr += lt; recurringTax += lt * (it.tax_rate == null ? 0 : rate) / 100;
       } else if (it.billing_type === 'one_off') { oneOff += lt; tax += lt * rate / 100; }
     });
+    // Payments ARR from the ATTACHED RATE CARD. A quote that names a card is
+    // selling that card, so its margin is the payments ARR — the same figure
+    // the deal shows. Before this, the line read zero unless someone typed a
+    // 'payments' line item by hand, which nobody does because the card is
+    // supposed to be the source.
+    //
+    // A typed line is an explicit override and wins, otherwise the same money
+    // would be counted twice. And a card priced in another currency is left
+    // out entirely: we hold no exchange rate, and putting dollars into a pound
+    // total is worse than showing nothing.
+    const acc = procAccounts.find(a => a.id === quote?.processing_account_id);
+    const cardArr = acc ? paymentsArrFromRates(acc.rates).arr : 0;
+    const cardCcy = acc ? ccyOf(acc) : null;
+    const cardUsable = cardArr > 0 && cardCcy === cur;
+    const paymentsFromCard = paymentsArr === 0 && cardUsable;
+    if (paymentsFromCard) paymentsArr = cardArr;
+
     const recurringArr = saasArr + paymentsArr;
-    return { oneOff, tax, oneOffTotal: oneOff + tax, saasArr, paymentsArr, recurringArr, recurringTax, recurringGross: recurringArr + recurringTax };
-  }, [items]);
+    return {
+      oneOff, tax, oneOffTotal: oneOff + tax, saasArr, paymentsArr, recurringArr, recurringTax,
+      recurringGross: recurringArr + recurringTax,
+      paymentsFromCard,
+      cardIgnoredForCurrency: cardArr > 0 && cardCcy !== cur ? cardCcy : null,
+    };
+  }, [items, procAccounts, quote?.processing_account_id, cur]);
 
   const save = async () => {
     setSaving(true); setSaved(false);
@@ -458,6 +480,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               <div className="border-t border-bdr my-2" />
               <Row k="SaaS (ARR)" v={money(totals.saasArr)} sub />
               <Row k="Payments (ARR)" v={money(totals.paymentsArr)} sub />
+              {totals.paymentsFromCard && <div className="text-[10px] text-dim -mt-1 mb-1">From the attached rate card: what we charge minus what the cards cost us, times twelve.</div>}
+              {totals.cardIgnoredForCurrency && <div className="text-[10px] text-red-600 -mt-1 mb-1">The attached rate card is priced in {totals.cardIgnoredForCurrency} and this quote is in {cur}, so its margin is not counted here.</div>}
               <Row k="Recurring ARR (ex VAT)" v={money(totals.recurringArr)} bold />
               {totals.recurringTax > 0 && <><Row k="VAT on recurring" v={money(totals.recurringTax)} sub />
               <Row k="Recurring inc VAT" v={money(totals.recurringGross)} bold /></>}

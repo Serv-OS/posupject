@@ -59,7 +59,6 @@ const QLINES = [
   { id: 'ql2', quote_id: 'q1', name: 'Card reader', category: 'hardware', billing_type: 'one_off', qty: 1, unit_price: 149, discount: 0, tax_rate: 20, sort: 1 },
   { id: 'ql3', quote_id: 'q1', name: 'Install & training', category: 'services', billing_type: 'one_off', qty: 4, unit_price: 60, discount: 10, tax_rate: 20, sort: 2 },
   { id: 'ql4', quote_id: 'q1', name: 'ServOS Growth', category: 'saas', billing_type: 'monthly', qty: 1, unit_price: 149, discount: 0, tax_rate: 20, line_total: 149, sort: 3 },
-  { id: 'ql5', quote_id: 'q1', name: 'Card processing', category: 'payments', billing_type: 'annual', qty: 1, unit_price: 2400, discount: 0, tax_rate: null, line_total: 2400, sort: 4 },
 ];
 const PRODUCTS = [{ id: 'pr1', name: 'Lightspeed terminal', category: 'hardware', billing_type: 'one_off', default_price: 390, active: true }, { id: 'pr2', name: 'Card reader', category: 'hardware', billing_type: 'one_off', default_price: 149, active: true }, { id: 'pr3', name: 'ServOS Growth', category: 'saas', billing_type: 'monthly', default_price: 149, active: true }];
 const SERIALS = [{ id: 'sn1', serial: 'LS-88213', location_id: 'l1', product: { name: 'Lightspeed terminal' }, status: 'deployed' }, { id: 'sn2', serial: 'LS-88214', location_id: 'l1', product: { name: 'Lightspeed terminal' }, status: 'deployed' }, { id: 'sn3', serial: 'CR-1120', location_id: 'l1', product: { name: 'Card reader' }, status: 'deployed' }];
