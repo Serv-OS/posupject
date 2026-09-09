@@ -8,6 +8,8 @@ const LOCATIONS = [{ id: 'l1', name: 'Verde — Macclesfield', company_id: 'c2',
 const LEADS = [{ id: 'lead1', name: 'Cafe Brigante - Leeds Center', stage: 'deal', deal_id: 'd1', source: 'website', priority: 'medium', venue_type: 'cafe', current_pos: 'Lightspeed', owner_id: ME, company_id: 'c1', location_id: 'l1', created_at: ts(-90) }];
 const DEALS = [
   { id: 'd1', name: 'Coffee Boy — Barnsley Train Station', company_id: 'c1', stage: 'proposal_sent', owner_id: ME, hardware_value: 3200, services_value: 850, saas_arr: 1788, payments_arr: 0, expected_close_date: d(12), created_at: ts(-40), updated_at: ts(-3) },
+  // A dollar deal, so the harness can prove nothing adds it to the pound ones.
+  { id: 'dus1', name: 'Mozz Pizza — Provo', company_id: 'c3', currency: 'USD', stage: 'proposal_sent', owner_id: ME, hardware_value: 1774, services_value: 0, saas_arr: 3588, payments_arr: 0, expected_close_date: d(20), created_at: ts(-10), updated_at: ts(-1) },
   { id: 'd2', name: 'Verde — second site', company_id: 'c2', stage: 'negotiation', owner_id: 'u-sarah', hardware_value: 5400, services_value: 1200, saas_arr: 3576, payments_arr: 4100, expected_close_date: d(5), created_at: ts(-60), updated_at: ts(-1) },
   { id: 'd3', name: 'Hare and Hounds — till refresh', company_id: 'c2', stage: 'qualified', owner_id: ME, hardware_value: 1800, saas_arr: 1788, expected_close_date: d(-6), created_at: ts(-90), updated_at: ts(-35) },
   { id: 'd4', name: 'Cafe Brigante — Leeds', company_id: 'c1', stage: 'demo_booked', value: 2400, expected_close_date: null, created_at: ts(-20), updated_at: ts(-20) },
@@ -102,7 +104,11 @@ const COST_TEMPLATES = [
             cnp_amex: { ic_rate_pct: 2.80, ic_txn_minor: 10, split_pct: 10 } } },
 ];
 
-export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };
+export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
+    // Venue turnover per deal, one in each region: the Volume tab must never add these two.
+    { deal_id: 'd1', name: 'Coffee Boy — Barnsley Train Station', company_id: 'c1', stage: 'proposal_sent', site_count: 1, est_monthly_revenue: 42000, est_monthly_transactions: 5000, est_avg_transaction: 8.4 },
+    { deal_id: 'dus1', name: 'Mozz Pizza — Provo', company_id: 'c3', stage: 'proposal_sent', site_count: 1, est_monthly_revenue: 131554, est_monthly_transactions: 3004, est_avg_transaction: 43.79 },
+  ], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };
 export const MEMBERS_LIST = MEMBERS;
 
 function makeQuery(table) {

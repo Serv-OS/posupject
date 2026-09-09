@@ -11,7 +11,7 @@ const DEAL_STAGE_LABELS = {
   demo_done: 'Demo Done', proposal_sent: 'Proposal Sent', negotiation: 'Negotiation',
   closed_won: 'Closed Won', closed_lost: 'Closed Lost',
 };
-import { gbp0, sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { gbp0, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { oneOffValue, recurringValue, totalValue } from '../../lib/dealValue';
 
 // CEO-defined targets (see project_sales_targets memory)
@@ -36,12 +36,12 @@ const LEAD_QUALIFIED_STAGES = ['sql','deal'];
 const LEAD_STALE_DAYS = 5;
 
 export default function ReportingDashboard({ profile, onNavigate }) {
-  const [rawDeals, setDeals] = useState([]);
-  const [onboardings, setOnboardings] = useState([]);
-  const [tickets, setTickets] = useState([]);
+  const [allDeals, setDeals] = useState([]);
+  const [allOnboardings, setOnboardings] = useState([]);
+  const [allTickets, setTickets] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const [companies, setCompanies] = useState([]);
-  const [locations, setLocations] = useState([]);
+  const [allCompanies, setCompanies] = useState([]);
+  const [allLocations, setLocations] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [locationModules, setLocationModules] = useState([]);
   const [modules, setModules] = useState([]);
@@ -50,14 +50,14 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   const [members, setMembers] = useState([]);
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [trading, setTrading] = useState([]);
+  const [allTrading, setTrading] = useState([]);
   const [pipeOwner, setPipeOwner] = useState('all');
   const [pipeWindow, setPipeWindow] = useState('all');
   const [weights, setWeights] = useState(DEFAULT_STAGE_WEIGHTS);
-  const [procAccounts, setProcAccounts] = useState([]);
+  const [allProcAccounts, setProcAccounts] = useState([]);
   const [cardQuotes, setCardQuotes] = useState([]);
   const [tab, setTab] = useState('leads');
-  const [leads, setLeads] = useState([]);
+  const [allLeads, setLeads] = useState([]);
   const [leadDays, setLeadDays] = useState(30);
 
   useEffect(() => { load(); }, []);
@@ -144,6 +144,47 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   //
   // The quotes are the ground truth: a quote names both the card and the deal.
   // Fall back to the card owner's own deals only when no quote carries it yet.
+  // WHICH REGION each row belongs to, decided once and used by every tab.
+  //
+  // The UK and US books are different money and we hold no exchange rate, so
+  // they are never added together. "What we make" and "Sales" already totalled
+  // per currency; Pipeline, Volume and the per-deal rows did not, and printed a
+  // £40,000 UK pipeline plus a $50,000 US one as "£90,000". Rather than chase
+  // every sum, the whole dashboard is scoped to a region up front: UK, US, or
+  // both — and on "both" anything that is money is rendered per currency.
+  //
+  // A deal's region is its currency. Everything else follows its site first,
+  // then its company; a company with no country is the UK, which is what it
+  // always silently was.
+  const [region, setRegion] = useState(() => {
+    try { return localStorage.getItem('servos_report_region') || 'all'; } catch { return 'all'; }
+  });
+  useEffect(() => { try { localStorage.setItem('servos_report_region', region); } catch {} }, [region]);
+  const scope = useMemo(() => {
+    const coRegion = new Map(allCompanies.map(c => [c.id, c.country === 'US' ? 'US' : 'UK']));
+    const locRegion = new Map(allLocations.map(l => [l.id, l.country === 'US' ? 'US' : l.country ? 'UK' : (coRegion.get(l.company_id) || 'UK')]));
+    const ofCompany = (id) => coRegion.get(id) || 'UK';
+    const ofPlace = (row) => (row.location_id && locRegion.get(row.location_id)) || ofCompany(row.company_id);
+    const ofDeal = (d) => (d.currency === 'USD' ? 'US' : d.currency === 'GBP' ? 'UK' : ofCompany(d.company_id));
+    const dealRegion = new Map(allDeals.map(d => [d.id, ofDeal(d)]));
+    const keep = (r) => region === 'all' || r === region;
+    return {
+      ofDeal, ofPlace, ofCompany,
+      rawDeals: allDeals.filter(d => keep(ofDeal(d))),
+      leads: allLeads.filter(l => keep(l.deal_id && dealRegion.has(l.deal_id) ? dealRegion.get(l.deal_id) : ofPlace(l))),
+      onboardings: allOnboardings.filter(o => keep(o.deal_id && dealRegion.has(o.deal_id) ? dealRegion.get(o.deal_id) : ofPlace(o))),
+      tickets: allTickets.filter(t => keep(ofPlace(t))),
+      companies: allCompanies.filter(c => keep(ofCompany(c.id))),
+      locations: allLocations.filter(l => keep(locRegion.get(l.id))),
+      procAccounts: allProcAccounts.filter(a => keep(a.region_code === 'US' ? 'US' : 'UK')),
+      trading: allTrading.filter(t => keep(dealRegion.get(t.deal_id) || ofCompany(t.company_id))),
+      counts: { UK: allDeals.filter(d => ofDeal(d) === 'UK').length, US: allDeals.filter(d => ofDeal(d) === 'US').length },
+    };
+  }, [region, allDeals, allLeads, allOnboardings, allTickets, allCompanies, allLocations, allProcAccounts, allTrading]);
+  const { rawDeals, leads, onboardings, tickets, companies, locations, procAccounts, trading } = scope;
+  // Currency of whatever is on screen: one when a region is picked, else both.
+  const ccyOfDeal = (d) => (d.currency === 'USD' ? 'USD' : 'GBP');
+
   const cardAttribution = useMemo(() => {
     const byId = new Map(rawDeals.map(d => [d.id, d]));
     const dealsOfCard = new Map();
@@ -462,13 +503,18 @@ export default function ReportingDashboard({ profile, onNavigate }) {
       // date are always shown: they are the ones that need a date, not hiding.
       .filter(d => !cutoff || !d.expected_close_date || d.expected_close_date <= cutoff);
 
+    // Bucketed by currency. A pound and a dollar are different money, so each
+    // field is { GBP, USD } and the renderer prints "£40,000 + $50,000" rather
+    // than a single number that is neither.
+    const zero = () => ({ oneOff: 0, recurring: 0, total: 0, hardware: 0, services: 0, saas: 0, payments: 0, weighted: 0 });
     const money = (list) => list.reduce((acc, d) => {
-      acc.oneOff += oneOffValue(d); acc.recurring += recurringValue(d); acc.total += totalValue(d);
-      acc.hardware += Number(d.hardware_value || 0); acc.services += Number(d.services_value || 0);
-      acc.saas += Number(d.saas_arr || 0); acc.payments += Number(d.payments_arr || 0);
-      acc.weighted += totalValue(d) * (weights[d.stage] ?? 0);
+      const b = acc[ccyOfDeal(d)];
+      b.oneOff += oneOffValue(d); b.recurring += recurringValue(d); b.total += totalValue(d);
+      b.hardware += Number(d.hardware_value || 0); b.services += Number(d.services_value || 0);
+      b.saas += Number(d.saas_arr || 0); b.payments += Number(d.payments_arr || 0);
+      b.weighted += totalValue(d) * (weights[d.stage] ?? 0);
       return acc;
-    }, { oneOff: 0, recurring: 0, total: 0, hardware: 0, services: 0, saas: 0, payments: 0, weighted: 0 });
+    }, { GBP: zero(), USD: zero() });
 
     const all = money(open);
     const byStage = OPEN_STAGES.map(stage => {
@@ -529,7 +575,17 @@ export default function ReportingDashboard({ profile, onNavigate }) {
     return { per };
   }, [deals, procAccounts, weights, cardAttribution]);
 
+  // Pounds only — used by Quota, whose target is a £ figure by design. Money
+  // that can be either currency goes through fmtByCurrency / fmtMoney0.
   const formatCurrency = (v) => `£${Math.round(v).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
+  // A pipeline field across both buckets, as "£x + $y" or a lone figure. A zero
+  // has no currency of its own, so it takes the region on screen: "$0" on the
+  // US view, not a pound sign that has no business being there.
+  const zeroCcy = region === 'US' ? 'USD' : 'GBP';
+  const sums = (gbp, usd) => (!gbp && !usd ? fmtMoney0(0, zeroCcy) : fmtByCurrency({ GBP: gbp, USD: usd }, 0));
+  const both = (m, k) => sums(m.GBP?.[k] || 0, m.USD?.[k] || 0);
+  // Share bars only make sense inside one currency; blended ratios mean nothing.
+  const share = (part, whole) => (whole.GBP && !whole.USD ? (part.GBP / whole.GBP) : whole.USD && !whole.GBP ? (part.USD / whole.USD) : null);
 
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim";
   const tabBtn = (t, lbl) => (
@@ -541,9 +597,22 @@ export default function ReportingDashboard({ profile, onNavigate }) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-4 border-b border-bdr">
-        <div className="text-lg font-bold text-paper">Reporting</div>
-        <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">Cross-system dashboards</div>
+      <div className="px-6 py-4 border-b border-bdr flex items-center gap-4 flex-wrap">
+        <div>
+          <div className="text-lg font-bold text-paper">Reporting</div>
+          <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">Cross-system dashboards</div>
+        </div>
+        {/* The UK and US books are different money. Pick one and every tab is that
+            region alone; pick both and anything that is money shows per currency. */}
+        <div className="ml-auto flex items-center gap-1 p-1 rounded-xl bg-card border border-bdr">
+          {[['UK', `United Kingdom · £`], ['US', `United States · $`], ['all', 'Both']].map(([k, lbl]) => (
+            <button key={k} onClick={() => setRegion(k)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${region === k ? 'bg-paper text-card' : 'text-muted hover:text-paper'}`}>
+              {lbl}{k !== 'all' && <span className="ml-1.5 font-mono text-[10px] opacity-70">{scope.counts[k]}</span>}
+            </button>
+          ))}
+        </div>
+        {region === 'all' && <div className="w-full text-[11px] text-dim -mt-1">Showing both regions. Money is totalled per currency and never converted, so a figure can read "£12,000 + $3,500".</div>}
       </div>
 
       <div className="px-6 py-2 border-b border-bdr flex gap-1 overflow-x-auto">
@@ -748,26 +817,25 @@ export default function ReportingDashboard({ profile, onNavigate }) {
 
               <div className="grid grid-cols-4 gap-3">
                 <MetricCard label="Open deals" value={pipelineMetrics.open.length} sub={`${pipelineMetrics.late} past their close date`} color={pipelineMetrics.late ? 'text-red-600' : 'text-paper'} />
-                <MetricCard label="Pipeline value" value={formatCurrency(pipelineMetrics.all.total)} sub="one-off + ARR" />
-                <MetricCard label="Weighted" value={formatCurrency(pipelineMetrics.all.weighted)} sub="by stage probability" color="text-emerald-600" />
-                <MetricCard label="Recurring in play" value={formatCurrency(pipelineMetrics.all.recurring)} sub="SaaS + payments ARR" />
+                <MetricCard label="Pipeline value" value={both(pipelineMetrics.all, 'total')} sub="one-off + ARR" />
+                <MetricCard label="Weighted" value={both(pipelineMetrics.all, 'weighted')} sub="by stage probability" color="text-emerald-600" />
+                <MetricCard label="Recurring in play" value={both(pipelineMetrics.all, 'recurring')} sub="SaaS + payments ARR" />
               </div>
 
               <div className="glass-card rounded-2xl p-4">
                 <div className={label + ' mb-3'}>What the pipeline is made of</div>
                 <div className="grid grid-cols-4 gap-3">
-                  {[['Hardware', pipelineMetrics.all.hardware], ['Services', pipelineMetrics.all.services],
-                    ['SaaS ARR', pipelineMetrics.all.saas], ['Payments ARR', pipelineMetrics.all.payments]].map(([l, v]) => (
+                  {[['Hardware', 'hardware'], ['Services', 'services'], ['SaaS ARR', 'saas'], ['Payments ARR', 'payments']].map(([l, k]) => (
                     <div key={l}>
                       <div className="text-[10px] text-dim uppercase tracking-wide">{l}</div>
-                      <div className="text-lg font-bold text-paper tabular-nums">{formatCurrency(v)}</div>
+                      <div className="text-lg font-bold text-paper tabular-nums">{both(pipelineMetrics.all, k)}</div>
                       {/* A zero here reads as a bug when the money is really sitting on a
                           rate card that no deal has claimed. Say so, rather than show nothing. */}
                       {l === 'Payments ARR' && deals.some(d => d.payments_from_card) && (
                         <div className="text-[10px] mt-0.5 text-dim">from rate cards, counted once per customer</div>
                       )}
                       <div className="h-[5px] mt-1 rounded-full overflow-hidden" style={{ background: 'var(--ink-line)' }}>
-                        <div className="h-full bg-ember" style={{ width: `${pipelineMetrics.all.total ? Math.round((v / pipelineMetrics.all.total) * 100) : 0}%` }} />
+                        <div className="h-full bg-ember" style={{ width: `${Math.round((share({ GBP: pipelineMetrics.all.GBP[k], USD: pipelineMetrics.all.USD[k] }, { GBP: pipelineMetrics.all.GBP.total, USD: pipelineMetrics.all.USD.total }) ?? 0) * 100)}%` }} />
                       </div>
                     </div>
                   ))}
@@ -785,11 +853,11 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                     <span className="w-32 shrink-0 text-paper truncate">{s.label}</span>
                     <span className="w-8 shrink-0 text-right font-mono text-xs text-muted">{s.count}</span>
                     <div className="flex-1 h-[6px] rounded-full overflow-hidden" style={{ background: 'var(--ink-line)' }}>
-                      <div className="h-full bg-ember" style={{ width: `${pipelineMetrics.all.total ? Math.round((s.total / pipelineMetrics.all.total) * 100) : 0}%` }} />
+                      <div className="h-full bg-ember" style={{ width: `${Math.round((share({ GBP: s.GBP.total, USD: s.USD.total }, { GBP: pipelineMetrics.all.GBP.total, USD: pipelineMetrics.all.USD.total }) ?? 0) * 100)}%` }} />
                     </div>
                     <span className="w-10 shrink-0 text-right font-mono text-[10px] text-dim">{Math.round(s.prob * 100)}%</span>
-                    <span className="w-24 shrink-0 text-right tabular-nums text-paper">{formatCurrency(s.total)}</span>
-                    <span className="w-24 shrink-0 text-right tabular-nums text-emerald-600">{formatCurrency(s.weighted)}</span>
+                    <span className="w-24 shrink-0 text-right tabular-nums text-paper">{both(s, 'total')}</span>
+                    <span className="w-24 shrink-0 text-right tabular-nums text-emerald-600">{both(s, 'weighted')}</span>
                   </div>
                 ))}
                 {pipelineMetrics.open.length === 0 && <div className="px-4 py-8 text-center text-dim text-sm italic">Nothing open in this view.</div>}
@@ -813,8 +881,8 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                       {r.company && <div className="text-[11px] text-dim truncate">{r.d.name}</div>}
                     </div>
                     <div className="text-xs text-muted truncate">{DEAL_STAGE_LABELS[r.d.stage] || r.d.stage}</div>
-                    <div className="text-right tabular-nums text-xs text-paper">{r.oneOff ? formatCurrency(r.oneOff) : '—'}</div>
-                    <div className="text-right tabular-nums text-xs text-paper">{r.recurring ? formatCurrency(r.recurring) : '—'}</div>
+                    <div className="text-right tabular-nums text-xs text-paper">{r.oneOff ? fmtMoney0(r.oneOff, ccyOfDeal(r.d)) : '—'}</div>
+                    <div className="text-right tabular-nums text-xs text-paper">{r.recurring ? fmtMoney0(r.recurring, ccyOfDeal(r.d)) : '—'}</div>
                     <div className={`text-right text-xs tabular-nums ${r.late ? 'text-red-600 font-semibold' : r.undated ? 'text-amber-600' : 'text-muted'}`}>
                       {r.undated ? 'no date' : new Date(r.d.expected_close_date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                     </div>
@@ -826,8 +894,10 @@ export default function ReportingDashboard({ profile, onNavigate }) {
               </div>
 
               <button onClick={() => exportCSV(
-                ['Deal', 'Company', 'Stage', 'Probability', 'Hardware', 'Services', 'SaaS ARR', 'Payments ARR', 'One-off', 'Recurring ARR', 'Total', 'Weighted', 'Expected close', 'Owner', 'Days idle'],
-                pipelineMetrics.rows.map(r => [r.d.name, r.company, DEAL_STAGE_LABELS[r.d.stage] || r.d.stage, weights[r.d.stage] ?? 0,
+                ['Deal', 'Company', 'Currency', 'Stage', 'Probability', 'Hardware', 'Services', 'SaaS ARR', 'Payments ARR', 'One-off', 'Recurring ARR', 'Total', 'Weighted', 'Expected close', 'Owner', 'Days idle'],
+                // Currency travels with each row: a spreadsheet that sums this column
+                // across regions is the user's choice, not a number we handed them.
+                pipelineMetrics.rows.map(r => [r.d.name, r.company, ccyOfDeal(r.d), DEAL_STAGE_LABELS[r.d.stage] || r.d.stage, weights[r.d.stage] ?? 0,
                   r.d.hardware_value || 0, r.d.services_value || 0, r.d.saas_arr || 0, r.d.payments_arr || 0,
                   r.oneOff, r.recurring, r.total, Math.round(r.weighted), r.d.expected_close_date || '', ownerName(r.d.owner_id) || 'Unassigned', r.idleDays]),
                 'pipeline-export.csv'
@@ -1153,18 +1223,28 @@ export default function ReportingDashboard({ profile, onNavigate }) {
             // not what we bill them. Best case and likely case sit side by side
             // on purpose — a raw pipeline total flatters early-stage deals, and a
             // weighted one alone hides how much is genuinely in play.
-            const t = pipelineTotals(trading, weights);
+            // Venue turnover is in the venue's currency, which is the deal's. Total
+            // each currency on its own: pipelineTotals is per list, so it is called
+            // once per currency and the two are shown side by side, never added.
+            const ccyOfTrading = (d) => ccyOfDeal(rawDeals.find(x => x.id === d.deal_id) || {});
+            const tGBP = pipelineTotals(trading.filter(d => ccyOfTrading(d) === 'GBP'), weights);
+            const tUSD = pipelineTotals(trading.filter(d => ccyOfTrading(d) === 'USD'), weights);
+            const t = { wonCount: tGBP.wonCount + tUSD.wonCount, openCount: tGBP.openCount + tUSD.openCount,
+              wonTransactions: (tGBP.wonTransactions || 0) + (tUSD.wonTransactions || 0), openTransactions: (tGBP.openTransactions || 0) + (tUSD.openTransactions || 0) };
+            const pair = (k, mult = 1) => sums((tGBP[k] || 0) * mult, (tUSD[k] || 0) * mult);
+            const openTotal = { GBP: tGBP.openRevenue || 0, USD: tUSD.openRevenue || 0 };
             const byStage = Object.entries(
               trading.filter(d => d.stage !== 'closed_won' && d.stage !== 'closed_lost')
                 .reduce((acc, d) => {
                   const k = d.stage || 'unknown';
-                  acc[k] = acc[k] || { n: 0, rev: 0, weighted: 0 };
+                  const c = ccyOfTrading(d);
+                  acc[k] = acc[k] || { n: 0, rev: { GBP: 0, USD: 0 }, weighted: { GBP: 0, USD: 0 } };
                   acc[k].n += 1;
-                  acc[k].rev += Number(d.est_monthly_revenue) || 0;
-                  acc[k].weighted += (Number(d.est_monthly_revenue) || 0) * (weights[k] ?? 0);
+                  acc[k].rev[c] += Number(d.est_monthly_revenue) || 0;
+                  acc[k].weighted[c] += (Number(d.est_monthly_revenue) || 0) * (weights[k] ?? 0);
                   return acc;
                 }, {}),
-            ).sort((a, b) => b[1].rev - a[1].rev);
+            ).sort((a, b) => (b[1].rev.GBP + b[1].rev.USD) - (a[1].rev.GBP + a[1].rev.USD));
             const missing = trading.filter(d => !d.est_monthly_revenue && d.stage !== 'closed_lost');
             const won = trading.filter(d => d.stage === 'closed_won' && d.est_monthly_revenue)
               .sort((a, b) => Number(b.est_monthly_revenue) - Number(a.est_monthly_revenue));
@@ -1172,10 +1252,10 @@ export default function ReportingDashboard({ profile, onNavigate }) {
             return (
               <div className="space-y-4">
                 <div className="grid grid-cols-4 gap-4">
-                  <Stat label="Won — monthly volume" value={gbp0(t.wonRevenue)}
-                    sub={`${t.wonCount} deals · ${gbp0(t.wonRevenue * 12)}/yr`} tone="emerald" />
-                  <Stat label="Pipeline — best case" value={gbp0(t.openRevenue)} sub={`${t.openCount} open deals`} />
-                  <Stat label="Pipeline — likely" value={gbp0(t.weightedRevenue)} sub="weighted by stage" tone="amber" />
+                  <Stat label="Won — monthly volume" value={pair('wonRevenue')}
+                    sub={`${t.wonCount} deals · ${pair('wonRevenue', 12)}/yr`} tone="emerald" />
+                  <Stat label="Pipeline — best case" value={pair('openRevenue')} sub={`${t.openCount} open deals`} />
+                  <Stat label="Pipeline — likely" value={pair('weightedRevenue')} sub="weighted by stage" tone="amber" />
                   <Stat label="Transactions won / month" value={(t.wonTransactions || 0).toLocaleString('en-GB')}
                     sub={`${(t.openTransactions || 0).toLocaleString('en-GB')} more in pipeline`} />
                 </div>
@@ -1192,10 +1272,10 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                         <div className="text-xs text-dim w-16 shrink-0">{v.n} deal{v.n === 1 ? '' : 's'}</div>
                         <div className="text-[10px] text-dim w-12 shrink-0 tabular-nums">{Math.round((weights[stage] ?? 0) * 100)}%</div>
                         <div className="flex-1 h-2 rounded-full bg-card overflow-hidden">
-                          <div className="h-full bg-ember/60" style={{ width: `${t.openRevenue ? (v.rev / t.openRevenue) * 100 : 0}%` }} />
+                          <div className="h-full bg-ember/60" style={{ width: `${(share(v.rev, openTotal) ?? 0) * 100}%` }} />
                         </div>
-                        <div className="w-28 text-right text-sm text-paper tabular-nums shrink-0">{gbp0(v.rev)}</div>
-                        <div className="w-28 text-right text-sm text-muted tabular-nums shrink-0">{gbp0(v.weighted)}</div>
+                        <div className="w-28 text-right text-sm text-paper tabular-nums shrink-0">{sums(v.rev.GBP, v.rev.USD)}</div>
+                        <div className="w-28 text-right text-sm text-muted tabular-nums shrink-0">{sums(v.weighted.GBP, v.weighted.USD)}</div>
                       </div>
                     ))}
                   </div>
@@ -1235,9 +1315,9 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                           <span className="flex-1 min-w-0 truncate text-paper">{d.name}</span>
                           <span className="text-dim shrink-0">{d.site_count} site{d.site_count === 1 ? '' : 's'}</span>
                           <span className="text-muted tabular-nums shrink-0 w-24 text-right">
-                            {d.est_avg_transaction ? '£' + Number(d.est_avg_transaction).toFixed(2) + ' avg' : ''}
+                            {d.est_avg_transaction ? fmtMoney0(d.est_avg_transaction, ccyOfTrading(d)).replace(/\d[\d,]*$/, Number(d.est_avg_transaction).toFixed(2)) + ' avg' : ''}
                           </span>
-                          <span className="text-paper font-semibold tabular-nums shrink-0 w-28 text-right">{gbp0(d.est_monthly_revenue)}</span>
+                          <span className="text-paper font-semibold tabular-nums shrink-0 w-28 text-right">{fmtMoney0(d.est_monthly_revenue, ccyOfTrading(d))}</span>
                         </div>
                       ))}
                     </div>
