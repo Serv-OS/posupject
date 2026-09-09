@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { MobileTable, MobileSheet, SheetRow, Mono } from '../crm/ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Landmark, Plus, RefreshCw, X, AlertTriangle } from 'lucide-react';
-import { gbp2 } from '../../lib/money.js';
+import { fmtMoney } from '../../lib/money.js';
 import { suggestMatch, applyRule, txnToBill, normalizePayee } from '../../lib/bankRecon.js';
 
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
@@ -29,8 +29,8 @@ export default function BankFeedPanel({ profile }) {
       supabase.from('bank_connections').select('*').order('created_at', { ascending: false }),
       supabase.from('bank_accounts').select('*'),
       supabase.from('bank_transactions').select('*').eq('reconciled', false).lt('amount', 0).order('booking_date', { ascending: false }).limit(200),
-      supabase.from('bills').select('id, total, due_date, issue_date, supplier:inv_suppliers(name)').in('status', ['to_pay', 'partially_paid']),
-      supabase.from('expenses').select('id, total, expense_date, submitter:profiles!expenses_submitter_id_fkey(display_name)').eq('status', 'approved'),
+      supabase.from('bills').select('id, total, currency, due_date, issue_date, supplier:inv_suppliers(name)').in('status', ['to_pay', 'partially_paid']),
+      supabase.from('expenses').select('id, total, currency, expense_date, submitter:profiles!expenses_submitter_id_fkey(display_name)').eq('status', 'approved'),
       supabase.from('bank_match_rules').select('*'),
       supabase.from('inv_suppliers').select('id, name').order('name'),
       supabase.from('expense_categories').select('id, label').eq('active', true).order('sort'),
@@ -68,6 +68,12 @@ export default function BankFeedPanel({ profile }) {
   };
 
   const accountsFor = (connId) => accounts.filter(a => a.connection_id === connId);
+  // A transaction shows its own currency, else its account's (both bank tables carry one); never a fixed £.
+  const ccyOf = (t) => t.currency || accounts.find(a => a.id === t.account_id)?.currency || 'GBP';
+  // Only suggest a bill/expense in the transaction's own currency: $50 is not £50, and a
+  // cross-currency "Match" would book a $ payment against a £ document.
+  const sameCcy = (t) => (r) => (r.currency || 'GBP') === ccyOf(t);
+  const suggestFor = (t) => suggestMatch(t, bills.filter(sameCcy(t)), expenses.filter(sameCcy(t)));
 
   // reconcile actions
   const markReconciled = (id, patch) => supabase.from('bank_transactions').update({ reconciled: true, ...patch }).eq('id', id);
@@ -80,7 +86,8 @@ export default function BankFeedPanel({ profile }) {
   const createBill = async (txn) => {
     const rule = applyRule(txn, rules);
     const bill = txnToBill(txn, { supplier_id: rule?.supplier_id || null, category_id: rule?.category_id || null, cost_context: rule?.cost_context || 'ongoing' });
-    const { data: b } = await supabase.from('bills').insert({ ...bill, created_by: profile.id }).select('id').single();
+    // the bill is in the transaction's currency (account fallback when the row itself has none)
+    const { data: b } = await supabase.from('bills').insert({ ...bill, currency: ccyOf(txn), created_by: profile.id }).select('id').single();
     if (b) await markReconciled(txn.id, { matched_type: 'bill', matched_id: b.id, category_id: bill.category_id });
     load();
   };
@@ -98,16 +105,16 @@ export default function BankFeedPanel({ profile }) {
             columns={[
               { key: 'payee', label: 'Payee', pinned: true, render: (t) => t.payee || t.description || 'Payment' },
               { key: 'date', label: 'Date', render: (t) => fmtD(t.booking_date || t.value_date) },
-              { key: 'amount', label: 'Amount', align: 'right', mono: true, render: (t) => gbp2(t.amount) },
-              { key: 'match', label: 'Suggested', render: (t) => { const sg = suggestMatch(t, bills, expenses); return sg ? `${sg.type}` : '—'; } },
+              { key: 'amount', label: 'Amount', align: 'right', mono: true, render: (t) => fmtMoney(t.amount, ccyOf(t)) },
+              { key: 'match', label: 'Suggested', render: (t) => { const sg = suggestFor(t); return sg ? `${sg.type}` : '—'; } },
               { key: 'rule', label: 'Rule', render: (t) => { const r = applyRule(t, rules); return r ? (categories.find(c => c.id === r.category_id)?.label || 'categorised') : '—'; } },
               { key: 'desc', label: 'Description', render: (t) => t.description || '—' },
             ]}
-            card={(t) => { const sg = suggestMatch(t, bills, expenses); return { title: t.payee || t.description || 'Payment', amount: gbp2(t.amount), chip: sg ? { text: `Match ${sg.type}`, tone: 'primary' } : { text: 'Unmatched', tone: 'muted' }, meta: fmtD(t.booking_date || t.value_date) }; }} />
+            card={(t) => { const sg = suggestFor(t); return { title: t.payee || t.description || 'Payment', amount: fmtMoney(t.amount, ccyOf(t)), chip: sg ? { text: `Match ${sg.type}`, tone: 'primary' } : { text: 'Unmatched', tone: 'muted' }, meta: fmtD(t.booking_date || t.value_date) }; }} />
         </div>
         {pick && (
-          <MobileSheet title={pick.payee || pick.description || 'Payment'} sub={`${gbp2(pick.amount)} · ${fmtD(pick.booking_date || pick.value_date)}`} onClose={() => setPick(null)}>
-            {(() => { const sg = suggestMatch(pick, bills, expenses); return sg && canWrite ? <SheetRow onClick={() => { matchTo(pick, sg.type, sg.id); setPick(null); }} sub="The suggested match">Match {sg.type}</SheetRow> : null; })()}
+          <MobileSheet title={pick.payee || pick.description || 'Payment'} sub={`${fmtMoney(pick.amount, ccyOf(pick))} · ${fmtD(pick.booking_date || pick.value_date)}`} onClose={() => setPick(null)}>
+            {(() => { const sg = suggestFor(pick); return sg && canWrite ? <SheetRow onClick={() => { matchTo(pick, sg.type, sg.id); setPick(null); }} sub="The suggested match">Match {sg.type}</SheetRow> : null; })()}
             {canWrite && <SheetRow onClick={() => { createBill(pick); setPick(null); }} sub="A paid bill with date, amount and payee filled in">Create bill</SheetRow>}
             {canWrite && <SheetRow tone="coral" onClick={() => { ignore(pick); setPick(null); }}>Ignore</SheetRow>}
           </MobileSheet>
@@ -146,7 +153,7 @@ export default function BankFeedPanel({ profile }) {
                       <div key={a.id} className="px-5 py-2.5 flex items-center gap-3 text-sm">
                         <div className="flex-1 min-w-0"><div className="text-paper truncate">{a.name || a.owner_name || a.iban || a.gc_account_id.slice(0, 8)}</div>
                           <div className="text-[10px] text-dim">{a.iban || ''}{a.last_synced_at ? ` · synced ${fmtD(a.last_synced_at.slice(0, 10))}` : ''}</div></div>
-                        {a.balance != null && <div className="tabular-nums text-paper font-semibold">{gbp2(a.balance)}</div>}
+                        {a.balance != null && <div className="tabular-nums text-paper font-semibold">{fmtMoney(a.balance, a.currency)}</div>}
                       </div>
                     ))}
                 </div>
@@ -164,7 +171,7 @@ export default function BankFeedPanel({ profile }) {
             <div className="divide-y divide-bdr/60">
               {txns.length === 0 ? <div className="px-5 py-8 text-center text-dim text-sm italic">Nothing to reconcile — all caught up.</div>
                 : txns.map(t => {
-                  const sug = suggestMatch(t, bills, expenses);
+                  const sug = suggestFor(t);
                   const rule = applyRule(t, rules);
                   return (
                     <div key={t.id} className="px-5 py-3 flex items-center gap-3 text-sm flex-wrap">
@@ -172,7 +179,7 @@ export default function BankFeedPanel({ profile }) {
                         <div className="text-paper font-medium truncate">{t.payee || t.description || 'Payment'}</div>
                         <div className="text-[10px] text-dim">{fmtD(t.booking_date || t.value_date)}{rule ? ` · rule → ${categories.find(c => c.id === rule.category_id)?.label || 'categorised'}` : ''}</div>
                       </div>
-                      <div className="tabular-nums font-semibold text-paper shrink-0">{gbp2(t.amount)}</div>
+                      <div className="tabular-nums font-semibold text-paper shrink-0">{fmtMoney(t.amount, ccyOf(t))}</div>
                       {canWrite && <div className="flex items-center gap-1.5 shrink-0">
                         {sug && <button onClick={() => matchTo(t, sug.type, sug.id)} className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200">Match {sug.type}</button>}
                         <button onClick={() => createBill(t)} className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-ember/10 text-ember-deep hover:bg-ember/20">Create bill</button>

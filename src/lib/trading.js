@@ -29,6 +29,10 @@ export function transactionsFrom(monthlyRevenue, avgTransaction) {
  * would then weigh the same, and a group of one restaurant (£45) plus one kiosk
  * (£4) would read as £24.50 when the real blended figure is £10.83. It is total
  * revenue divided by total transactions.
+ *
+ * ONE currency only, like pipelineTotals below: the revenue is added blind, so
+ * a Leeds site and a Provo site must be split by currency before they get here
+ * (see DealTradingCard, which sums with sumByCurrency for exactly this reason).
  */
 export function blendedAvgTransaction(sites) {
   let rev = 0;
@@ -44,7 +48,8 @@ export function blendedAvgTransaction(sites) {
   return rev / txns;
 }
 
-/** Totals for a set of sites: turnover, transactions and the blended average. */
+/** Totals for a set of sites: turnover, transactions and the blended average.
+ *  ONE currency only; pounds and dollars are never added into one figure. */
 export function rollUp(sites) {
   const list = (sites || []).filter((s) => num(s?.monthlyRevenue) !== null);
   const monthlyRevenue = list.reduce((a, s) => a + num(s.monthlyRevenue), 0);

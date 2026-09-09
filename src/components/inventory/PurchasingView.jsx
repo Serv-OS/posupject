@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ShoppingCart, Plus, X, Truck, Trash2 } from 'lucide-react';
-import { parseSerials, receiveShipment, fmtGBP, shippedByProduct } from '../../lib/inventoryOps';
+import { parseSerials, receiveShipment, fmtCost, supplierCurrency, shipmentCurrency, shippedByProduct } from '../../lib/inventoryOps';
+import { CURRENCIES, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
+
+// Product cost prices are GBP list (same rule as the quote catalogue), so they
+// are only prefilled into a PO / shipment / stock-in line struck in GBP.
+const CATALOGUE_CCY = 'GBP';
 
 const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
 const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
@@ -65,6 +70,7 @@ export default function PurchasingView({ profile, initialTab = 'orders' }) {
             const remaining = total - shipped;
             const openShipment = shipments.find(sh => sh.order_id === o.id && sh.status === 'in_transit');
             const displayStatus = (o.status !== 'cancelled' && o.status !== 'received' && remaining <= 0 && openShipment) ? 'in transit' : o.status;
+            const ccy = supplierCurrency(suppliers, o); // PO has no currency column: it is the supplier's
             const cancelOrder = async () => {
               if (!confirm(`Cancel ${o.po_number}?`)) return;
               await supabase.from('inv_orders').update({ status: 'cancelled' }).eq('id', o.id);
@@ -78,7 +84,7 @@ export default function PurchasingView({ profile, initialTab = 'orders' }) {
                   <span className="text-sm text-muted">{o.supplier_name}</span>
                   {o.expected_by && <span className="text-xs text-dim">· expected {new Date(o.expected_by).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>}
                   <span className="text-xs text-dim">· {shipped}/{total} shipped · {received}/{total} received</span>
-                  <span className="ml-auto text-sm font-semibold text-paper tabular-nums">{fmtGBP(o.total_with_tax)}</span>
+                  <span className="ml-auto text-sm font-semibold text-paper tabular-nums">{fmtCost(o.total_with_tax, ccy)}</span>
                 </div>
                 {canWrite && o.status !== 'received' && o.status !== 'cancelled' && (
                   <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -100,22 +106,22 @@ export default function PurchasingView({ profile, initialTab = 'orders' }) {
                     return (
                       <div key={l.id} className="flex items-center gap-2 flex-wrap">
                         <span className="text-paper">{l.product_name}</span><span>× {l.qty}</span>
-                        <span className="text-dim">@ {fmtGBP(l.unit_cost)}{l.landed_unit_cost != null && l.landed_unit_cost !== l.unit_cost ? ` (landed ${fmtGBP(l.landed_unit_cost)} · ${fmtGBP(landedTotal)} total)` : ''}</span>
+                        <span className="text-dim">@ {fmtCost(l.unit_cost, ccy)}{l.landed_unit_cost != null && l.landed_unit_cost !== l.unit_cost ? ` (landed ${fmtCost(l.landed_unit_cost, ccy)} · ${fmtCost(landedTotal, ccy)} total)` : ''}</span>
                         <span className="ml-auto text-dim">{lShipped}/{l.qty} shipped · {l.received_qty || 0}/{l.qty} received</span>
                       </div>
                     );
                   })}
-                  {o.tax_amount > 0 && <div className="text-dim">Tax: {fmtGBP(o.tax_amount)}{o.tax_rate ? ` (${o.tax_rate}%)` : ''}{o.tax_ref ? ` · ${o.tax_ref}` : ''} · Total inc tax: {fmtGBP(o.total_with_tax)}</div>}
+                  {o.tax_amount > 0 && <div className="text-dim">{taxLabelFor(ccy)}: {fmtCost(o.tax_amount, ccy)}{o.tax_rate ? ` (${o.tax_rate}%)` : ''}{o.tax_ref ? ` · ${o.tax_ref}` : ''} · Total inc tax: {fmtCost(o.total_with_tax, ccy)}</div>}
                 </div>
               </div>
             );
           })}
           {tab === 'orders' && orders.length === 0 && <Empty>No purchase orders yet.</Empty>}
 
-          {tab === 'transit' && transit.map(s => <ShipmentCard key={s.id} s={s} canWrite={canWrite} onReceive={() => setReceiving(s)} />)}
+          {tab === 'transit' && transit.map(s => <ShipmentCard key={s.id} s={s} ccy={shipmentCurrency(s, orders, suppliers)} canWrite={canWrite} onReceive={() => setReceiving(s)} />)}
           {tab === 'transit' && transit.length === 0 && <Empty>Nothing in transit.</Empty>}
 
-          {tab === 'shiphist' && shipHistory.map(s => <ShipmentCard key={s.id} s={s} />)}
+          {tab === 'shiphist' && shipHistory.map(s => <ShipmentCard key={s.id} s={s} ccy={shipmentCurrency(s, orders, suppliers)} />)}
           {tab === 'shiphist' && shipHistory.length === 0 && <Empty>No shipment history.</Empty>}
 
           {tab === 'suppliers' && suppliers.map(su => (
@@ -141,7 +147,7 @@ export default function PurchasingView({ profile, initialTab = 'orders' }) {
 
 const Empty = ({ children }) => <div className="glass-card rounded-2xl p-8 text-center text-dim text-sm italic">{children}</div>;
 
-function ShipmentCard({ s, canWrite, onReceive }) {
+function ShipmentCard({ s, ccy = 'GBP', canWrite, onReceive }) {
   const units = s.lines.reduce((n, l) => n + l.qty, 0);
   const recd = s.lines.reduce((n, l) => n + (l.received_qty || 0), 0);
   return (
@@ -156,7 +162,7 @@ function ShipmentCard({ s, canWrite, onReceive }) {
         {canWrite && s.status === 'in_transit' && <button onClick={onReceive} className="ml-auto px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 text-xs font-semibold hover:bg-emerald-500/25">Receive</button>}
       </div>
       <div className="mt-2 text-xs text-muted space-y-0.5">
-        {s.lines.map(l => <div key={l.id}>{l.product_name} × {l.qty}{l.unit_cost != null ? ` @ ${fmtGBP(l.unit_cost)} landed` : ''}</div>)}
+        {s.lines.map(l => <div key={l.id}>{l.product_name} × {l.qty}{l.unit_cost != null ? ` @ ${fmtCost(l.unit_cost, ccy)} landed` : ''}</div>)}
       </div>
     </div>
   );
@@ -170,11 +176,31 @@ function POModal({ products, suppliers, profile, onClose, onSaved }) {
   const [taxRef, setTaxRef] = useState('');
   const [rows, setRows] = useState([{ product_id: '', product_name: '', category: '', qty: 1, unit_cost: '', tax_rate: '' }]);
   const [saving, setSaving] = useState(false);
+  // Currency is decided up front from the supplier (the PO row stores none) and
+  // threads into every label, placeholder and total below.
+  const ccy = supplierCurrency(suppliers, supplierName);
+  const sym = currencySymbol(ccy);
+  const taxLabel = taxLabelFor(ccy);
   const set = (i, k, v) => setRows(p => p.map((r, x) => x === i ? { ...r, [k]: v } : r));
-  const pick = (i, id) => { const p = products.find(x => x.id === id); setRows(prev => prev.map((r, x) => x === i ? { ...r, product_id: id, product_name: p?.name || '', category: p?.inv_category || '', unit_cost: r.unit_cost || p?.cost_price || '', tax_rate: (r.tax_rate !== '' && r.tax_rate != null) ? r.tax_rate : (p?.cost_tax_rate ?? 20) } : r)); };
+  // A product's cost_tax_rate is its UK purchase VAT rate, so it only seeds a GBP
+  // line; a USD line starts at the US default (0) for the buyer to set.
+  const pick = (i, id) => { const p = products.find(x => x.id === id); setRows(prev => prev.map((r, x) => x === i ? { ...r, product_id: id, product_name: p?.name || '', category: p?.inv_category || '', unit_cost: r.unit_cost || (ccy === CATALOGUE_CCY ? p?.cost_price : '') || '', tax_rate: (r.tax_rate !== '' && r.tax_rate != null) ? r.tax_rate : (ccy === CATALOGUE_CCY ? (p?.cost_tax_rate ?? 20) : defaultTaxRateFor(ccy)) } : r)); };
+  // Products can be picked before the supplier is typed. If the currency then
+  // leaves GBP, drop any catalogue prefill still in place so a GBP list price
+  // (or its VAT rate) never sits under a $ label. Typed values are kept.
+  useEffect(() => {
+    if (ccy === CATALOGUE_CCY) return;
+    setRows(prev => prev.map(r => {
+      const p = products.find(x => x.id === r.product_id);
+      if (!p) return r;
+      const costIsPrefill = p.cost_price != null && String(r.unit_cost) === String(p.cost_price);
+      const rateIsPrefill = String(r.tax_rate) === String(p.cost_tax_rate ?? 20);
+      return { ...r, unit_cost: costIsPrefill ? '' : r.unit_cost, tax_rate: rateIsPrefill ? defaultTaxRateFor(ccy) : r.tax_rate };
+    }));
+  }, [ccy, products]);
 
   const subtotal = rows.reduce((s, r) => s + (Number(r.unit_cost) || 0) * (Number(r.qty) || 0), 0);
-  // VAT is auto-computed per line from each product's purchase VAT rate; a typed
+  // Tax is auto-computed per line from each product's purchase tax rate; a typed
   // "Tax amount" overrides (e.g. to match a supplier invoice to the penny).
   const lineTax = rows.reduce((s, r) => s + (Number(r.unit_cost) || 0) * (Number(r.qty) || 0) * (Number(r.tax_rate) || 0) / 100, 0);
   const resolvedTax = taxAmount !== '' ? Number(taxAmount) : lineTax;
@@ -186,7 +212,7 @@ function POModal({ products, suppliers, profile, onClose, onSaved }) {
       if (!supplierName.trim()) throw new Error('Supplier is required.');
       if (!lines.length) throw new Error('Add at least one line.');
       const poNumber = `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`;
-      // Per-line VAT from each product's rate → landed unit cost. If a total VAT
+      // Per-line tax from each product's rate → landed unit cost. If a total tax
       // was typed to match a supplier invoice, split it proportionally instead.
       const manualOverride = taxAmount !== '';
       const withTax = lines.map(r => {
@@ -226,8 +252,9 @@ function POModal({ products, suppliers, profile, onClose, onSaved }) {
             <input className={input} list="po-suppliers" value={supplierName} onChange={e => setSupplierName(e.target.value)} />
             <datalist id="po-suppliers">{suppliers.map(s => <option key={s.id} value={s.name} />)}</datalist></div>
           <div><label className={label}>Expected by</label><input type="date" className={input} value={expectedBy} onChange={e => setExpectedBy(e.target.value)} /></div>
-          <div><label className={label}>Tax ref</label><input className={input} value={taxRef} onChange={e => setTaxRef(e.target.value)} placeholder="VAT invoice #" /></div>
+          <div><label className={label}>Tax ref</label><input className={input} value={taxRef} onChange={e => setTaxRef(e.target.value)} placeholder={`${taxLabel} invoice #`} /></div>
         </div>
+        {ccy !== CATALOGUE_CCY && <div className="text-[11px] text-dim">This supplier buys in {ccy}: enter costs in {sym}. Catalogue cost prices are GBP list and are not prefilled.</div>}
         {rows.map((r, i) => (
           <div key={i} className="grid grid-cols-[1fr_64px_84px_64px_32px] gap-2 items-end">
             <div><label className={label}>Product</label>
@@ -235,17 +262,17 @@ function POModal({ products, suppliers, profile, onClose, onSaved }) {
                 <option value="">Select…</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select></div>
             <div><label className={label}>Qty</label><input type="number" min="1" className={input} value={r.qty} onChange={e => set(i, 'qty', e.target.value)} /></div>
-            <div><label className={label}>Unit £</label><input className={input} value={r.unit_cost} onChange={e => set(i, 'unit_cost', e.target.value)} /></div>
-            <div><label className={label}>VAT %</label><input className={input} value={r.tax_rate ?? ''} onChange={e => set(i, 'tax_rate', e.target.value)} placeholder="20" /></div>
+            <div><label className={label}>Unit {sym}</label><input className={input} value={r.unit_cost} onChange={e => set(i, 'unit_cost', e.target.value)} /></div>
+            <div><label className={label}>{taxLabel} %</label><input className={input} value={r.tax_rate ?? ''} onChange={e => set(i, 'tax_rate', e.target.value)} placeholder={String(defaultTaxRateFor(ccy))} /></div>
             <button onClick={() => setRows(p => p.filter((_, x) => x !== i))} className="text-dim hover:text-red-600 pb-2"><Trash2 size={15} /></button>
           </div>
         ))}
         <button onClick={() => setRows(p => [...p, { product_id: '', product_name: '', category: '', qty: 1, unit_cost: '', tax_rate: '' }])}
           className="text-xs text-ember hover:text-ember-deep font-medium">+ Add line</button>
-        <div><label className={label}>Override total VAT £ (optional)</label>
-          <input className={input + ' max-w-xs'} value={taxAmount} onChange={e => setTaxAmount(e.target.value)} placeholder="auto-calculated from each product's VAT" /></div>
-        <div className="text-sm text-muted">Subtotal <b className="text-paper">{fmtGBP(subtotal)}</b> · VAT <b className="text-paper">{fmtGBP(resolvedTax)}</b> · Total <b className="text-paper">{fmtGBP(subtotal + resolvedTax)}</b>
-          <div className="text-[11px] text-dim mt-0.5">VAT is calculated per line from each product's purchase VAT rate (set on the product). Override above to match a supplier invoice. Landed unit cost locks onto received serials.</div></div>
+        <div><label className={label}>Override total {taxLabel} {sym} (optional)</label>
+          <input className={input + ' max-w-xs'} value={taxAmount} onChange={e => setTaxAmount(e.target.value)} placeholder={`auto-calculated from each line's ${taxLabel}`} /></div>
+        <div className="text-sm text-muted">Subtotal <b className="text-paper">{fmtCost(subtotal, ccy)}</b> · {taxLabel} <b className="text-paper">{fmtCost(resolvedTax, ccy)}</b> · Total <b className="text-paper">{fmtCost(subtotal + resolvedTax, ccy)}</b>
+          <div className="text-[11px] text-dim mt-0.5">{taxLabel} is calculated per line from each line's rate{ccy === CATALOGUE_CCY ? " (seeded from the product's purchase VAT rate)" : ''}. Override above to match a supplier invoice. Landed unit cost locks onto received serials.</div></div>
         <div className="flex gap-2"><button onClick={save} disabled={saving} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50">Create PO</button>
           <button onClick={onClose} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>
       </div>
@@ -264,6 +291,8 @@ function ShipmentModal({ order, suppliers, products, warehouses, allShipments, o
     ? order.lines.map(l => ({ product_id: l.product_id, product_name: l.product_name, category: l.category, max: l.qty - Math.min(shippedMap[l.product_name] || 0, l.qty), qty: l.qty - Math.min(shippedMap[l.product_name] || 0, l.qty), unit_cost: l.landed_unit_cost ?? l.unit_cost ?? '' })).filter(r => r.max > 0)
     : [{ product_id: '', product_name: '', category: '', qty: 1, unit_cost: '' }]);
   const [saving, setSaving] = useState(false);
+  // A PO shipment is in the PO's currency; a standalone one follows the supplier typed.
+  const sym = currencySymbol(supplierCurrency(suppliers, order || supplierName));
   const set = (i, k, v) => setRows(p => p.map((r, x) => x === i ? { ...r, [k]: v } : r));
   const pick = (i, id) => { const p = products.find(x => x.id === id); setRows(prev => prev.map((r, x) => x === i ? { ...r, product_id: id, product_name: p?.name || '', category: p?.inv_category || '' } : r)); };
 
@@ -310,7 +339,7 @@ function ShipmentModal({ order, suppliers, products, warehouses, allShipments, o
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select></div>
           <div><label className={label}>ETA</label><input type="date" className={input} value={eta} onChange={e => setEta(e.target.value)} /></div>
-          <div><label className={label}>Freight £ (split/unit)</label><input className={input} value={freight} onChange={e => setFreight(e.target.value)} placeholder="0" /></div>
+          <div><label className={label}>Freight {sym} (split/unit)</label><input className={input} value={freight} onChange={e => setFreight(e.target.value)} placeholder="0" /></div>
         </div>
         {rows.map((r, i) => (
           <div key={i} className="grid grid-cols-[1fr_90px_110px_32px] gap-2 items-end">
@@ -320,7 +349,7 @@ function ShipmentModal({ order, suppliers, products, warehouses, allShipments, o
                   <option value="">Select…</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>}</div>
             <div><label className={label}>Qty{order && r.max != null ? ` (max ${r.max})` : ''}</label><input type="number" min="1" max={order ? r.max : undefined} className={input} value={r.qty} onChange={e => set(i, 'qty', e.target.value)} /></div>
-            <div><label className={label}>Unit £</label><input className={input} value={r.unit_cost} onChange={e => set(i, 'unit_cost', e.target.value)} /></div>
+            <div><label className={label}>Unit {sym}</label><input className={input} value={r.unit_cost} onChange={e => set(i, 'unit_cost', e.target.value)} /></div>
             {!order && <button onClick={() => setRows(p => p.filter((_, x) => x !== i))} className="text-dim hover:text-red-600 pb-2"><Trash2 size={15} /></button>}
           </div>
         ))}
@@ -382,7 +411,9 @@ function ReceiveModal({ shipment, warehouses, profile, onClose, onSaved }) {
 }
 
 function SupplierModal({ supplier, onClose, onSaved }) {
-  const [f, setF] = useState({ name: supplier.name || '', contact_name: supplier.contact_name || '', email: supplier.email || '', phone: supplier.phone || '', notes: supplier.notes || '' });
+  // default_currency is the ONLY stored currency for this supplier's POs,
+  // shipments and landed costs, and this form is the only place it is set.
+  const [f, setF] = useState({ name: supplier.name || '', contact_name: supplier.contact_name || '', email: supplier.email || '', phone: supplier.phone || '', notes: supplier.notes || '', default_currency: supplier.default_currency || 'GBP' });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const save = async () => {
     if (!f.name.trim()) { alert('Name required'); return; }
@@ -399,6 +430,11 @@ function SupplierModal({ supplier, onClose, onSaved }) {
           <div><label className={label}>Email</label><input className={input} value={f.email} onChange={e => set('email', e.target.value)} /></div>
           <div><label className={label}>Phone</label><input className={input} value={f.phone} onChange={e => set('phone', e.target.value)} /></div>
         </div>
+        <div><label className={label}>Buys in</label>
+          <select className={input} value={f.default_currency} onChange={e => set('default_currency', e.target.value)}>
+            {CURRENCIES.map(c => <option key={c} value={c}>{c} ({currencySymbol(c)})</option>)}
+          </select>
+          <div className="text-[11px] text-dim mt-1">Sets the currency shown on this supplier's purchase orders, shipments and landed costs.</div></div>
         <div><label className={label}>Notes</label><textarea className={input + ' resize-none'} rows={2} value={f.notes} onChange={e => set('notes', e.target.value)} /></div>
         <div className="flex gap-2"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save</button>
           <button onClick={onClose} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>

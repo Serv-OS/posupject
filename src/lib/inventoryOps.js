@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { fmtMoney } from './money';
 
 // Inventory operations — ports the AIO Inventory business rules onto Postgres.
 // Current state lives on inv_serials; every change also writes an inv_movements
@@ -204,7 +205,33 @@ export function thresholdFor(thresholds, products, productName, warehouseId) {
   return p?.default_threshold ?? 3;
 }
 
+// GBP-only legacy formatter. Kept for surfaces that have no supplier context;
+// anything that can name its supplier should use fmtCost + supplierCurrency.
 export const fmtGBP = (n) => n == null ? '—' : '£' + Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ── Currency of inventory money ─────────────────────────────────────────────
+// inv_orders / inv_shipments / inv_serials carry no currency column. The only
+// stored fact about which currency a PO, shipment or landed cost was struck in
+// is the supplier's default_currency (inv_suppliers, migration 059), so every
+// inventory figure follows its supplier. GBP and USD are never converted.
+export const fmtCost = (n, ccy = 'GBP') => n == null ? '—' : fmtMoney(n, ccy);
+
+// `ref` is a row with supplier_id / supplier_name, or a plain supplier name.
+// Matched by id first, then by name (datalists store free text), else GBP.
+export function supplierCurrency(suppliers, ref) {
+  const id = typeof ref === 'object' && ref ? ref.supplier_id : null;
+  const name = String((typeof ref === 'string' ? ref : ref?.supplier_name) || '').trim().toLowerCase();
+  const s = (suppliers || []).find(x => id && x.id === id)
+    || (name && (suppliers || []).find(x => String(x.name || '').trim().toLowerCase() === name));
+  return s?.default_currency === 'USD' ? 'USD' : 'GBP';
+}
+
+// A shipment inherits its PO's currency; a standalone one follows its supplier.
+export function shipmentCurrency(shipment, orders, suppliers) {
+  const order = shipment?.order_id ? (orders || []).find(o => o.id === shipment.order_id) : null;
+  return supplierCurrency(suppliers, order || shipment);
+}
+
 export const csvExport = (rows, filename) => {
   if (!rows.length) return;
   const keys = Object.keys(rows[0]);

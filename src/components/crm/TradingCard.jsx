@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { CURRENCIES, fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { CURRENCIES, fmtMoney, fmtMoney0, currencySymbol, sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { transactionsFrom, estimateAccuracy } from '../../lib/trading';
 
@@ -20,11 +20,15 @@ const n = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null
 const txt = (v) => (v === null || v === undefined ? '' : String(v));
 const count = (v) => (v === null ? '—' : Number(v).toLocaleString('en-GB'));
 
-function Row({ label, revenue, atv, editable, onSave, fmt0 = (v) => fmtMoney0(v, 'GBP') }) {
+function Row({ label, revenue, atv, editable, onSave, ccy = 'GBP' }) {
   const [rev, setRev] = useState(txt(revenue));
   const [av, setAv] = useState(txt(atv));
   useEffect(() => { setRev(txt(revenue)); setAv(txt(atv)); }, [revenue, atv]);
 
+  // The site's currency labels the money inputs as well as the yearly figure,
+  // so a rep typing a Provo site's turnover sees they are entering dollars.
+  const sym = currencySymbol(ccy);
+  const fmt0 = (v) => fmtMoney0(v, ccy);
   const txns = transactionsFrom(rev, av);
   const input = 'w-full px-2.5 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper tabular-nums focus:outline-none focus:border-ember disabled:opacity-60';
 
@@ -33,14 +37,14 @@ function Row({ label, revenue, atv, editable, onSave, fmt0 = (v) => fmtMoney0(v,
       <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-2">{label}</div>
       <div className="grid grid-cols-3 gap-2">
         <div>
-          <div className="text-[10px] text-muted mb-1">Turnover / month</div>
+          <div className="text-[10px] text-muted mb-1">Turnover / month {sym}</div>
           <input className={input} type="number" min="0" step="100" inputMode="decimal" disabled={!editable}
             value={rev} placeholder="—"
             onChange={(e) => setRev(e.target.value)}
             onBlur={(e) => onSave?.({ revenue: n(e.target.value) })} />
         </div>
         <div>
-          <div className="text-[10px] text-muted mb-1">Avg transaction</div>
+          <div className="text-[10px] text-muted mb-1">Avg transaction {sym}</div>
           <input className={input} type="number" min="0" step="0.01" inputMode="decimal" disabled={!editable}
             value={av} placeholder="—"
             onChange={(e) => setAv(e.target.value)}
@@ -67,7 +71,6 @@ export function LocationTradingCard({ location, company, canWrite, onSaved }) {
   // A site in Provo trades in dollars. Take the country from the site, falling
   // back to its company, rather than assuming everyone is in the UK.
   const ccy = currencyForCountry(location.country || company?.country);
-  const gbp0 = (n) => fmtMoney0(n, ccy);
 
   const save = async (patch) => {
     const { error } = await supabase.from('locations')
@@ -94,13 +97,13 @@ export function LocationTradingCard({ location, company, canWrite, onSaved }) {
       <div className="p-5 space-y-3">
         {err && <div className="text-xs text-red-600">{err}</div>}
 
-        <Row label="Expected — what they told us" editable={canWrite} fmt0={gbp0}
+        <Row label="Expected — what they told us" editable={canWrite} ccy={ccy}
           revenue={location.est_monthly_revenue} atv={location.est_avg_transaction}
           onSave={({ revenue, atv }) => save(
             revenue !== undefined ? { est_monthly_revenue: revenue } : { est_avg_transaction: atv },
           )} />
 
-        <Row label="Actual — once trading" editable={canWrite} fmt0={gbp0}
+        <Row label="Actual — once trading" editable={canWrite} ccy={ccy}
           revenue={location.actual_monthly_revenue} atv={location.actual_avg_transaction}
           onSave={({ revenue, atv }) => save(
             revenue !== undefined ? { actual_monthly_revenue: revenue } : { actual_avg_transaction: atv },
@@ -191,6 +194,8 @@ export function DealTradingCard({ dealId, currency = 'GBP', canWrite, onNavigate
   const rollCcy = ccys.length === 1 ? ccys[0] : currency;
   const revCcy = over.rev !== null ? currency : rollCcy;
   const atvCcy = over.atv !== null ? currency : rollCcy;
+  // An override is typed in the deal's currency, so its inputs say which.
+  const overSym = currencySymbol(currency);
   const mixedRev = mixed && over.rev === null;
   const mixedAtv = mixed && over.atv === null;
   // Average inside each currency: pounds are never divided by dollar transactions.
@@ -242,9 +247,9 @@ export function DealTradingCard({ dealId, currency = 'GBP', canWrite, onNavigate
             <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim">Override the roll-up</div>
             <div className="grid grid-cols-2 gap-2">
               <input className="px-2.5 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper" type="number" min="0"
-                placeholder="Turnover / month" value={draft.rev} onChange={(e) => setDraft({ ...draft, rev: e.target.value })} />
+                placeholder={`Turnover / month ${overSym}`} value={draft.rev} onChange={(e) => setDraft({ ...draft, rev: e.target.value })} />
               <input className="px-2.5 py-1.5 bg-card border border-bdr rounded-lg text-sm text-paper" type="number" min="0" step="0.01"
-                placeholder="Avg transaction" value={draft.atv} onChange={(e) => setDraft({ ...draft, atv: e.target.value })} />
+                placeholder={`Avg transaction ${overSym}`} value={draft.atv} onChange={(e) => setDraft({ ...draft, atv: e.target.value })} />
             </div>
             <div className="flex gap-2">
               <button onClick={saveOverride} className="btn-glass px-4 py-1.5 rounded-xl text-xs font-semibold">Save</button>

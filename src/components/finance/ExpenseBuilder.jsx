@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
-import { round2, gbp2 } from '../../lib/money.js';
+import { round2, fmtMoney, currencySymbol, taxLabelFor } from '../../lib/money.js';
+import { currencyForCountry } from '../../lib/region';
 import { computeMileage, taxYearBounds } from '../../lib/rates.js';
 import { ytdMilesBefore, canDo, EXPENSE_ACTIONS, STATUS_LABEL, STATUS_BADGE, isApprover, PAID_BY, isCompanyPaid, buildApprovePatch } from '../../lib/expenseOps.js';
 import AttachmentsCard from '../crm/AttachmentsCard.jsx';
@@ -27,7 +28,7 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
     setExp(e);
     const [c, co, l, d, p, a, ev, att] = await Promise.all([
       supabase.from('expense_categories').select('id, label, default_tax_rate, reclaimable').eq('active', true).order('sort'),
-      supabase.from('companies').select('id, name').order('name'),
+      supabase.from('companies').select('id, name, country').order('name'),
       supabase.from('locations').select('id, name, company_id').order('name'),
       supabase.from('deals').select('id, title, company_id').order('created_at', { ascending: false }).limit(500),
       supabase.from('profiles').select('id, display_name, role').order('display_name'),
@@ -52,6 +53,16 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
 
   if (!exp) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading…</div>;
 
+  // The claim's own currency drives every symbol, label and total below. A
+  // mileage claim is GBP by construction: it is priced at HMRC AMAP pence.
+  const cur = exp.type === 'mileage' ? 'GBP' : (exp.currency || 'GBP');
+  const m = (v) => fmtMoney(v, cur);
+  const sym = currencySymbol(cur);
+  const taxLbl = taxLabelFor(cur);
+  // An unsubmitted claim follows its customer's country; once submitted the
+  // currency never changes behind anyone's back (same rule as invoices).
+  const preSubmit = ['draft', 'rejected'].includes(exp.status);
+
   const totals = exp.type === 'mileage'
     ? { net: mileage?.amount || 0, vat: 0, gross: mileage?.amount || 0 }
     : { gross: Number(exp.total || 0), vat: Number(exp.tax_amount || 0), net: round2(Number(exp.total || 0) - Number(exp.tax_amount || 0)) };
@@ -66,7 +77,7 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
       type: exp.type, category_id: exp.category_id || null, company_id: exp.company_id || null,
       location_id: exp.location_id || null, deal_id: exp.deal_id || null, cost_context: exp.cost_context || 'ongoing',
       expense_date: exp.expense_date, description: (exp.description || '').trim() || null,
-      paid_by: exp.paid_by || 'personal',
+      paid_by: exp.paid_by || 'personal', currency: cur,
       reimburse_to_user_id: exp.reimburse_to_user_id || exp.submitter_id,
       vat_reclaimable: !!exp.vat_reclaimable, has_vat_invoice: !!exp.has_vat_invoice,
       vat_reclaim_amount: exp.vat_reclaim_amount === '' || exp.vat_reclaim_amount == null ? null : Number(exp.vat_reclaim_amount),
@@ -107,7 +118,7 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
     const { error } = await supabase.from('expenses').update({ status: to, ...extra, updated_at: nowIso() }).eq('id', expenseId);
     if (!error) {
       await supabase.from('expense_events').insert({ expense_id: expenseId, actor_id: profile.id, from_status: exp.status, to_status: to, note: note || null });
-      const amt = gbp2(totals.gross);
+      const amt = m(totals.gross);
       if (action === 'submit') await notifyUsers(people.filter(p => p.role === 'owner' || p.role === 'editor').map(p => p.id), 'Expense submitted', `${profile.display_name || 'Someone'} submitted EXP-${exp.expense_number} (${amt})`);
       if (action === 'approve') await notifyUsers([exp.submitter_id, exp.reimburse_to_user_id], 'Expense approved', `Your claim EXP-${exp.expense_number} (${amt}) was approved`);
       if (action === 'reject') await notifyUsers([exp.submitter_id], 'Expense rejected', `EXP-${exp.expense_number} was rejected: ${note || 'no reason given'}`);
@@ -181,10 +192,10 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
                     <div className="glass-inner rounded-xl p-3 text-sm">
                       <div className="flex justify-between"><span className="text-muted">Tax year {ty?.label} so far</span><span className="tabular-nums">{ytd.toLocaleString('en-GB')} mi</span></div>
                       {exp.vehicle_type !== 'motorcycle' && exp.vehicle_type !== 'bicycle' && (
-                        <div className="flex justify-between text-xs text-dim"><span>{mileage.firstMiles} mi @ {mileage.firstRate}p{mileage.aboveMiles ? ` + ${mileage.aboveMiles} mi @ ${mileage.aboveRate}p` : ''}</span><span className="tabular-nums">{gbp2(mileage.mileageAmount)}</span></div>
+                        <div className="flex justify-between text-xs text-dim"><span>{mileage.firstMiles} mi @ {mileage.firstRate}p{mileage.aboveMiles ? ` + ${mileage.aboveMiles} mi @ ${mileage.aboveRate}p` : ''}</span><span className="tabular-nums">{m(mileage.mileageAmount)}</span></div>
                       )}
-                      {mileage.passengerAmount > 0 && <div className="flex justify-between text-xs text-dim"><span>{exp.passengers} passenger(s) supplement</span><span className="tabular-nums">{gbp2(mileage.passengerAmount)}</span></div>}
-                      <div className="flex justify-between font-semibold text-paper mt-1"><span>Reimbursement</span><span className="tabular-nums">{gbp2(mileage.amount)}</span></div>
+                      {mileage.passengerAmount > 0 && <div className="flex justify-between text-xs text-dim"><span>{exp.passengers} passenger(s) supplement</span><span className="tabular-nums">{m(mileage.passengerAmount)}</span></div>}
+                      <div className="flex justify-between font-semibold text-paper mt-1"><span>Reimbursement</span><span className="tabular-nums">{m(mileage.amount)}</span></div>
                     </div>
                   )}
                 </>
@@ -193,19 +204,19 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
                   <div><label className={label}>Description</label><input className={input} disabled={!editable} value={exp.description || ''} onChange={e => set('description', e.target.value)} placeholder="What was it for?" /></div>
                   <div className="grid grid-cols-3 gap-3">
                     <div><label className={label}>Date</label><input type="date" className={input} disabled={!editable} value={exp.expense_date || ''} onChange={e => set('expense_date', e.target.value)} /></div>
-                    <div><label className={label}>Amount (gross) £</label><input type="number" className={input} disabled={!editable} value={exp.total ?? ''} onChange={e => set('total', e.target.value)} /></div>
-                    <div><label className={label}>of which VAT £</label><input type="number" className={input} disabled={!editable} value={exp.tax_amount ?? ''} onChange={e => set('tax_amount', e.target.value)} /></div>
+                    <div><label className={label}>Amount (gross) {sym}</label><input type="number" className={input} disabled={!editable} value={exp.total ?? ''} onChange={e => set('total', e.target.value)} /></div>
+                    <div><label className={label}>of which {taxLbl} {sym}</label><input type="number" className={input} disabled={!editable} value={exp.tax_amount ?? ''} onChange={e => set('tax_amount', e.target.value)} /></div>
                   </div>
                 </>
               )}
             </div>
 
             <div className="glass-card rounded-2xl p-4 space-y-3">
-              <div className="text-sm font-bold text-paper">VAT reclaim</div>
-              <Check label="Valid VAT invoice / receipt held" checked={!!exp.has_vat_invoice} onChange={v => editable && set('has_vat_invoice', v)} />
-              <Check label="Input VAT reclaimable" checked={!!exp.vat_reclaimable} onChange={v => editable && set('vat_reclaimable', v)} />
-              <div><label className={label}>Reclaim amount (blank = full VAT)</label><input type="number" className={input} disabled={!editable} value={exp.vat_reclaim_amount ?? ''} onChange={e => set('vat_reclaim_amount', e.target.value)} /></div>
-              {!exp.has_vat_invoice && exp.vat_reclaimable && <div className="text-[11px] text-amber-600">⚠ Not yet reclaimable — tick "Valid VAT invoice / receipt held" once you have it.</div>}
+              <div className="text-sm font-bold text-paper">{taxLbl} reclaim</div>
+              <Check label={`Valid ${taxLbl} invoice / receipt held`} checked={!!exp.has_vat_invoice} onChange={v => editable && set('has_vat_invoice', v)} />
+              <Check label={`Input ${taxLbl} reclaimable`} checked={!!exp.vat_reclaimable} onChange={v => editable && set('vat_reclaimable', v)} />
+              <div><label className={label}>Reclaim amount (blank = full {taxLbl})</label><input type="number" className={input} disabled={!editable} value={exp.vat_reclaim_amount ?? ''} onChange={e => set('vat_reclaim_amount', e.target.value)} /></div>
+              {!exp.has_vat_invoice && exp.vat_reclaimable && <div className="text-[11px] text-amber-600">⚠ Not yet reclaimable — tick "Valid {taxLbl} invoice / receipt held" once you have it.</div>}
             </div>
 
             <AttachmentsCard subjectType="expense" subjectId={expenseId} profile={profile} />
@@ -231,19 +242,25 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
           <div className="col-span-5 space-y-4">
             <div className="glass-card rounded-2xl p-4">
               <div className="text-sm font-bold text-paper mb-1">Total</div>
-              <Row k="Net" v={gbp2(totals.net)} />
-              <Row k="VAT" v={gbp2(totals.vat)} />
-              <Row k="Claim total" v={gbp2(totals.gross)} bold />
+              <Row k="Net" v={m(totals.net)} />
+              <Row k={taxLbl} v={m(totals.vat)} />
+              <Row k="Claim total" v={m(totals.gross)} bold />
             </div>
             <div className="glass-card rounded-2xl p-4 space-y-3">
               <div className="text-sm font-bold text-paper">Details</div>
               <div><label className={label}>Category</label>
                 <select className={input} disabled={!editable} value={exp.category_id || ''} onChange={e => set('category_id', e.target.value || null)}>
                   <option value="">—</option>{cats.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div>
+              <div><label className={label}>Currency</label>
+                <select className={input} disabled={!editable || exp.type === 'mileage'} value={cur} onChange={e => set('currency', e.target.value)}>
+                  <option value="GBP">GBP £ (UK — VAT)</option>
+                  <option value="USD">USD $ (US — sales tax)</option>
+                </select>
+                {exp.type === 'mileage' && <div className="text-[10px] text-dim mt-1">Mileage is paid at HMRC rates, so it is always in pounds.</div>}</div>
               <div><label className={label}>Paid by</label>
                 <select className={input} disabled={!editable} value={exp.paid_by || 'personal'} onChange={e => set('paid_by', e.target.value)}>
                   {Object.entries(PAID_BY).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-                {isCompanyPaid(exp) && <div className="text-[10px] text-dim mt-1">Recorded for VAT &amp; reporting only — it won't appear in a reimbursement run.</div>}</div>
+                {isCompanyPaid(exp) && <div className="text-[10px] text-dim mt-1">Recorded for {taxLbl} &amp; reporting only — it won't appear in a reimbursement run.</div>}</div>
               {!isCompanyPaid(exp) && (
                 <div><label className={label}>Reimburse to</label>
                   <select className={input} disabled={!isApprover(profile) && !editable} value={exp.reimburse_to_user_id || exp.submitter_id || ''} onChange={e => set('reimburse_to_user_id', e.target.value)}>
@@ -253,7 +270,12 @@ export default function ExpenseBuilder({ expenseId, profile, onClose, onNavigate
                 <div className="flex gap-1 bg-card rounded-xl p-0.5">
                   {['ongoing', 'deal'].map(c => <button key={c} disabled={!editable} onClick={() => set('cost_context', c)} className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold ${exp.cost_context === c ? 'bg-ember text-white' : 'text-muted'}`}>{c === 'deal' ? 'Deal cost' : 'Ongoing'}</button>)}</div></div>
               <div><label className={label}>Customer</label>
-                <select className={input} disabled={!editable} value={exp.company_id || ''} onChange={e => { set('company_id', e.target.value || null); set('location_id', null); }}>
+                <select className={input} disabled={!editable} value={exp.company_id || ''} onChange={e => {
+                  const id = e.target.value || null;
+                  set('company_id', id); set('location_id', null);
+                  // No site is picked on a claim, so the company's country decides.
+                  if (id && preSubmit) set('currency', currencyForCountry(companies.find(c => c.id === id)?.country));
+                }}>
                   <option value="">—</option>{companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
               <div><label className={label}>Deal</label>
                 <select className={input} disabled={!editable} value={exp.deal_id || ''} onChange={e => set('deal_id', e.target.value || null)}>

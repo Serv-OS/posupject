@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { MobileTable, MobileDock, DockField, Mono } from '../crm/ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Receipt as ReceiptText, Plus, Truck as Car, ChevronRight, Check, X, Download } from 'lucide-react';
-import { gbp2 } from '../../lib/money.js';
+import { fmtMoney, sumByCurrency, fmtByCurrency, taxLabelFor, CURRENCIES } from '../../lib/money.js';
 import { isApprover, STATUS_LABEL, STATUS_BADGE, PAID_BY_SHORT, isCompanyPaid,
   buildApprovePatch, personOf, expenseMatches, sumExpenses } from '../../lib/expenseOps.js';
 
@@ -21,6 +21,26 @@ const Stat = ({ label, value, sub }) => (
 const Detail = ({ k, v }) => (
   <div><div className="text-[9px] font-mono uppercase tracking-wider text-dim">{k}</div><div className="text-paper">{v ?? '—'}</div></div>
 );
+
+// A claim formats in its OWN currency. GBP and USD are never added together,
+// so every total below is a { GBP, USD } map rendered by fmtByCurrency.
+const rowMoney = (r, v) => fmtMoney(v, r.currency || 'GBP');
+const totalOf = (list) => sumByCurrency(list, r => r.total);
+// sumExpenses once per currency, so the reclaim rule stays in expenseOps.
+const sumsOf = (list) => {
+  const by = {};
+  for (const c of CURRENCIES) {
+    const part = (list || []).filter(r => (r.currency || 'GBP') === c);
+    if (part.length) by[c] = sumExpenses(part);
+  }
+  return { count: (list || []).length, by };
+};
+const pick = (s, k) => Object.fromEntries(Object.entries(s.by).map(([c, t]) => [c, t[k]]));
+const fmtSum = (s, k) => fmtByCurrency(pick(s, k));
+// Rank by GBP, then USD: an order without ever adding the two.
+const byAmountDesc = (a, b) => (b.GBP || 0) - (a.GBP || 0) || (b.USD || 0) - (a.USD || 0);
+// 'VAT', 'Sales tax', or both when the rows in view are mixed.
+const taxWordFor = (list) => CURRENCIES.filter(c => (list || []).some(r => (r.currency || 'GBP') === c)).map(taxLabelFor).join(' / ') || 'VAT';
 
 export default function ExpensesPanel({ profile, onNavigate }) {
   const approver = isApprover(profile);
@@ -78,7 +98,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
     .map(id => ({ id, name: nameOf(id) })).sort((a, b) => a.name.localeCompare(b.name));
 
   const selected = list.filter(r => sel.has(r.id));
-  const selTotal = selected.reduce((a, r) => a + Number(r.total || 0), 0);
+  const selTotal = totalOf(selected);
   const toggle = (id) => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allShown = list.length > 0 && list.every(r => sel.has(r.id));
   const toggleAll = () => setSel(allShown ? new Set() : new Set(list.map(r => r.id)));
@@ -93,9 +113,9 @@ export default function ExpensesPanel({ profile, onNavigate }) {
     const card = targets.filter(isCompanyPaid);
     const reimb = targets.filter(r => !isCompanyPaid(r));
     const lines = [
-      `Approve ${targets.length} claim${targets.length === 1 ? '' : 's'} totalling ${gbp2(targets.reduce((a, r) => a + Number(r.total || 0), 0))}?`, '',
-      reimb.length ? `• ${reimb.length} personal (${gbp2(reimb.reduce((a, r) => a + Number(r.total || 0), 0))}) — approved, then owed back in a pay run` : null,
-      card.length ? `• ${card.length} company card (${gbp2(card.reduce((a, r) => a + Number(r.total || 0), 0))}) — closed as paid, nothing to reimburse` : null,
+      `Approve ${targets.length} claim${targets.length === 1 ? '' : 's'} totalling ${fmtByCurrency(totalOf(targets))}?`, '',
+      reimb.length ? `• ${reimb.length} personal (${fmtByCurrency(totalOf(reimb))}) — approved, then owed back in a pay run` : null,
+      card.length ? `• ${card.length} company card (${fmtByCurrency(totalOf(card))}) — closed as paid, nothing to reimburse` : null,
     ].filter(Boolean).join('\n');
     if (!confirm(lines)) return;
     setBusy(true);
@@ -149,7 +169,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
     if (error) { alert(error.message); return; }
     load();
   };
-  const owedToMe = mine.filter(r => r.status === 'approved' && !isCompanyPaid(r)).reduce((s, r) => s + Number(r.total || 0), 0);
+  const owedToMe = totalOf(mine.filter(r => r.status === 'approved' && !isCompanyPaid(r)));
 
   // ── Reimbursement run: approved claims grouped by who gets paid back ──
   const personName = (id) => { const m = members.find(u => u.id === id); return m ? (m.display_name || m.email?.split('@')[0]) : 'Unknown'; };
@@ -159,14 +179,14 @@ export default function ExpensesPanel({ profile, onNavigate }) {
   const runnable = rows.filter(r => r.status === 'approved' && !isCompanyPaid(r) && inRunWindow(r));
   // Company-card spend in the same window: recorded (and VAT-reclaimed), nothing to pay.
   const companyPaid = rows.filter(r => isCompanyPaid(r) && ['approved', 'paid'].includes(r.status) && inRunWindow(r));
-  const companyPaidTotal = companyPaid.reduce((s, r) => s + Number(r.total || 0), 0);
+  const companyPaidTotal = totalOf(companyPaid);
   const runGroups = (() => {
     const m = new Map();
     for (const r of runnable) { const k = r.reimburse_to_user_id || r.submitter_id; if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
-    return [...m.entries()].map(([id, list2]) => ({ id, list: list2, total: list2.reduce((s, r) => s + Number(r.total || 0), 0) }))
-      .sort((a, b) => b.total - a.total);
+    return [...m.entries()].map(([id, list2]) => ({ id, list: list2, total: totalOf(list2) }))
+      .sort((a, b) => byAmountDesc(a.total, b.total));
   })();
-  const runTotal = runGroups.reduce((s, g) => s + g.total, 0);
+  const runTotal = totalOf(runnable);
 
   // ── Report ────────────────────────────────────────────────────────────────
   // The question this answers is "does what we recorded match what actually
@@ -176,10 +196,11 @@ export default function ExpensesPanel({ profile, onNavigate }) {
   // is the usual reason a total does not tie out.
   const [groupBy, setGroupBy] = useState('person');
   const reportRows = rows.filter(r => r.status !== 'draft' && expenseMatches(r, f));
-  const rTot = sumExpenses(reportRows);
-  const rCard = sumExpenses(reportRows.filter(isCompanyPaid));
-  const rPersonal = sumExpenses(reportRows.filter(r => !isCompanyPaid(r)));
-  const rPending = sumExpenses(reportRows.filter(r => r.status === 'submitted'));
+  const rTot = sumsOf(reportRows);
+  const rCard = sumsOf(reportRows.filter(isCompanyPaid));
+  const rPersonal = sumsOf(reportRows.filter(r => !isCompanyPaid(r)));
+  const rPending = sumsOf(reportRows.filter(r => r.status === 'submitted'));
+  const taxWord = taxWordFor(reportRows);
   const catLabel = (r) => r.category?.label || 'Uncategorised';
   const groupKey = (r) => groupBy === 'person' ? nameOf(personOf(r))
     : groupBy === 'category' ? catLabel(r)
@@ -187,7 +208,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
   const groups = (() => {
     const m = new Map();
     for (const r of reportRows) { const k = groupKey(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
-    return [...m.entries()].map(([k, l]) => ({ k, ...sumExpenses(l) })).sort((a, b) => b.gross - a.gross);
+    return [...m.entries()].map(([k, l]) => ({ k, ...sumsOf(l) })).sort((a, b) => byAmountDesc(pick(a, 'gross'), pick(b, 'gross')));
   })();
 
   const rangeLabel = f.from || f.to ? `${f.from || 'start'} to ${f.to || 'today'}` : 'all dates';
@@ -199,10 +220,10 @@ export default function ExpensesPanel({ profile, onNavigate }) {
     setRange(`${y}-04-06`, `${y + 1}-04-05`); };
 
   const exportReport = () => {
-    const head = ['Ref', 'Date', 'Person', 'Category', 'Type', 'Paid by', 'Description', 'Net', 'VAT', 'Total', 'VAT reclaim', 'Status'];
+    const head = ['Ref', 'Date', 'Person', 'Category', 'Type', 'Paid by', 'Description', 'Currency', 'Net', taxWord, 'Total', `${taxWord} reclaim`, 'Status'];
     const body = reportRows.map(r => [`EXP-${r.expense_number}`, r.expense_date, nameOf(personOf(r)), catLabel(r), r.type,
       isCompanyPaid(r) ? 'Company card' : 'Personal', r.description || (r.type === 'mileage' ? `${r.from_location || '?'} to ${r.to_location || '?'}` : ''),
-      Number(r.subtotal || 0).toFixed(2), Number(r.tax_amount || 0).toFixed(2), Number(r.total || 0).toFixed(2),
+      r.currency || 'GBP', Number(r.subtotal || 0).toFixed(2), Number(r.tax_amount || 0).toFixed(2), Number(r.total || 0).toFixed(2),
       r.vat_reclaimable ? Number(r.vat_reclaim_amount ?? r.tax_amount ?? 0).toFixed(2) : '0.00', r.status]);
     const csv = [head, ...body].map(row => row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -218,19 +239,19 @@ export default function ExpensesPanel({ profile, onNavigate }) {
     if (f.categoryId) filters.push(`Category: ${cats.find(c => c.id === f.categoryId)?.label || ''}`);
     await downloadListPdf({
       title: 'Expenses',
-      columns: ['Ref', 'Date', 'Person', 'Category', 'Paid by', 'Description', 'Net', 'VAT', 'Total', 'Status'],
+      columns: ['Ref', 'Date', 'Person', 'Category', 'Paid by', 'Description', 'Net', taxWord, 'Total', 'Status'],
       rows: reportRows.map(r => [`EXP-${r.expense_number}`, fmtD(r.expense_date), nameOf(personOf(r)), catLabel(r),
         isCompanyPaid(r) ? 'Company card' : 'Personal',
         r.description || (r.type === 'mileage' ? `${r.from_location || '?'} to ${r.to_location || '?'}` : ''),
-        gbp2(r.subtotal), gbp2(r.tax_amount), gbp2(r.total), STATUS_LABEL[r.status]]),
+        rowMoney(r, r.subtotal), rowMoney(r, r.tax_amount), rowMoney(r, r.total), STATUS_LABEL[r.status]]),
       filters,
-      footNote: `Company card ${gbp2(rCard.gross)}  ·  Personal ${gbp2(rPersonal.gross)}  ·  Total ${gbp2(rTot.gross)}  ·  Reclaimable VAT ${gbp2(rTot.reclaimable)}`,
+      footNote: `Company card ${fmtSum(rCard, 'gross')}  ·  Personal ${fmtSum(rPersonal, 'gross')}  ·  Total ${fmtSum(rTot, 'gross')}  ·  Reclaimable ${taxWord} ${fmtSum(rTot, 'reclaimable')}`,
       filename: `expenses-${f.from || 'all'}-to-${f.to || 'today'}.pdf`,
     });
   };
 
   const payRun = async (ids, label, total) => {
-    if (!confirm(`Mark ${ids.length} expense${ids.length === 1 ? '' : 's'} (${gbp2(total)}) as paid to ${label}?\n\nThey'll be closed against run RUN-${runMonth}.`)) return;
+    if (!confirm(`Mark ${ids.length} expense${ids.length === 1 ? '' : 's'} (${fmtByCurrency(total)}) as paid to ${label}?\n\nThey'll be closed against run RUN-${runMonth}.`)) return;
     setPaying(true);
     const { error } = await supabase.from('expenses').update({
       status: 'paid', paid_at: new Date().toISOString(),
@@ -243,8 +264,8 @@ export default function ExpensesPanel({ profile, onNavigate }) {
 
   const exportRun = () => {
     const data = runGroups.flatMap(g => g.list.map(r => [personName(g.id), `EXP-${r.expense_number}`, r.expense_date, r.type,
-      r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : ''), r.total]));
-    const csv = [['Pay to', 'Ref', 'Date', 'Type', 'Description', 'Total'].join(','),
+      r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : ''), r.currency || 'GBP', r.total]));
+    const csv = [['Pay to', 'Ref', 'Date', 'Type', 'Description', 'Currency', 'Total'].join(','),
       ...data.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `expense-run-${runMonth}.csv`; a.click();
@@ -255,7 +276,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
       <div className="lg:hidden flex-1 min-h-0 flex flex-col">
         <div className="px-[18px] pt-3 pb-2.5">
           <div className="font-display text-[23px] font-extrabold text-paper">Expenses</div>
-          <Mono className="!tracking-[.18em] uppercase">{list.length} claims · {gbp2(list.reduce((s, r) => s + Number(r.total || 0), 0))}</Mono>
+          <Mono className="!tracking-[.18em] uppercase">{list.length} claims · {fmtByCurrency(totalOf(list))}</Mono>
         </div>
         <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
           <MobileTable storageKey="expenses.mobile" rows={list} onRow={(r) => onNavigate?.('expense', r.id)} empty="No claims yet."
@@ -263,7 +284,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
               { key: 'what', label: 'Claim', pinned: true, render: (r) => r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim') },
               { key: 'number', label: 'Number', mono: true, render: (r) => `EXP-${r.expense_number}` },
               { key: 'date', label: 'Date', render: (r) => fmtD(r.expense_date) },
-              { key: 'total', label: 'Total', align: 'right', mono: true, render: (r) => gbp2(r.total) },
+              { key: 'total', label: 'Total', align: 'right', mono: true, render: (r) => rowMoney(r, r.total) },
               { key: 'status', label: 'Status', render: (r) => String(r.status || '').replace(/_/g, ' ') },
               { key: 'type', label: 'Type', render: (r) => r.type || 'expense' },
               { key: 'who', label: 'Submitted by', render: (r) => r.submitter?.display_name || '—' },
@@ -272,7 +293,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
             card={(r) => {
               const st = r.status || 'draft';
               const chip = st === 'rejected' ? { text: 'Rejected', tone: 'coral' } : st === 'submitted' ? { text: 'Awaiting approval', tone: 'amber' } : st === 'approved' ? { text: 'Approved', tone: 'primary' } : st === 'paid' ? { text: 'Paid', tone: 'primary' } : { text: st.replace(/_/g, ' '), tone: 'muted' };
-              return { title: r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim'), amount: gbp2(r.total), chip, meta: [`EXP-${r.expense_number}`, fmtD(r.expense_date), r.submitter?.display_name].filter(Boolean).join(' · ') };
+              return { title: r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim'), amount: rowMoney(r, r.total), chip, meta: [`EXP-${r.expense_number}`, fmtD(r.expense_date), r.submitter?.display_name].filter(Boolean).join(' · ') };
             }} />
         </div>
         {typeof newExpense === 'function' && <MobileDock><DockField onClick={newExpense}>New claim, or scan a receipt</DockField></MobileDock>}
@@ -308,7 +329,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                   Include older unpaid claims
                 </button>
                 <div className="ml-auto flex items-center gap-2">
-                  <span className="text-sm text-paper">Run total <span className="font-bold tabular-nums text-emerald-600">{gbp2(runTotal)}</span></span>
+                  <span className="text-sm text-paper">Run total <span className="font-bold tabular-nums text-emerald-600">{fmtByCurrency(runTotal)}</span></span>
                   <button onClick={exportRun} disabled={!runnable.length} className="px-3 py-1.5 text-xs text-muted border border-bdr rounded hover:text-paper disabled:opacity-40">Export CSV</button>
                   <button onClick={() => payRun(runnable.map(r => r.id), 'everyone in this run', runTotal)} disabled={!runnable.length || paying}
                     className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200 disabled:opacity-40">
@@ -322,7 +343,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                     <h3 className="text-[13px] font-bold text-paper">{personName(g.id)}</h3>
                     <span className="text-xs text-dim font-mono">({g.list.length})</span>
                     <div className="ml-auto flex items-center gap-3">
-                      <span className="text-sm font-bold tabular-nums text-paper">{gbp2(g.total)}</span>
+                      <span className="text-sm font-bold tabular-nums text-paper">{fmtByCurrency(g.total)}</span>
                       <button onClick={() => payRun(g.list.map(r => r.id), personName(g.id), g.total)} disabled={paying}
                         className="px-3 py-1 text-xs font-semibold rounded-lg bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200 disabled:opacity-40">Mark paid</button>
                     </div>
@@ -334,7 +355,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                         <span className="flex-1 text-paper truncate">{r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim')}</span>
                         {r.expense_date < monthStart && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">older</span>}
                         <span className="text-[10px] text-dim font-mono">EXP-{r.expense_number} · {fmtD(r.expense_date)}</span>
-                        <span className="tabular-nums font-semibold text-paper w-20 text-right">{gbp2(r.total)}</span>
+                        <span className="tabular-nums font-semibold text-paper w-20 text-right">{rowMoney(r, r.total)}</span>
                       </div>
                     ))}
                   </div>
@@ -347,7 +368,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                   <div className="px-5 py-3 border-b border-bdr flex items-center gap-2">
                     <h3 className="text-[13px] font-bold text-paper">Company card — nothing to pay</h3>
                     <span className="text-xs text-dim font-mono">({companyPaid.length})</span>
-                    <span className="ml-auto text-sm font-bold tabular-nums text-muted">{gbp2(companyPaidTotal)}</span>
+                    <span className="ml-auto text-sm font-bold tabular-nums text-muted">{fmtByCurrency(companyPaidTotal)}</span>
                   </div>
                   <div className="divide-y divide-bdr/60">
                     {companyPaid.map(r => (
@@ -355,11 +376,11 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                         <span className="shrink-0 text-dim">{r.type === 'mileage' ? <Car size={14} /> : <ReceiptText size={14} />}</span>
                         <span className="flex-1 text-paper truncate">{r.description || (r.type === 'mileage' ? `${r.from_location || '?'} → ${r.to_location || '?'}` : 'Expense claim')}</span>
                         <span className="text-[10px] text-dim font-mono">{r.submitter?.display_name || ''} · EXP-{r.expense_number} · {fmtD(r.expense_date)}</span>
-                        <span className="tabular-nums text-muted w-20 text-right">{gbp2(r.total)}</span>
+                        <span className="tabular-nums text-muted w-20 text-right">{rowMoney(r, r.total)}</span>
                       </div>
                     ))}
                   </div>
-                  <div className="px-5 py-2 border-t border-bdr text-[11px] text-dim">Already settled by the company — still counted for VAT and reporting.</div>
+                  <div className="px-5 py-2 border-t border-bdr text-[11px] text-dim">Already settled by the company — still counted for {taxWordFor(companyPaid)} and reporting.</div>
                 </div>
               )}
             </>
@@ -367,7 +388,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
           {tab === 'mine' && (
             <div className="glass-card rounded-2xl p-4">
               <div className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim mb-1">Approved, awaiting payment</div>
-              <div className="text-2xl font-bold tabular-nums text-emerald-600">{gbp2(owedToMe)}</div>
+              <div className="text-2xl font-bold tabular-nums text-emerald-600">{fmtByCurrency(owedToMe)}</div>
             </div>
           )}
           {tab === 'report' && approver && (
@@ -407,14 +428,14 @@ export default function ExpensesPanel({ profile, onNavigate }) {
               {/* Split by who paid, because that is what you reconcile against:
                   card spend to the card statement, personal to the pay run. */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Stat label="Total" value={gbp2(rTot.gross)} sub={`${rTot.count} claim${rTot.count === 1 ? '' : 's'}`} />
-                <Stat label="On the company card" value={gbp2(rCard.gross)} sub={`${rCard.count} · match to the statement`} />
-                <Stat label="Personal, reimbursed" value={gbp2(rPersonal.gross)} sub={`${rPersonal.count} · match to the pay run`} />
-                <Stat label="Reclaimable VAT" value={gbp2(rTot.reclaimable)} sub={`of ${gbp2(rTot.tax)} VAT charged`} />
+                <Stat label="Total" value={fmtSum(rTot, 'gross')} sub={`${rTot.count} claim${rTot.count === 1 ? '' : 's'}`} />
+                <Stat label="On the company card" value={fmtSum(rCard, 'gross')} sub={`${rCard.count} · match to the statement`} />
+                <Stat label="Personal, reimbursed" value={fmtSum(rPersonal, 'gross')} sub={`${rPersonal.count} · match to the pay run`} />
+                <Stat label={`Reclaimable ${taxWord}`} value={fmtSum(rTot, 'reclaimable')} sub={`of ${fmtSum(rTot, 'tax')} ${taxWord} charged`} />
               </div>
               {rPending.count > 0 && (
                 <div className="glass-card rounded-2xl p-3 text-xs text-amber-700 bg-amber-50/60 border border-amber-200">
-                  <b>{rPending.count}</b> claim{rPending.count === 1 ? '' : 's'} worth <b>{gbp2(rPending.gross)}</b> in this range
+                  <b>{rPending.count}</b> claim{rPending.count === 1 ? '' : 's'} worth <b>{fmtSum(rPending, 'gross')}</b> in this range
                   are still awaiting approval, so they are counted above but have not been settled. That is the usual reason a total does not tie out.
                 </div>
               )}
@@ -437,7 +458,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                         <th className="text-left px-5 py-2 font-medium">{groupBy === 'person' ? 'Person' : groupBy === 'category' ? 'Category' : 'Paid by'}</th>
                         <th className="text-right px-3 py-2 font-medium">Claims</th>
                         <th className="text-right px-3 py-2 font-medium">Net</th>
-                        <th className="text-right px-3 py-2 font-medium">VAT</th>
+                        <th className="text-right px-3 py-2 font-medium">{taxWord}</th>
                         <th className="text-right px-3 py-2 font-medium">Reclaimable</th>
                         <th className="text-right px-5 py-2 font-medium">Total</th>
                       </tr>
@@ -448,27 +469,27 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                         <tr key={g.k} className="border-b border-bdr/60 last:border-0">
                           <td className="px-5 py-2.5 text-paper">{g.k}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-muted">{g.count}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-muted">{gbp2(g.net)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-muted">{gbp2(g.tax)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-muted">{gbp2(g.reclaimable)}</td>
-                          <td className="px-5 py-2.5 text-right tabular-nums font-semibold text-paper">{gbp2(g.gross)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-muted">{fmtSum(g, 'net')}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-muted">{fmtSum(g, 'tax')}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-muted">{fmtSum(g, 'reclaimable')}</td>
+                          <td className="px-5 py-2.5 text-right tabular-nums font-semibold text-paper">{fmtSum(g, 'gross')}</td>
                         </tr>
                       ))}
                       {groups.length > 0 && (
                         <tr className="border-t border-bdr bg-card/40">
                           <td className="px-5 py-2.5 font-bold text-paper">Total</td>
                           <td className="px-3 py-2.5 text-right tabular-nums font-bold text-paper">{rTot.count}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums font-bold text-paper">{gbp2(rTot.net)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums font-bold text-paper">{gbp2(rTot.tax)}</td>
-                          <td className="px-3 py-2.5 text-right tabular-nums font-bold text-paper">{gbp2(rTot.reclaimable)}</td>
-                          <td className="px-5 py-2.5 text-right tabular-nums font-bold text-paper">{gbp2(rTot.gross)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-bold text-paper">{fmtSum(rTot, 'net')}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-bold text-paper">{fmtSum(rTot, 'tax')}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-bold text-paper">{fmtSum(rTot, 'reclaimable')}</td>
+                          <td className="px-5 py-2.5 text-right tabular-nums font-bold text-paper">{fmtSum(rTot, 'gross')}</td>
                         </tr>
                       )}
                     </tbody>
                   </table>
                 </div>
                 <div className="px-5 py-2 border-t border-bdr text-[11px] text-dim">
-                  Drafts are excluded: nobody has claimed them yet. Reclaimable VAT counts only claims marked reclaimable with a VAT invoice held.
+                  Drafts are excluded: nobody has claimed them yet. Reclaimable {taxWord} counts only claims marked reclaimable with a {taxWord} invoice held.
                 </div>
               </div>
             </>
@@ -479,7 +500,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
             <div className="px-5 py-3 border-b border-bdr flex items-center gap-2 flex-wrap">
               <h3 className="text-[13px] font-bold text-paper">{tab === 'mine' ? 'My claims' : tab === 'approve' ? 'Awaiting approval' : 'All claims'}</h3>
               <span className="text-xs text-dim font-mono">({list.length}{fActive && base.length !== list.length ? ` of ${base.length}` : ''})</span>
-              <span className="ml-auto text-xs text-muted tabular-nums">{gbp2(sumExpenses(list).gross)}</span>
+              <span className="ml-auto text-xs text-muted tabular-nums">{fmtByCurrency(totalOf(list))}</span>
             </div>
 
             {/* Filters. Person is who the claim is FOR, which is not always who
@@ -523,7 +544,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                 says how much money it is about to move. */}
             {approver && tab !== 'mine' && selected.length > 0 && (
               <div className="px-5 py-2.5 border-b border-bdr bg-ember/10 flex items-center gap-3 flex-wrap">
-                <span className="text-xs font-semibold text-paper">{selected.length} selected · {gbp2(selTotal)}</span>
+                <span className="text-xs font-semibold text-paper">{selected.length} selected · {fmtByCurrency(selTotal)}</span>
                 <button onClick={bulkApprove} disabled={busy || !selected.some(r => r.status === 'submitted')}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200 disabled:opacity-40">
                   Approve {selected.filter(r => r.status === 'submitted').length}
@@ -564,7 +585,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                         <div className="text-[10px] text-dim">EXP-{r.expense_number} · {fmtD(r.expense_date)}{tab !== 'mine' ? ` · ${nameOf(personOf(r))}` : ''}{r.category?.label ? ` · ${r.category.label}` : ''}</div>
                       </div>
                       {isCompanyPaid(r) && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 shrink-0">{PAID_BY_SHORT.company_card}</span>}
-                      <div className="text-sm font-semibold text-paper tabular-nums shrink-0">{gbp2(r.total)}</div>
+                      <div className="text-sm font-semibold text-paper tabular-nums shrink-0">{rowMoney(r, r.total)}</div>
                       {approver && r.status === 'submitted' ? (
                         <div className="flex items-center gap-1 shrink-0">
                           <button onClick={() => rowAct(r, 'approve')} disabled={busy} title={isCompanyPaid(r) ? 'Approve — company card, closes as paid' : 'Approve'}
@@ -582,10 +603,10 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                         <Detail k="Reimburse to" v={r.reimburse_to_user_id ? nameOf(r.reimburse_to_user_id) : '—'} />
                         <Detail k="Paid by" v={isCompanyPaid(r) ? 'Company card' : 'Personal'} />
                         <Detail k="Category" v={r.category?.label} />
-                        <Detail k="Net" v={gbp2(r.subtotal)} />
-                        <Detail k="VAT" v={gbp2(r.tax_amount)} />
-                        <Detail k="Total" v={gbp2(r.total)} />
-                        <Detail k="VAT reclaim" v={r.vat_reclaimable ? gbp2(r.vat_reclaim_amount ?? r.tax_amount) : 'Not reclaimable'} />
+                        <Detail k="Net" v={rowMoney(r, r.subtotal)} />
+                        <Detail k={taxLabelFor(r.currency)} v={rowMoney(r, r.tax_amount)} />
+                        <Detail k="Total" v={rowMoney(r, r.total)} />
+                        <Detail k={`${taxLabelFor(r.currency)} reclaim`} v={r.vat_reclaimable ? rowMoney(r, r.vat_reclaim_amount ?? r.tax_amount) : 'Not reclaimable'} />
                         {r.type === 'mileage' && <>
                           <Detail k="Journey" v={`${r.from_location || '?'} → ${r.to_location || '?'}`} />
                           <Detail k="Miles" v={r.miles} />
@@ -593,7 +614,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
                           <Detail k="Purpose" v={r.purpose} />
                         </>}
                         {r.type !== 'mileage' && !r.has_vat_invoice && (
-                          <div className="col-span-2 text-amber-600">No VAT invoice held, so this one cannot be reclaimed.</div>
+                          <div className="col-span-2 text-amber-600">No {taxLabelFor(r.currency)} invoice held, so this one cannot be reclaimed.</div>
                         )}
                         {r.notes && <div className="col-span-2 md:col-span-4 text-muted">{r.notes}</div>}
                         {r.status === 'rejected' && r.rejection_reason && (

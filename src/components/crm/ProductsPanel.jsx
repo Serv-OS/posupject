@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { INV_CATEGORIES } from '../../lib/inventoryOps';
 import { supabase } from '../../lib/supabase';
+import { fmtMoney, fmtMoney0, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 
 const CATEGORIES = [
   { key: 'hardware', label: 'Hardware', icon: '\u{1F5A5}\u{FE0F}' },
@@ -11,7 +12,16 @@ const CATEGORIES = [
 const CAT_LABEL = Object.fromEntries(CATEGORIES.map(c => [c.key, c.label]));
 const BILLING = { one_off: 'One-off', monthly: 'Monthly', annual: 'Annual', usage: 'Usage' };
 
-const blank = { name: '', description: '', sku: '', category: 'hardware', billing_type: 'one_off', default_price: '', cost_price: '', cost_tax_rate: 20, unit: '', active: true, track_inventory: false, inv_category: '', default_threshold: '', supplier_id: '' };
+// The catalogue has ONE price column and no currency (migration 019), so every
+// price on this screen is pounds by construction and is labelled as such rather
+// than guessed at. A USD quote or invoice never copies it: InvoicesPanel and
+// QuoteBuilder mirror this CATALOGUE_CCY and blank the price on a $ document.
+// A per-currency product price is the real fix and needs DDL.
+const CATALOGUE_CCY = 'GBP';
+const SYM = currencySymbol(CATALOGUE_CCY);
+const TAX = taxLabelFor(CATALOGUE_CCY);
+
+const blank = { name: '', description: '', sku: '', category: 'hardware', billing_type: 'one_off', default_price: '', cost_price: '', cost_tax_rate: defaultTaxRateFor(CATALOGUE_CCY), unit: '', active: true, track_inventory: false, inv_category: '', default_threshold: '', supplier_id: '' };
 
 export default function ProductsPanel({ profile }) {
   const [products, setProducts] = useState([]);
@@ -43,7 +53,7 @@ export default function ProductsPanel({ profile }) {
   };
 
   const startNew = () => { setDraft(blank); setEditing('new'); };
-  const startEdit = (p) => { setDraft({ ...p, default_price: p.default_price ?? '', cost_price: p.cost_price ?? '', cost_tax_rate: p.cost_tax_rate ?? 20 }); setEditing(p.id); };
+  const startEdit = (p) => { setDraft({ ...p, default_price: p.default_price ?? '', cost_price: p.cost_price ?? '', cost_tax_rate: p.cost_tax_rate ?? defaultTaxRateFor(CATALOGUE_CCY) }); setEditing(p.id); };
 
   const save = async () => {
     if (!draft.name.trim()) { alert('Name is required.'); return; }
@@ -65,7 +75,9 @@ export default function ProductsPanel({ profile }) {
   };
   const remove = async (p) => { if (!confirm(`Delete product "${p.name}"?`)) return; const { error } = await supabase.from('products').delete().eq('id', p.id); if (error) { alert('Could not delete: ' + error.message); return; } load(); };
 
-  const money = (v) => `£${Number(v || 0).toLocaleString('en-GB', { minimumFractionDigits: 0 })}`;
+  // Whole pounds print whole (£299) and anything else at 2dp (£12.50); the old
+  // hand-rolled formatter printed £12.5.
+  const money = (v) => (Number.isInteger(Number(v || 0)) ? fmtMoney0(v, CATALOGUE_CCY) : fmtMoney(v, CATALOGUE_CCY));
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
@@ -74,7 +86,7 @@ export default function ProductsPanel({ profile }) {
       <div className="px-6 py-4 border-b border-bdr flex items-center justify-between">
         <div>
           <div className="text-lg font-bold text-paper">Products</div>
-          <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">{products.length} items in your catalogue</div>
+          <div className="text-[10px] text-dim font-mono uppercase tracking-[0.18em]">{products.length} items in your catalogue · {CATALOGUE_CCY} list prices</div>
         </div>
         {canWrite && editing === null && (
           <button onClick={startNew} className="px-3 py-1.5 bg-ember text-white text-sm font-semibold rounded-xl hover:bg-ember-deep transition">+ New product</button>
@@ -92,20 +104,21 @@ export default function ProductsPanel({ profile }) {
                   {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</select></div>
                 <div><label className={label}>Billing</label><select className={input} value={draft.billing_type} onChange={e => setDraft({ ...draft, billing_type: e.target.value })}>
                   {Object.entries(BILLING).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
-                <div><label className={label}>Selling price (£)</label><input type="number" className={input} value={draft.default_price} onChange={e => setDraft({ ...draft, default_price: e.target.value })} /></div>
-                <div><label className={label}>Cost price (£)</label><input type="number" className={input} value={draft.cost_price} onChange={e => setDraft({ ...draft, cost_price: e.target.value })} />
+                <div><label className={label}>Selling price ({SYM} {CATALOGUE_CCY})</label><input type="number" className={input} value={draft.default_price} onChange={e => setDraft({ ...draft, default_price: e.target.value })} placeholder="0.00" /></div>
+                <div><label className={label}>Cost price ({SYM} {CATALOGUE_CCY})</label><input type="number" className={input} value={draft.cost_price} onChange={e => setDraft({ ...draft, cost_price: e.target.value })} placeholder="0.00" />
                   {draft.default_price !== '' && draft.cost_price !== '' && Number(draft.default_price) > 0 && (
                     <div className="text-[11px] text-emerald-600 font-semibold mt-1">
-                      Margin: £{(Number(draft.default_price) - Number(draft.cost_price)).toFixed(2)} ({Math.round(((Number(draft.default_price) - Number(draft.cost_price)) / Number(draft.default_price)) * 100)}%)
+                      Margin: {fmtMoney(Number(draft.default_price) - Number(draft.cost_price), CATALOGUE_CCY)} ({Math.round(((Number(draft.default_price) - Number(draft.cost_price)) / Number(draft.default_price)) * 100)}%)
                     </div>
                   )}</div>
-                <div><label className={label}>Purchase VAT %</label><input type="number" className={input} value={draft.cost_tax_rate ?? ''} onChange={e => setDraft({ ...draft, cost_tax_rate: e.target.value })} placeholder="20" />
+                <div><label className={label}>Purchase {TAX} %</label><input type="number" className={input} value={draft.cost_tax_rate ?? ''} onChange={e => setDraft({ ...draft, cost_tax_rate: e.target.value })} placeholder={String(defaultTaxRateFor(CATALOGUE_CCY))} />
                   {draft.cost_price !== '' && draft.cost_price != null && draft.cost_tax_rate !== '' && draft.cost_tax_rate != null && (
-                    <div className="text-[11px] text-dim mt-1">Cost inc VAT: £{(Number(draft.cost_price) * (1 + Number(draft.cost_tax_rate) / 100)).toFixed(2)}</div>
+                    <div className="text-[11px] text-dim mt-1">Cost inc {TAX}: {fmtMoney(Number(draft.cost_price) * (1 + Number(draft.cost_tax_rate) / 100), CATALOGUE_CCY)}</div>
                   )}</div>
                 <div><label className={label}>Unit (optional)</label><input className={input} value={draft.unit || ''} onChange={e => setDraft({ ...draft, unit: e.target.value })} placeholder="per till, per location…" /></div>
                 <div><label className={label}>SKU (optional)</label><input className={input} value={draft.sku || ''} onChange={e => setDraft({ ...draft, sku: e.target.value })} /></div>
               </div>
+              <div className="text-[11px] text-dim italic">Catalogue prices are {CATALOGUE_CCY} list. A USD quote or invoice takes the $ price typed on its own line.</div>
               <div><label className={label}>Description</label><textarea className={input + ' resize-none'} rows={2} value={draft.description || ''} onChange={e => setDraft({ ...draft, description: e.target.value })} /></div>
               <label className="flex items-center gap-2 text-sm text-paper cursor-pointer"><input type="checkbox" checked={draft.active} onChange={e => setDraft({ ...draft, active: e.target.checked })} /> Active (available on quotes)</label>
 

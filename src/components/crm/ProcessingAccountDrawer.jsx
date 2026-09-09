@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { X, Pencil, Plus, Trash2, Building2, PiggyBank, AlertTriangle } from 'lucide-react';
 import { AccountModal, ccyOf, moneyFor, isPriced, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
+import { currencySymbol } from '../../lib/money';
 
 const thisMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const periodLabel = (p) => new Date(p).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
@@ -17,7 +18,7 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
   // card's own currency. A US card must never render a pound sign.
   const ccy = ccyOf(acc);
   const { m0, m2 } = moneyFor(ccy);
-  const sym = ccy === 'USD' ? '$' : '£';
+  const sym = currencySymbol(ccy);
 
   const [rates, setRates] = useState([]);
 
@@ -184,7 +185,7 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
                     <div key={c.key} className="px-4 py-2 border-b border-bdr/50 last:border-0 flex items-center text-sm">
                       <div className="flex-1 min-w-0">
                         <div className="text-paper leading-tight">{c.scheme}{c.tier ? <span className="text-dim"> {c.tier}</span> : ''}</div>
-                        {calc.avg > 0 && <div className="text-[10px] text-dim">avg {sym}{calc.avg.toFixed(2)} · {calc.txns} txns</div>}
+                        {calc.avg > 0 && <div className="text-[10px] text-dim">avg {m2(calc.avg)} · {calc.txns} txns</div>}
                       </div>
                       <span className="w-20 text-right tabular-nums text-muted">{calc.vol ? m0(calc.vol) : '—'}</span>
                       <span className="w-16 text-right tabular-nums text-muted">{calc.vol ? pct2(calc.currentEff) : pct2(r.current_rate_pct)}</span>

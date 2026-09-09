@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { MobileTable, MobileDock, DockField, Mono, Pill } from '../crm/ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Wallet, Plus, Repeat, X, Trash2 } from 'lucide-react';
-import { gbp2, computeTotals } from '../../lib/money.js';
+import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, defaultTaxRateFor, computeTotals } from '../../lib/money.js';
+import { currencyForCountry } from '../../lib/region.js';
 import { advanceRunDate, buildBillFromSchedule, isDue } from '../../lib/recurringBills.js';
 import { canDeleteBill, deleteBill, billLabel } from '../../lib/billOps.js';
 
@@ -41,8 +42,8 @@ export default function BillsPanel({ profile, onNavigate }) {
       supabase.from('recurring_bills').select('*, supplier:inv_suppliers(name)').order('next_run'),
       supabase.from('inv_suppliers').select('id, name, default_category_id').order('name'),
       supabase.from('expense_categories').select('id, label').eq('active', true).order('sort'),
-      supabase.from('companies').select('id, name').order('name'),
-      supabase.from('locations').select('id, name, company_id').order('name'),
+      supabase.from('companies').select('id, name, country').order('name'),
+      supabase.from('locations').select('id, name, company_id, country').order('name'),
     ]);
     setBills(b.data || []); setSchedules(r.data || []); setSuppliers(s.data || []);
     setCategories(c.data || []); setCompanies(co.data || []); setLocations(l.data || []); setLoading(false);
@@ -88,10 +89,13 @@ export default function BillsPanel({ profile, onNavigate }) {
   const supName = (b) => b.supplier?.name || b.company?.name || b.description || 'Untitled bill';
   const owed = (b) => Number(b.total || 0) - Number(b.amount_paid || 0);
   const toPay = bills.filter(b => ['to_pay', 'partially_paid'].includes(b.status));
-  const outstanding = toPay.reduce((s, b) => s + owed(b), 0);
+  // Bills carry their own currency (GBP or USD) and the two are never added
+  // together, so every headline figure is per-currency: '£1,200.00 + $300.00'.
+  const outstanding = sumByCurrency(toPay, owed);
   const overdueList = bills.filter(b => billStatus(b) === 'overdue');
+  const overdueSum = sumByCurrency(overdueList, owed);
   const mStart = new Date(); mStart.setDate(1);
-  const paidThisMonth = bills.filter(b => b.status === 'paid' && b.paid_at && new Date(b.paid_at) >= mStart).reduce((s, b) => s + Number(b.amount_paid ?? b.total ?? 0), 0);
+  const paidThisMonth = sumByCurrency(bills.filter(b => b.status === 'paid' && b.paid_at && new Date(b.paid_at) >= mStart), b => b.amount_paid ?? b.total ?? 0);
   const dueCount = schedules.filter(s => isDue(s, new Date().toISOString().slice(0, 10))).length;
   const filtered = statusFilter === 'all' ? bills : bills.filter(b => billStatus(b) === statusFilter);
   const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
@@ -103,7 +107,7 @@ export default function BillsPanel({ profile, onNavigate }) {
         <div className="px-[18px] pt-3 pb-2.5 flex items-start gap-2.5">
           <div className="flex-1 min-w-0">
             <div className="font-display text-[23px] font-extrabold text-paper">Bills</div>
-            <Mono className="!tracking-[.18em] uppercase">{toPay.length} open · {gbp2(outstanding)} due</Mono>
+            <Mono className="!tracking-[.18em] uppercase">{toPay.length} open · {fmtByCurrency(outstanding)} due</Mono>
           </div>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-3 py-[9px] rounded-[10px] border text-[13px] font-semibold text-paper" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>
             <option value="all">Filter</option>
@@ -118,9 +122,9 @@ export default function BillsPanel({ profile, onNavigate }) {
                 { key: 'supplier', label: 'Supplier', pinned: true, render: (b) => supName(b) },
                 { key: 'number', label: 'Number', render: (b) => `BILL-${b.bill_number}`, mono: true },
                 { key: 'due', label: 'Due', render: (b) => fmtD(b.due_date) },
-                { key: 'total', label: 'Total', align: 'right', mono: true, render: (b) => gbp2(b.total) },
+                { key: 'total', label: 'Total', align: 'right', mono: true, render: (b) => fmtMoney(b.total, b.currency) },
                 { key: 'status', label: 'Status', render: (b) => STATUS_LABEL[billStatus(b)] },
-                { key: 'paid', label: 'Paid', align: 'right', mono: true, render: (b) => gbp2(b.amount_paid || 0) },
+                { key: 'paid', label: 'Paid', align: 'right', mono: true, render: (b) => fmtMoney(b.amount_paid || 0, b.currency) },
                 { key: 'ref', label: 'Ref', render: (b) => b.supplier_ref || '—' },
                 { key: 'context', label: 'Context', render: (b) => (b.cost_context === 'deal' ? 'deal cost' : 'ongoing') },
                 { key: 'recurring', label: 'Recurring', render: (b) => (b.recurring_id ? 'yes' : '—') },
@@ -130,7 +134,7 @@ export default function BillsPanel({ profile, onNavigate }) {
                 const st = billStatus(b);
                 const days = b.due_date ? Math.round((new Date(b.due_date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000) : null;
                 const chip = st === 'overdue' ? { text: `Overdue ${Math.abs(days)}d`, tone: 'coral' } : st === 'paid' ? { text: 'Paid', tone: 'primary' } : st === 'draft' ? { text: 'Draft', tone: 'muted' } : { text: b.due_date ? `Due ${fmtD(b.due_date)}` : STATUS_LABEL[st], tone: 'amber' };
-                return { title: supName(b), amount: gbp2(b.total), chip, tone: st === 'overdue' ? 'coral' : undefined,
+                return { title: supName(b), amount: fmtMoney(b.total, b.currency), chip, tone: st === 'overdue' ? 'coral' : undefined,
                   meta: [`BILL-${b.bill_number}`, b.supplier_ref ? `ref ${b.supplier_ref}` : null, b.recurring_id ? 'recurring' : (b.cost_context === 'deal' ? 'deal cost' : null)].filter(Boolean).join(' · ') };
               }} />
           )}
@@ -162,9 +166,9 @@ export default function BillsPanel({ profile, onNavigate }) {
           {tab === 'bills' ? (
             <>
               <div className="grid grid-cols-3 gap-4">
-                <Stat label="To pay" value={gbp2(outstanding)} sub={`${toPay.length} outstanding`} tone={toPay.length ? 'amber' : null} />
-                <Stat label="Overdue" value={gbp2(overdueList.reduce((s, b) => s + owed(b), 0))} sub={`${overdueList.length} overdue`} tone={overdueList.length ? 'red' : null} />
-                <Stat label="Paid this month" value={gbp2(paidThisMonth)} tone="emerald" />
+                <Stat label="To pay" value={fmtByCurrency(outstanding)} sub={`${toPay.length} outstanding`} tone={toPay.length ? 'amber' : null} />
+                <Stat label="Overdue" value={fmtByCurrency(overdueSum)} sub={`${overdueList.length} overdue`} tone={overdueList.length ? 'red' : null} />
+                <Stat label="Paid this month" value={fmtByCurrency(paidThisMonth)} tone="emerald" />
               </div>
               <div className="glass-card rounded-2xl overflow-hidden">
                 <div className="px-5 py-3.5 border-b border-bdr flex items-center gap-2">
@@ -192,7 +196,7 @@ export default function BillsPanel({ profile, onNavigate }) {
                             </div>
                           </div>
                           <div className="text-xs text-muted shrink-0 w-24 text-right">Due {fmtD(b.due_date)}</div>
-                          <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{gbp2(b.total)}</div>
+                          <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{fmtMoney(b.total, b.currency)}</div>
                           <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg shrink-0 w-20 text-center ${BADGE[st]}`}>{STATUS_LABEL[st]}</span>
                           {/* Drafts only. The slot is always there so the row
                               contents don't shift as you move down the list. */}
@@ -231,7 +235,7 @@ export default function BillsPanel({ profile, onNavigate }) {
                           <div className="text-[11px] text-muted">{s.supplier?.name || '—'} · {s.frequency} on day {s.day_of_month}</div>
                         </div>
                         <div className="text-xs text-muted shrink-0">Next: {fmtD(s.next_run)}</div>
-                        <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{gbp2(amount)}</div>
+                        <div className="text-sm font-semibold text-paper tabular-nums shrink-0 w-24 text-right">{fmtMoney(amount, s.currency)}</div>
                       </div>
                     );
                   })}
@@ -261,6 +265,14 @@ function Stat({ label, value, sub, tone }) {
 const minput = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
 const mlabel = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
+// A schedule's currency follows the customer's site, then the company, else GBP
+// (the rule the invoice builder uses), so a US site's rent never lands in £.
+const currencyForPick = (locationId, companyId, locations, companies) => {
+  const loc = locations.find(l => l.id === locationId);
+  const co = companies.find(c => c.id === (companyId || loc?.company_id));
+  return currencyForCountry(loc?.country || co?.country);
+};
+
 function ScheduleModal({ schedule, suppliers, categories, companies, locations, profile, onClose, onSaved }) {
   const s = schedule || {};
   const [f, setF] = useState({
@@ -268,13 +280,32 @@ function ScheduleModal({ schedule, suppliers, categories, companies, locations, 
     company_id: s.company_id || '', location_id: s.location_id || '', cost_context: s.cost_context || 'ongoing',
     frequency: s.frequency || 'monthly', day_of_month: s.day_of_month ?? 1,
     next_run: s.next_run || new Date().toISOString().slice(0, 10), due_days: s.due_days ?? 14,
+    currency: s.currency || 'GBP',
     active: s.active ?? true, notes: s.notes || '',
   });
-  const [lines, setLines] = useState(Array.isArray(s.lines) && s.lines.length ? s.lines : [{ name: '', description: '', qty: 1, unit_price: 0, tax_rate: 20 }]);
+  const [lines, setLines] = useState(Array.isArray(s.lines) && s.lines.length ? s.lines : [{ name: '', description: '', qty: 1, unit_price: 0, tax_rate: defaultTaxRateFor(s.currency || 'GBP') }]);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const setLine = (i, k, v) => setLines(p => p.map((l, j) => j === i ? { ...l, [k]: v } : l));
   const locs = locations.filter(l => !f.company_id || l.company_id === f.company_id);
   const totals = computeTotals(lines);
+  // The schedule's currency drives every symbol, label and default below; the
+  // bills it generates inherit it (buildBillFromSchedule copies sched.currency).
+  const ccy = f.currency || 'GBP';
+  const sym = currencySymbol(ccy);
+  const taxLbl = taxLabelFor(ccy);
+  // Changing currency re-bases the DEFAULT tax rates (20 GBP / 0 USD): lines
+  // still on the old default follow, custom rates are left alone.
+  const changeCurrency = (next) => {
+    if (next === ccy) return;
+    const oldDef = defaultTaxRateFor(ccy), newDef = defaultTaxRateFor(next);
+    setLines(p => p.map(l => Number(l.tax_rate ?? oldDef) === oldDef ? { ...l, tax_rate: newDef } : l));
+    set('currency', next);
+  };
+  // Picking a customer or site re-derives the currency; the select stays
+  // visible right beside it so the change is never hidden.
+  const followCustomer = (locationId, companyId) => {
+    if (locationId || companyId) changeCurrency(currencyForPick(locationId, companyId, locations, companies));
+  };
 
   const save = async () => {
     const cleanLines = lines.filter(l => (l.name || '').trim()).map(l => ({ name: l.name.trim(), description: (l.description || '').trim() || null, qty: Number(l.qty) || 1, unit_price: Number(l.unit_price) || 0, tax_rate: Number(l.tax_rate) || 0 }));
@@ -283,7 +314,7 @@ function ScheduleModal({ schedule, suppliers, categories, companies, locations, 
       label: f.label.trim() || null, supplier_id: f.supplier_id || null, category_id: f.category_id || null,
       company_id: f.company_id || null, location_id: f.location_id || null, cost_context: f.cost_context,
       frequency: f.frequency, day_of_month: Math.min(28, Math.max(1, Number(f.day_of_month) || 1)),
-      next_run: f.next_run, due_days: Number(f.due_days) || 14, lines: cleanLines,
+      next_run: f.next_run, due_days: Number(f.due_days) || 14, currency: ccy, lines: cleanLines,
       active: f.active, notes: f.notes.trim() || null, created_by: s.created_by || profile.id, updated_at: new Date().toISOString(),
     };
     const { error } = s.id ? await supabase.from('recurring_bills').update(row).eq('id', s.id) : await supabase.from('recurring_bills').insert(row);
@@ -305,28 +336,29 @@ function ScheduleModal({ schedule, suppliers, categories, companies, locations, 
             <div><label className={mlabel}>Supplier</label><select className={minput} value={f.supplier_id} onChange={e => set('supplier_id', e.target.value)}><option value="">—</option>{suppliers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
             <div><label className={mlabel}>Category</label><select className={minput} value={f.category_id} onChange={e => set('category_id', e.target.value)}><option value="">—</option>{categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div>
             <div><label className={mlabel}>Cost context</label><select className={minput} value={f.cost_context} onChange={e => set('cost_context', e.target.value)}><option value="ongoing">Ongoing</option><option value="deal">Deal cost</option></select></div>
-            <div><label className={mlabel}>Customer</label><select className={minput} value={f.company_id} onChange={e => { set('company_id', e.target.value); set('location_id', ''); }}><option value="">—</option>{companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-            <div><label className={mlabel}>Location</label><select className={minput} value={f.location_id} onChange={e => set('location_id', e.target.value)}><option value="">—</option>{locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+            <div><label className={mlabel}>Customer</label><select className={minput} value={f.company_id} onChange={e => { set('company_id', e.target.value); set('location_id', ''); followCustomer(null, e.target.value); }}><option value="">—</option>{companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <div><label className={mlabel}>Location</label><select className={minput} value={f.location_id} onChange={e => { set('location_id', e.target.value); followCustomer(e.target.value, f.company_id); }}><option value="">—</option>{locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div><label className={mlabel}>Frequency</label><select className={minput} value={f.frequency} onChange={e => set('frequency', e.target.value)}><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annual">Annual</option></select></div>
             <div><label className={mlabel}>Day of month</label><input type="number" min="1" max="28" className={minput} value={f.day_of_month} onChange={e => set('day_of_month', e.target.value)} /></div>
             <div><label className={mlabel}>Next run</label><input type="date" className={minput} value={f.next_run} onChange={e => set('next_run', e.target.value)} /></div>
             <div><label className={mlabel}>Due (days)</label><input type="number" className={minput} value={f.due_days} onChange={e => set('due_days', e.target.value)} /></div>
-            <div className="col-span-2 flex items-end"><button type="button" onClick={() => set('active', !f.active)} className="flex items-center gap-2 text-sm text-paper"><span className={`relative w-9 h-5 rounded-full transition ${f.active ? 'bg-emerald-500' : 'bg-slate-300'}`}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${f.active ? 'left-[18px]' : 'left-0.5'}`} /></span>Active</button></div>
+            <div><label className={mlabel}>Currency</label><select className={minput} value={ccy} onChange={e => changeCurrency(e.target.value)}><option value="GBP">GBP £ (UK, VAT)</option><option value="USD">USD $ (US, sales tax)</option></select></div>
+            <div className="flex items-end"><button type="button" onClick={() => set('active', !f.active)} className="flex items-center gap-2 text-sm text-paper"><span className={`relative w-9 h-5 rounded-full transition ${f.active ? 'bg-emerald-500' : 'bg-slate-300'}`}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${f.active ? 'left-[18px]' : 'left-0.5'}`} /></span>Active</button></div>
           </div>
           <div className="glass-inner rounded-xl p-3 space-y-2">
-            <div className="flex items-center"><span className={mlabel + ' !mb-0'}>Line items</span><button onClick={() => setLines(p => [...p, { name: '', description: '', qty: 1, unit_price: 0, tax_rate: 20 }])} className="ml-auto text-xs text-ember hover:text-ember-deep font-medium">+ Line</button></div>
+            <div className="flex items-center"><span className={mlabel + ' !mb-0'}>Line items</span><button onClick={() => setLines(p => [...p, { name: '', description: '', qty: 1, unit_price: 0, tax_rate: defaultTaxRateFor(ccy) }])} className="ml-auto text-xs text-ember hover:text-ember-deep font-medium">+ Line</button></div>
             {lines.map((l, i) => (
               <div key={i} className="flex items-center gap-2">
                 <input className={minput + ' flex-1'} value={l.name} onChange={e => setLine(i, 'name', e.target.value)} placeholder="Item" />
                 <input type="number" className={minput + ' !w-16'} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} placeholder="Qty" />
-                <input type="number" className={minput + ' !w-24'} value={l.unit_price} onChange={e => setLine(i, 'unit_price', e.target.value)} placeholder="Unit £" />
-                <input type="number" className={minput + ' !w-16'} value={l.tax_rate} onChange={e => setLine(i, 'tax_rate', e.target.value)} placeholder="VAT%" />
+                <input type="number" className={minput + ' !w-24'} value={l.unit_price} onChange={e => setLine(i, 'unit_price', e.target.value)} placeholder={`Unit ${sym}`} />
+                <input type="number" className={minput + ' !w-20'} value={l.tax_rate} onChange={e => setLine(i, 'tax_rate', e.target.value)} placeholder={`${taxLbl} %`} title={`${taxLbl} %`} />
                 <button onClick={() => setLines(p => p.filter((_, j) => j !== i))} className="text-red-500 hover:text-red-600 shrink-0">×</button>
               </div>
             ))}
-            <div className="text-right text-sm font-bold text-paper tabular-nums">Total {gbp2(totals.gross)}</div>
+            <div className="text-right text-sm font-bold text-paper tabular-nums">Total {fmtMoney(totals.gross, ccy)}</div>
           </div>
           <div className="flex items-center gap-2 pt-1">
             <button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save schedule</button>

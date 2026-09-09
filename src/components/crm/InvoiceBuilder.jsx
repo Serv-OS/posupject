@@ -29,7 +29,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       supabase.from('invoices').select('*').eq('id', invoiceId).single(),
       supabase.from('invoice_line_items').select('*').eq('invoice_id', invoiceId).order('sort'),
       supabase.from('companies').select('id, name, address, city, postcode, country').order('name'),
-      supabase.from('locations').select('id, name, company_id, address, city, postcode').order('name'),
+      supabase.from('locations').select('id, name, company_id, address, city, postcode, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
       supabase.from('support_settings').select('invoice_terms, business_name, business_address, business_email, business_phone, logo_url, quote_accent').eq('id', 1).maybeSingle(),
       supabase.from('products').select('id, name, description, default_price, category').eq('active', true).order('name'),
@@ -227,7 +227,17 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
                 <option value="USD">USD $ (US — sales tax)</option>
               </select></div>
             <div><label className={label}>Location</label>
-              <select className={input} disabled={locked} value={inv.location_id || ''} onChange={e => set('location_id', e.target.value || null)}>
+              <select className={input} disabled={locked} value={inv.location_id || ''} onChange={e => {
+                const id = e.target.value || null;
+                set('location_id', id);
+                // Site country first, then company: a draft for the US site of
+                // a UK group bills in dollars. Sent documents never move.
+                if (id && inv.status === 'draft') {
+                  const loc = locations.find(x => x.id === id);
+                  const co = companies.find(x => x.id === inv.company_id);
+                  changeCurrency(currencyForCountry(loc?.country || co?.country));
+                }
+              }}>
                 <option value="">—</option>{locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             <div><label className={label}>Contact</label>
               <select className={input} disabled={locked} value={inv.contact_id || ''} onChange={e => set('contact_id', e.target.value || null)}>

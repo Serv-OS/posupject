@@ -31,8 +31,7 @@ export const moneyFor = (currency?: string | null) => {
   const loc = c === "USD" ? "en-US" : "en-GB";
   return (n: number) => new Intl.NumberFormat(loc, { style: "currency", currency: c }).format(Number(n) || 0);
 };
-// Back-compat: existing importers get GBP, exactly as before.
-export const money = moneyFor("GBP");
+// No fixed-GBP export on purpose: every caller passes the row's own currency.
 export const taxLabelFor = (currency?: string | null) => (currency === "USD" ? "Sales tax" : "VAT");
 export const dateLocaleFor = (currency?: string | null) => (currency === "USD" ? "en-US" : "en-GB");
 const fmtDate = (d: string | null, locale = "en-GB") => d ? new Date(d + "T00:00:00").toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" }) : "";

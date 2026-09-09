@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { PackagePlus, Plus, Trash2 } from 'lucide-react';
-import { INV_CATEGORIES, CONDITIONS, parseSerials, nsSerial, stockIn } from '../../lib/inventoryOps';
+import { INV_CATEGORIES, CONDITIONS, parseSerials, nsSerial, stockIn, supplierCurrency } from '../../lib/inventoryOps';
+import { currencySymbol } from '../../lib/money';
+
+// Product cost prices are GBP list (same rule as the quote catalogue), so they
+// are only prefilled into a line struck in GBP.
+const CATALOGUE_CCY = 'GBP';
 
 const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
 const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
@@ -26,18 +31,34 @@ export default function StockInView({ profile }) {
     const [p, w, s, o] = await Promise.all([
       supabase.from('products').select('id, name, inv_category, default_price, cost_price').eq('active', true).order('name'),
       supabase.from('inv_warehouses').select('*').order('created_at'),
-      supabase.from('inv_suppliers').select('id, name').order('name'),
-      supabase.from('inv_orders').select('id, po_number, supplier_name, lines:inv_order_lines(*)').neq('status', 'cancelled').order('created_at', { ascending: false }),
+      supabase.from('inv_suppliers').select('id, name, default_currency').order('name'),
+      supabase.from('inv_orders').select('id, po_number, supplier_id, supplier_name, lines:inv_order_lines(*)').neq('status', 'cancelled').order('created_at', { ascending: false }),
     ]);
     setProducts(p.data || []); setWarehouses(w.data || []); setSuppliers(s.data || []); setOrders(o.data || []);
     if ((w.data || []).length && !warehouse) setWarehouse(w.data[0].id);
   };
 
+  // Unit costs land on inv_serials.cost with no currency column, so the currency
+  // is decided up front: the linked PO's supplier, else the supplier typed, else GBP.
+  const linkedPO = orders.find(o => o.po_number === poNumber);
+  const ccy = supplierCurrency(suppliers, linkedPO || supplierName);
+  const sym = currencySymbol(ccy);
+
   const set = (i, k, v) => setLines(prev => prev.map((l, idx) => idx === i ? { ...l, [k]: v } : l));
   const pickProduct = (i, id) => {
     const p = products.find(x => x.id === id);
-    setLines(prev => prev.map((l, idx) => idx === i ? { ...l, product_id: id, product_name: p?.name || '', category: p?.inv_category || l.category, unit_cost: l.unit_cost === '' && p?.cost_price != null ? p.cost_price : l.unit_cost } : l));
+    setLines(prev => prev.map((l, idx) => idx === i ? { ...l, product_id: id, product_name: p?.name || '', category: p?.inv_category || l.category, unit_cost: l.unit_cost === '' && ccy === CATALOGUE_CCY && p?.cost_price != null ? p.cost_price : l.unit_cost } : l));
   };
+  // Products can be picked before the supplier is typed. If the currency then
+  // leaves GBP, drop any catalogue prefill still in place so a GBP list price
+  // never sits under a $ label. PO-locked lines are already in the PO's currency.
+  useEffect(() => {
+    if (ccy === CATALOGUE_CCY || poNumber) return;
+    setLines(prev => prev.map(l => {
+      const p = products.find(x => x.id === l.product_id);
+      return p && p.cost_price != null && String(l.unit_cost) === String(p.cost_price) ? { ...l, unit_cost: '' } : l;
+    }));
+  }, [ccy, poNumber, products]);
 
   // PO link: locked landed costs flow onto lines
   const pickPO = (poNo) => {
@@ -130,7 +151,7 @@ export default function StockInView({ profile }) {
                     <option value="">Select…</option>
                     {INV_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                   </select></div>
-                <div><label className={label}>Unit cost £ {poNumber && <span className="text-emerald-600">(PO-locked)</span>}</label>
+                <div><label className={label}>Unit cost {sym} {poNumber && <span className="text-emerald-600">(PO-locked)</span>}</label>
                   <input className={input} value={l.unit_cost} onChange={e => set(i, 'unit_cost', e.target.value)} placeholder="0.00" disabled={!!poNumber} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">

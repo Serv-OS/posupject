@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Banknote } from 'lucide-react';
-import { gbp2 } from '../../lib/money.js';
+import { fmtMoney, sumByCurrency, fmtByCurrency } from '../../lib/money.js';
 
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
 const daysOverdue = (due) => due ? Math.floor((Date.now() - new Date(due + 'T00:00:00')) / 86400000) : 0;
@@ -31,17 +31,19 @@ export default function WhatIOwePanel({ profile, onNavigate }) {
   useEffect(() => { load(); }, [load]);
 
   const owed = (b) => Number(b.total || 0) - Number(b.amount_paid || 0);
-  const total = bills.reduce((s, b) => s + owed(b), 0);
+  // Bills carry their own currency (GBP or USD) and the two are never added
+  // together, so every total here is per-currency: '£1,200.00 + $300.00'.
+  const total = sumByCurrency(bills, owed);
   const byBucket = (k) => bills.filter(b => bucketOf(b) === k);
   const supName = (b) => b.supplier?.name || b.company?.name || b.description || 'Untitled bill';
 
   const selectedIds = Object.keys(sel).filter(id => sel[id]);
-  const selectedSum = bills.filter(b => sel[b.id]).reduce((s, b) => s + owed(b), 0);
+  const selectedSum = sumByCurrency(bills.filter(b => sel[b.id]), owed);
   const toggle = (id) => setSel(s => ({ ...s, [id]: !s[id] }));
 
   const markPaid = async () => {
     if (!selectedIds.length) return;
-    if (!confirm(`Mark ${selectedIds.length} bill(s) as paid (${gbp2(selectedSum)})${ref ? ` with reference "${ref}"` : ''}?`)) return;
+    if (!confirm(`Mark ${selectedIds.length} bill(s) as paid (${fmtByCurrency(selectedSum)})${ref ? ` with reference "${ref}"` : ''}?`)) return;
     const nowIso = new Date().toISOString();
     for (const b of bills.filter(x => sel[x.id])) {
       await supabase.from('bills').update({
@@ -61,7 +63,7 @@ export default function WhatIOwePanel({ profile, onNavigate }) {
           <div className="text-xs text-muted">Outstanding supplier bills, by age</div>
         </div>
         <div className="ml-auto text-right">
-          <div className="text-2xl font-bold tabular-nums text-paper">{gbp2(total)}</div>
+          <div className="text-2xl font-bold tabular-nums text-paper">{fmtByCurrency(total)}</div>
           <div className="text-[11px] text-dim">{bills.length} outstanding</div>
         </div>
       </div>
@@ -70,7 +72,7 @@ export default function WhatIOwePanel({ profile, onNavigate }) {
         <div className="max-w-3xl mx-auto space-y-5">
           {canWrite && selectedIds.length > 0 && (
             <div className="glass-card rounded-2xl p-3 flex items-center gap-3 flex-wrap sticky top-0 z-10">
-              <span className="text-sm text-paper font-medium">{selectedIds.length} selected · {gbp2(selectedSum)}</span>
+              <span className="text-sm text-paper font-medium">{selectedIds.length} selected · {fmtByCurrency(selectedSum)}</span>
               <input value={ref} onChange={e => setRef(e.target.value)} placeholder="Payment reference (e.g. bank run 26/06)"
                 className="flex-1 min-w-[180px] px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper" />
               <button onClick={markPaid} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold">Mark paid</button>
@@ -81,13 +83,13 @@ export default function WhatIOwePanel({ profile, onNavigate }) {
             : BUCKETS.map(([k, lbl]) => {
               const rows = byBucket(k);
               if (!rows.length) return null;
-              const sum = rows.reduce((s, b) => s + owed(b), 0);
+              const sum = sumByCurrency(rows, owed);
               return (
                 <div key={k} className="glass-card rounded-2xl overflow-hidden">
                   <div className="px-5 py-2.5 border-b border-bdr flex items-center gap-2">
                     <h3 className={`text-[13px] font-bold ${k === 'd60p' ? 'text-red-600' : k === 'd60' ? 'text-amber-600' : 'text-paper'}`}>{lbl}</h3>
                     <span className="text-xs text-dim font-mono">({rows.length})</span>
-                    <span className="ml-auto text-sm font-semibold tabular-nums text-paper">{gbp2(sum)}</span>
+                    <span className="ml-auto text-sm font-semibold tabular-nums text-paper">{fmtByCurrency(sum)}</span>
                   </div>
                   <div className="divide-y divide-bdr/60">
                     {rows.map(b => (
@@ -95,9 +97,9 @@ export default function WhatIOwePanel({ profile, onNavigate }) {
                         {canWrite && <input type="checkbox" checked={!!sel[b.id]} onChange={() => toggle(b.id)} className="shrink-0" />}
                         <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onNavigate?.('bill', b.id)}>
                           <div className="text-paper font-medium truncate hover:text-ember">{supName(b)}</div>
-                          <div className="text-[10px] text-dim">BILL-{b.bill_number} · due {fmtD(b.due_date)}{b.status === 'partially_paid' ? ` · part-paid ${gbp2(b.amount_paid)}` : ''}</div>
+                          <div className="text-[10px] text-dim">BILL-{b.bill_number} · due {fmtD(b.due_date)}{b.status === 'partially_paid' ? ` · part-paid ${fmtMoney(b.amount_paid, b.currency)}` : ''}</div>
                         </div>
-                        <div className="tabular-nums font-semibold text-paper shrink-0">{gbp2(owed(b))}</div>
+                        <div className="tabular-nums font-semibold text-paper shrink-0">{fmtMoney(owed(b), b.currency)}</div>
                       </div>
                     ))}
                   </div>

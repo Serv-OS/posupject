@@ -54,10 +54,16 @@ export default function QuotesPanel({ profile, onNavigate }) {
   useEffect(() => { load(); }, [load]);
 
   const createQuote = async () => {
+    // Currency is decided up front from the customer: the company chosen, or
+    // for a contact-only quote the contact's company; else GBP. A US contact
+    // used to get a £ quote with 20% VAT until someone noticed in the builder.
+    // Contacts carry no company column (they are linked through associations), so a
+    // contact-only quote cannot read a country from here and falls back to GBP.
+    const companyId = newCompany;
     const { data, error } = await supabase.from('quotes').insert({
       status: 'draft', created_by: profile.id,
       company_id: newCompany || null, contact_id: newContact || null,
-      currency: currencyForCountry(companies.find(c => c.id === newCompany)?.country),
+      currency: currencyForCountry(companies.find(c => c.id === companyId)?.country),
       valid_until: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
     }).select('id').single();
     if (error) { alert(error.message); return; }

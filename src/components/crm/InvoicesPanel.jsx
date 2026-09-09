@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { MobileTable, MobileDock, DockField, Mono } from './ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download } from 'lucide-react';
-import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, currencyLocale } from '../../lib/money';
+import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, currencyLocale, defaultTaxRateFor } from '../../lib/money';
+import { currencyForCountry } from '../../lib/region';
 import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
 
@@ -11,7 +12,7 @@ import { downloadListPdf } from '../../lib/listPdf';
 export const money = (v, currency = 'GBP') => fmtMoney(v, currency);
 export const curOf = (x) => x?.currency || 'GBP';
 // The products catalogue has ONE price column and no currency: default_price
-// is pounds (ProductsPanel labels it "Selling price (£)"). Print it with its
+// is pounds (ProductsPanel labels it "Selling price (£ GBP)"). Print it with its
 // OWN symbol, never the document's, and never copy it onto a non-GBP document.
 // We hold no exchange rate, so a blank price the user must type is the only
 // honest line. A per-currency product price is the real fix and needs DDL.
@@ -63,8 +64,10 @@ export default function InvoicesPanel({ profile, onNavigate }) {
     const [i, r, c, l, ct, pr] = await Promise.all([
       supabase.from('invoices').select('*, company:companies(name), location:locations(name)').order('created_at', { ascending: false }),
       supabase.from('recurring_invoices').select('*, company:companies(name), location:locations(name)').order('created_at', { ascending: false }),
-      supabase.from('companies').select('id, name').order('name'),
-      supabase.from('locations').select('id, name, company_id').order('name'),
+      // country on both: a new recurring schedule picks its currency from the
+      // site first, then the company, the same way an invoice draft does.
+      supabase.from('companies').select('id, name, country').order('name'),
+      supabase.from('locations').select('id, name, company_id, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
       supabase.from('products').select('id, name, description, default_price').eq('active', true).order('name'),
     ]);
@@ -478,11 +481,31 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
     email_to: s.email_to || '', frequency: s.frequency || 'monthly', day_of_month: s.day_of_month ?? 1,
     next_run: s.next_run || new Date().toISOString().slice(0, 10), due_days: s.due_days ?? 14,
     currency: s.currency || 'GBP',
-    tax_rate: s.tax_rate ?? (s.currency === 'USD' ? 0 : 20), terms: s.terms || '', notes: s.notes || '',
+    tax_rate: s.tax_rate ?? defaultTaxRateFor(s.currency), terms: s.terms || '', notes: s.notes || '',
     auto_send: s.auto_send ?? true, active: s.active ?? true,
   });
   const [lines, setLines] = useState(Array.isArray(s.lines) && s.lines.length ? s.lines : [{ name: '', description: '', qty: 1, unit_price: 0 }]);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  // Changing currency re-bases the DEFAULT tax rate exactly as the invoice
+  // editor does: 20% VAT follows to 0% sales tax unless someone typed a rate,
+  // so a US schedule never quietly bills 20% 'Sales tax' every month.
+  const changeCurrency = (next) => {
+    if (!next || next === f.currency) return;
+    setF(p => {
+      const oldDef = defaultTaxRateFor(p.currency);
+      const onDefault = Number(p.tax_rate ?? oldDef) === oldDef;
+      return { ...p, currency: next, tax_rate: onDefault ? defaultTaxRateFor(next) : p.tax_rate };
+    });
+  };
+  // A NEW schedule follows its customer: site country first, then company,
+  // else it stays GBP. An existing one keeps the currency its invoices already
+  // carry; the select below is the only way to change that, on purpose.
+  const followCustomer = (companyId, locationId) => {
+    if (s.id) return;
+    const loc = locations.find(l => l.id === locationId);
+    const co = companies.find(c => c.id === companyId);
+    if (loc || co) changeCurrency(currencyForCountry(loc?.country || co?.country));
+  };
   const setLine = (i, k, v) => setLines(p => p.map((l, j) => j === i ? { ...l, [k]: v } : l));
   const locs = locations.filter(l => !f.company_id || l.company_id === f.company_id);
 
@@ -530,10 +553,10 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div><label className={label}>Company</label>
-              <select className={input} value={f.company_id} onChange={e => { set('company_id', e.target.value); set('location_id', ''); }}>
+              <select className={input} value={f.company_id} onChange={e => { set('company_id', e.target.value); set('location_id', ''); followCustomer(e.target.value, ''); }}>
                 <option value="">—</option>{companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
             <div><label className={label}>Location</label>
-              <select className={input} value={f.location_id} onChange={e => set('location_id', e.target.value)}>
+              <select className={input} value={f.location_id} onChange={e => { set('location_id', e.target.value); followCustomer(f.company_id, e.target.value); }}>
                 <option value="">—</option>{locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             <div><label className={label}>Contact</label>
               <select className={input} value={f.contact_id} onChange={e => set('contact_id', e.target.value)}>
@@ -592,7 +615,7 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
             ))}
             <div className="flex justify-end gap-4 text-sm pt-1">
               <span className="text-muted">
-                <select className={input + ' !w-20 !py-1 inline-block mr-2'} value={f.currency} onChange={e => set('currency', e.target.value)}>
+                <select className={input + ' !w-20 !py-1 inline-block mr-2'} value={f.currency} onChange={e => changeCurrency(e.target.value)}>
                   <option value="GBP">GBP £</option><option value="USD">USD $</option>
                 </select>
                 {taxLabelFor(f.currency)} <input className={input + ' !w-16 !py-1 inline-block text-right ml-1'} value={f.tax_rate} onChange={e => set('tax_rate', e.target.value)} />%</span>

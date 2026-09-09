@@ -39,7 +39,7 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
     const [d, c, l, m, a] = await Promise.all([
       supabase.from('deals').select('*').order('created_at', { ascending: false }),
       supabase.from('companies').select('id, name, country').order('name'),
-      supabase.from('locations').select('id, name, company_id').order('name'),
+      supabase.from('locations').select('id, name, company_id, country').order('name'),
       supabase.from('profiles').select('id, email, display_name'),
       supabase.from('associations').select('*')
         .or('and(from_type.eq.deal,to_type.eq.location),and(from_type.eq.location,to_type.eq.deal)'),
@@ -125,10 +125,13 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
     }
   };
 
-  // A deal is stamped with its company's currency at birth. The column defaults
+  // A deal is stamped with its currency at birth: the picked site decides,
+  // then the company, else GBP (the order LeadDetail uses). The column defaults
   // to GBP and only recalc_deal_rollup corrects it (needs a quote), so without
   // this every quote-less US deal sits in the £ bucket of every roll-up.
-  const newCurrency = currencyForCountry(companies.find(c => c.id === newCompany)?.country);
+  const newCurrency = currencyForCountry(
+    locations.find(l => l.id === newLocation)?.country || companies.find(c => c.id === newCompany)?.country
+  );
 
   const create = async (e) => {
     e.preventDefault();

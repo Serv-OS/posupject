@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { FileText, Download, AlertTriangle } from 'lucide-react';
-import { gbp2, round2 } from '../../lib/money.js';
+import { gbp2, round2, fmtMoney, sumByCurrency, fmtByCurrency, CURRENCIES } from '../../lib/money.js';
 import { computeVatReturn, vatReturnCsv } from '../../lib/vatReturn.js';
 import { isUkVat } from '../../lib/branding.js';
 
@@ -33,23 +33,42 @@ export default function VatReturnPanel({ profile }) {
       source: 'bill', ref: `BILL-${x.bill_number}`, date: x.issue_date, supplier: x.supplier?.name || x.description || '—',
       category: x.category?.label || 'Uncategorised', net: Number(x.subtotal || 0), tax_amount: Number(x.tax_amount || 0),
       vat_reclaimable: x.vat_reclaimable, has_vat_invoice: x.has_vat_invoice, vat_reclaim_amount: x.vat_reclaim_amount,
-      cost_context: x.cost_context, total: Number(x.total || 0),
+      cost_context: x.cost_context, total: Number(x.total || 0), currency: x.currency || 'GBP',
     }));
     const exps = (e.data || []).map(x => ({
       source: 'expense', ref: `EXP-${x.expense_number}`, date: x.expense_date, supplier: x.submitter?.display_name || 'Staff',
       category: x.category?.label || (x.type === 'mileage' ? 'Mileage' : 'Uncategorised'), net: Number(x.subtotal || 0), tax_amount: Number(x.tax_amount || 0),
       vat_reclaimable: x.vat_reclaimable, has_vat_invoice: x.has_vat_invoice, vat_reclaim_amount: x.vat_reclaim_amount,
-      cost_context: x.cost_context, total: Number(x.total || 0),
+      cost_context: x.cost_context, total: Number(x.total || 0), currency: x.currency || 'GBP',
     }));
     setItems([...bills, ...exps]); setLoading(false);
   }, [from, to]);
   useEffect(() => { load(); }, [load]);
 
-  const vat = useMemo(() => computeVatReturn(items), [items]);
-  // spend reports
-  const spendBy = (key) => { const m = {}; for (const it of items) { const k = it[key] || '—'; m[k] = round2((m[k] || 0) + it.total); } return Object.entries(m).sort((a, b) => b[1] - a[1]); };
-  const dealSpend = round2(items.filter(i => i.cost_context === 'deal').reduce((s, i) => s + i.total, 0));
-  const ongoingSpend = round2(items.filter(i => i.cost_context !== 'deal').reduce((s, i) => s + i.total, 0));
+  // HMRC input VAT is sterling only: a USD bill's tax is US sales tax, never Box 4, and
+  // £ + $ must never be added. Only GBP records reach the reclaim maths + the MTD CSV.
+  const vatItems = useMemo(() => items.filter(i => i.currency === 'GBP'), [items]);
+  const vat = useMemo(() => computeVatReturn(vatItems), [vatItems]);
+  // spend reports — every figure is per currency ({ GBP, USD }), never one number across both.
+  // A zero has no currency of its own: a zero group keeps the one it was summed in, and an
+  // empty subset takes the screen's currency when everything on screen is one currency, so a
+  // US-only period never shows a stray "£0.00" (fmtByCurrency's fallback) for "Deal costs".
+  const screenCcy = useMemo(() => { const s = new Set(items.map(i => i.currency)); return s.size === 1 ? [...s][0] : 'GBP'; }, [items]);
+  const fmtSums = (sums) => {
+    if (CURRENCIES.some(c => sums[c])) return fmtByCurrency(sums);
+    const keys = Object.keys(sums);
+    return fmtMoney(0, keys.length === 1 ? keys[0] : screenCcy);
+  };
+  const spend = (rows) => fmtSums(sumByCurrency(rows, i => i.total));
+  // Ranked by the largest single-currency figure: ordering only, nothing is added or converted.
+  const rank = (sums) => Math.max(0, ...Object.values(sums));
+  const spendBy = (key) => {
+    const groups = {};
+    for (const it of items) { const k = it[key] || '—'; if (!groups[k]) groups[k] = []; groups[k].push(it); }
+    return Object.entries(groups).map(([k, rows]) => [k, sumByCurrency(rows, i => i.total)]).sort((a, b) => rank(b[1]) - rank(a[1]));
+  };
+  // CSV: one row per key per currency, so a spreadsheet never sees £ and $ in one cell.
+  const spendCsv = (label, rows) => toCsv([label, 'Currency', 'Spend'], rows.flatMap(([k, sums]) => CURRENCIES.filter(c => c in sums).map(c => [k, c, round2(sums[c])])));
 
   const input = "px-3 py-1.5 bg-card border border-bdr rounded-xl text-sm text-paper";
 
@@ -80,12 +99,12 @@ export default function VatReturnPanel({ profile }) {
             : (!uk || tab === 'reports') ? (
               <>
                 <div className="grid grid-cols-3 gap-4">
-                  <Stat label="Total spend" value={gbp2(dealSpend + ongoingSpend)} sub={`${items.length} records`} />
-                  <Stat label="Deal costs" value={gbp2(dealSpend)} />
-                  <Stat label="Ongoing costs" value={gbp2(ongoingSpend)} />
+                  <Stat label="Total spend" value={spend(items)} sub={`${items.length} records`} />
+                  <Stat label="Deal costs" value={spend(items.filter(i => i.cost_context === 'deal'))} />
+                  <Stat label="Ongoing costs" value={spend(items.filter(i => i.cost_context !== 'deal'))} />
                 </div>
-                <Breakdown title="By category" rows={spendBy('category')} onExport={() => downloadCsv(toCsv(['Category', 'Spend'], spendBy('category')), `spend-by-category_${from}_${to}.csv`)} />
-                <Breakdown title="By supplier / staff" rows={spendBy('supplier')} onExport={() => downloadCsv(toCsv(['Supplier', 'Spend'], spendBy('supplier')), `spend-by-supplier_${from}_${to}.csv`)} />
+                <Breakdown title="By category" rows={spendBy('category')} fmt={fmtSums} onExport={() => downloadCsv(spendCsv('Category', spendBy('category')), `spend-by-category_${from}_${to}.csv`)} />
+                <Breakdown title="By supplier / staff" rows={spendBy('supplier')} fmt={fmtSums} onExport={() => downloadCsv(spendCsv('Supplier', spendBy('supplier')), `spend-by-supplier_${from}_${to}.csv`)} />
               </>
             ) : (
               <>
@@ -93,7 +112,7 @@ export default function VatReturnPanel({ profile }) {
                   <div className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-emerald-700 mb-1">Reclaimable input VAT · Box 4</div>
                   <div className="text-4xl font-bold tabular-nums text-emerald-600">{gbp2(vat.box4)}</div>
                   <div className="text-xs text-muted mt-1">VAT period {fmtD(from)} → {fmtD(to)} · {vat.count} records</div>
-                  <button onClick={() => downloadCsv(vatReturnCsv(items, from, to), `vat-reclaim_${from}_${to}.csv`)} className="btn-glass mt-3 px-4 py-2 rounded-xl text-sm font-semibold inline-flex items-center gap-1.5"><Download size={15} /> Export (MTD-ready CSV)</button>
+                  <button onClick={() => downloadCsv(vatReturnCsv(vatItems, from, to), `vat-reclaim_${from}_${to}.csv`)} className="btn-glass mt-3 px-4 py-2 rounded-xl text-sm font-semibold inline-flex items-center gap-1.5"><Download size={15} /> Export (MTD-ready CSV)</button>
                 </div>
 
                 {vat.flaggedCount > 0 && (
@@ -114,12 +133,15 @@ export default function VatReturnPanel({ profile }) {
                   </div>
                 )}
 
-                <Breakdown title="Reclaimable by category" rows={Object.entries(vat.byCategory).sort((a, b) => b[1] - a[1])} />
-                <Breakdown title="Reclaimable by supplier" rows={Object.entries(vat.bySupplier).sort((a, b) => b[1] - a[1])} />
+                {/* HMRC figures — GBP by construction (vatItems), so the bare-£ formatter is the truth here */}
+                <Breakdown title="Reclaimable by category" rows={Object.entries(vat.byCategory).sort((a, b) => b[1] - a[1])} fmt={gbp2} />
+                <Breakdown title="Reclaimable by supplier" rows={Object.entries(vat.bySupplier).sort((a, b) => b[1] - a[1])} fmt={gbp2} />
               </>
             )}
           <div className="text-[11px] text-dim leading-relaxed border-t border-bdr pt-3">
-            <strong>Preparation aid only</strong> — not a filed VAT return and not tax advice. Verify every figure with your accountant before submitting to HMRC. Records are retained for 6 years.
+            {uk
+              ? <><strong>Preparation aid only</strong> — not a filed VAT return and not tax advice. Verify every figure with your accountant before submitting to HMRC. Records are retained for 6 years.</>
+              : <><strong>Preparation aid only</strong> — not a tax filing and not tax advice. Verify every figure with your accountant before filing.</>}
           </div>
         </div>
       </div>
@@ -137,7 +159,8 @@ function Stat({ label, value, sub }) {
   );
 }
 
-function Breakdown({ title, rows, onExport }) {
+// rows: [key, value] — value is a per-currency sums object by default, or a plain GBP number when fmt={gbp2}.
+function Breakdown({ title, rows, onExport, fmt = fmtByCurrency }) {
   return (
     <div className="glass-card rounded-2xl overflow-hidden">
       <div className="px-5 py-3 border-b border-bdr flex items-center gap-2">
@@ -150,7 +173,7 @@ function Breakdown({ title, rows, onExport }) {
           : rows.map(([k, v]) => (
             <div key={k} className="px-5 py-2 flex items-center gap-3 text-sm">
               <span className="flex-1 truncate text-paper">{k}</span>
-              <span className="tabular-nums font-semibold text-paper">{gbp2(v)}</span>
+              <span className="tabular-nums font-semibold text-paper">{fmt(v)}</span>
             </div>
           ))}
       </div>

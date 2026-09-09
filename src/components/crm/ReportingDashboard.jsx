@@ -11,11 +11,11 @@ const DEAL_STAGE_LABELS = {
   demo_done: 'Demo Done', proposal_sent: 'Proposal Sent', negotiation: 'Negotiation',
   closed_won: 'Closed Won', closed_lost: 'Closed Lost',
 };
-import { gbp0, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { oneOffValue, recurringValue, totalValue } from '../../lib/dealValue';
 
 // CEO-defined targets (see project_sales_targets memory)
-const MONTHLY_ARR_QUOTA = 48000;   // $48K new ARR per AE per month
+const MONTHLY_ARR_QUOTA = 48000;   // 48K new ARR per AE per month; a £ target (see formatCurrency)
 const COMMISSION_RATE = 0.10;      // 10% of ARR
 const GOAL_ACTIVITIES_DAY = 40;
 const GOAL_ACTIVITIES_WEEK = 200;
@@ -184,6 +184,9 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   const { rawDeals, leads, onboardings, tickets, companies, locations, procAccounts, trading } = scope;
   // Currency of whatever is on screen: one when a region is picked, else both.
   const ccyOfDeal = (d) => (d.currency === 'USD' ? 'USD' : 'GBP');
+  // A zero has no currency of its own, so it takes the region on screen: "$0"
+  // on the US view, not a pound sign that has no business being there.
+  const zeroCcy = region === 'US' ? 'USD' : 'GBP';
 
   const cardAttribution = useMemo(() => {
     const byId = new Map(rawDeals.map(d => [d.id, d]));
@@ -538,7 +541,6 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   // What the business actually earns, gathered from every source that holds a
   // number, so it does not have to be added up by hand across four screens.
   const money = useMemo(() => {
-    const CCY = { GBP: '£', USD: '$' };
     const ccyOfDeal = (d) => (d.currency === 'USD' ? 'USD' : 'GBP');
     // A card's currency is the region it was PRICED in. Reading it off the
     // company's country disagreed with every other screen, which uses
@@ -554,12 +556,13 @@ export default function ReportingDashboard({ profile, onNavigate }) {
     // Never blend currencies: a pound and a dollar are different money, and we
     // hold no FX rate. Each currency is totalled and shown on its own.
     const used = [...new Set([...deals.map(ccyOfDeal), ...card.filter(x => x.calc.priced).map(x => x.ccy)])];
-    const per = (used.length ? used : ['GBP']).map(ccy => {
+    // Nothing priced yet still needs a block to say so, in the on-screen currency.
+    const per = (used.length ? used : [zeroCcy]).map(ccy => {
       const w = won.filter(d => ccyOfDeal(d) === ccy), o = open.filter(d => ccyOfDeal(d) === ccy);
       const cards = card.filter(x => x.ccy === ccy && x.calc.priced);
       const mine = unclaimed.filter(x => x.ccy === ccy);
       return {
-        ccy, symbol: CCY[ccy] || '',
+        ccy,
         wonCount: w.length, openCount: o.length,
         wonSaas: sum(w, d => d.saas_arr), wonPayments: sum(w, d => d.payments_arr),
         wonOneOff: sum(w, d => d.hardware_value) + sum(w, d => d.services_value),
@@ -571,19 +574,20 @@ export default function ReportingDashboard({ profile, onNavigate }) {
         cardArr: cards.reduce((t, x) => t + x.calc.arr, 0), cardAccounts: cards.length,
         unclaimedArr: mine.reduce((t, x) => t + x.calc.arr, 0), unclaimed: mine,
       };
-    }).filter(x => x.wonRecurring || x.openRecurring || x.wonOneOff || x.openOneOff || x.cardArr || x.ccy === 'GBP');
+    }).filter(x => x.wonRecurring || x.openRecurring || x.wonOneOff || x.openOneOff || x.cardArr || x.ccy === zeroCcy);
     return { per };
-  }, [deals, procAccounts, weights, cardAttribution]);
+  }, [deals, procAccounts, weights, cardAttribution, zeroCcy]);
 
-  // Pounds only — used by Quota, whose target is a £ figure by design. Money
-  // that can be either currency goes through fmtByCurrency / fmtMoney0.
-  const formatCurrency = (v) => `£${Math.round(v).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
-  // A pipeline field across both buckets, as "£x + $y" or a lone figure. A zero
-  // has no currency of its own, so it takes the region on screen: "$0" on the
-  // US view, not a pound sign that has no business being there.
-  const zeroCcy = region === 'US' ? 'USD' : 'GBP';
+  // Pounds only — used by Quota, whose target is one company-wide £ figure by
+  // design (there is no currency column to follow). Money that can be either
+  // currency goes through byCcy / fmtMoney0.
+  const formatCurrency = (v) => fmtMoney0(v, 'GBP');
+  // A pipeline field across both buckets, as "£x + $y" or a lone figure; a
+  // zero takes zeroCcy so the US view never shows a stray "£0".
   const sums = (gbp, usd) => (!gbp && !usd ? fmtMoney0(0, zeroCcy) : fmtByCurrency({ GBP: gbp, USD: usd }, 0));
   const both = (m, k) => sums(m.GBP?.[k] || 0, m.USD?.[k] || 0);
+  // The same for a { GBP, USD } total from sumByCurrency.
+  const byCcy = (v) => sums(v?.GBP || 0, v?.USD || 0);
   // Share bars only make sense inside one currency; blended ratios mean nothing.
   const share = (part, whole) => (whole.GBP && !whole.USD ? (part.GBP / whole.GBP) : whole.USD && !whole.GBP ? (part.USD / whole.USD) : null);
 
@@ -731,7 +735,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
           {tab === 'money' && (
             <div className="space-y-6">
               {money.per.map(m => {
-                const fmt = (v) => `${m.symbol}${Math.round(v).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
+                const fmt = (v) => fmtMoney0(v, m.ccy);   // symbol and locale both follow the block's currency
                 return (
                   <div key={m.ccy} className="space-y-4">
                     {money.per.length > 1 && (
@@ -917,13 +921,13 @@ export default function ReportingDashboard({ profile, onNavigate }) {
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                <MetricCard label="Won" value={salesMetrics.won} sub={fmtByCurrency(salesMetrics.wonValue, 0)} color="text-emerald-600" />
+                <MetricCard label="Won" value={salesMetrics.won} sub={byCcy(salesMetrics.wonValue)} color="text-emerald-600" />
                 <MetricCard label="Close rate" value={`${salesMetrics.winRate}%`} sub={`${salesMetrics.won} won · ${salesMetrics.lost} lost`} />
-                <MetricCard label="One-off revenue" value={fmtByCurrency(salesMetrics.wonOneOff, 0)} sub={'\u00A0'}
+                <MetricCard label="One-off revenue" value={byCcy(salesMetrics.wonOneOff)} sub={'\u00A0'}
                   color={(salesMetrics.wonOneOff.GBP || salesMetrics.wonOneOff.USD) ? 'text-emerald-600' : 'text-dim'} />
-                <MetricCard label="Recurring (ARR)" value={fmtByCurrency(salesMetrics.wonRecurring, 0)} sub={'\u00A0'}
+                <MetricCard label="Recurring (ARR)" value={byCcy(salesMetrics.wonRecurring)} sub={'\u00A0'}
                   color={(salesMetrics.wonRecurring.GBP || salesMetrics.wonRecurring.USD) ? 'text-ember' : 'text-dim'} />
-                <MetricCard label="Avg deal" value={fmtByCurrency(salesMetrics.avgDeal, 0)} sub={'\u00A0'} />
+                <MetricCard label="Avg deal" value={byCcy(salesMetrics.avgDeal)} sub={'\u00A0'} />
                 {/* "0" here looked like a bug. Under a day is a real answer for
                     passed-in deals logged the day they sign — say it in words. */}
                 <MetricCard
@@ -942,8 +946,8 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                     const magOf = (v) => Math.max(v.GBP || 0, v.USD || 0);
                     const max = Math.max(1, ...salesMetrics.months.map(m => magOf(m.value)));
                     return salesMetrics.months.map(m => (
-                      <div key={m.key} className="flex-1 min-w-0 flex flex-col items-center justify-end" title={`${m.label}: ${m.count} won, ${fmtByCurrency(m.value, 0)}`}>
-                        {magOf(m.value) > 0 && <div className="text-[9px] font-mono text-emerald-600 whitespace-nowrap">{fmtByCurrency(m.value, 0)}</div>}
+                      <div key={m.key} className="flex-1 min-w-0 flex flex-col items-center justify-end" title={`${m.label}: ${m.count} won, ${byCcy(m.value)}`}>
+                        {magOf(m.value) > 0 && <div className="text-[9px] font-mono text-emerald-600 whitespace-nowrap">{byCcy(m.value)}</div>}
                         {m.count > 0 && <div className="text-[9px] font-mono text-dim">{m.count} won</div>}
                         <div className="w-full flex items-end justify-center border-b border-bdr" style={{ height: 96 }}>
                           <div className={`w-3/4 rounded-t ${magOf(m.value) > 0 ? 'bg-emerald-500/70' : 'bg-card'}`}
@@ -968,7 +972,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                       <div key={k} className="py-2 border-b border-bdr last:border-0">
                         <div className="flex justify-between text-xs">
                           <span className="text-paper font-medium">{k}</span>
-                          <span className="text-emerald-600 font-mono">{fmtByCurrency(v.value, 0)}</span>
+                          <span className="text-emerald-600 font-mono">{byCcy(v.value)}</span>
                         </div>
                         <div className="flex justify-between text-[11px] text-muted mt-0.5">
                           <span>{v.won} won · {v.lost} lost{v.open ? ` · ${v.open} open` : ''}</span>
@@ -987,7 +991,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                     return (
                       <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
                         <span className="text-paper">{k}</span>
-                        <span className="text-muted">{v.won}/{closed} won · <span className="text-emerald-600 font-mono">{fmtByCurrency(v.value, 0)}</span></span>
+                        <span className="text-muted">{v.won}/{closed} won · <span className="text-emerald-600 font-mono">{byCcy(v.value)}</span></span>
                       </div>
                     );
                   })}
@@ -1002,7 +1006,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                     return (
                       <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
                         <span className="text-paper">{k}</span>
-                        <span className="text-muted font-mono">{rate}% · {fmtByCurrency(v.value, 0)}</span>
+                        <span className="text-muted font-mono">{rate}% · {byCcy(v.value)}</span>
                       </div>
                     );
                   })}
@@ -1021,11 +1025,11 @@ export default function ReportingDashboard({ profile, onNavigate }) {
 
               {/* Open pipeline, valued — what's coming, next to what closed */}
               <div className="glass-card rounded-2xl p-4">
-                <div className={label + ' mb-3'}>Open pipeline — {salesMetrics.pipeline} deals · {fmtByCurrency(salesMetrics.pipelineValue, 0)}</div>
+                <div className={label + ' mb-3'}>Open pipeline — {salesMetrics.pipeline} deals · {byCcy(salesMetrics.pipelineValue)}</div>
                 {Object.entries(salesMetrics.byStage).map(([k, v]) => (
                   <div key={k} className="flex justify-between py-1 text-xs">
                     <span className="text-paper">{k.replace(/_/g, ' ')}</span>
-                    <span className="text-muted font-mono">{v.count} · {fmtByCurrency(v.value, 0)}</span>
+                    <span className="text-muted font-mono">{v.count} · {byCcy(v.value)}</span>
                   </div>
                 ))}
               </div>
@@ -1044,10 +1048,10 @@ export default function ReportingDashboard({ profile, onNavigate }) {
           {tab === 'quota' && (
             <>
               <div className="grid grid-cols-4 gap-3">
-                <MetricCard label="Team ARR (this month)" value={fmtByCurrency(quotaMetrics.teamArr, 0)} color="text-emerald-600" />
+                <MetricCard label="Team ARR (this month)" value={byCcy(quotaMetrics.teamArr)} color="text-emerald-600" />
                 <MetricCard label="Team Quota" value={formatCurrency(quotaMetrics.teamQuota)} />
                 <MetricCard label="Attainment" value={`${quotaMetrics.teamQuota ? Math.round(((quotaMetrics.teamArr.GBP || 0) / quotaMetrics.teamQuota) * 100) : 0}%`} />
-                <MetricCard label="Commission (10%)" value={fmtByCurrency(quotaMetrics.teamCommission, 0)} color="text-ember" />
+                <MetricCard label="Commission (10%)" value={byCcy(quotaMetrics.teamCommission)} color="text-ember" />
               </div>
 
               <div className="glass-card rounded-2xl overflow-hidden">
@@ -1071,7 +1075,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                         <tr key={r.id} className="border-t border-bdr">
                           <td className="px-3 py-2 text-sm text-paper">{r.name}</td>
                           <td className="px-3 py-2 text-xs text-muted text-right">{r.wonCount}</td>
-                          <td className="px-3 py-2 text-sm text-emerald-600 font-mono text-right">{fmtByCurrency(r.arrClosed, 0)}</td>
+                          <td className="px-3 py-2 text-sm text-emerald-600 font-mono text-right">{byCcy(r.arrClosed)}</td>
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-2 bg-ink rounded-full overflow-hidden min-w-[60px]">
@@ -1080,7 +1084,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                               <span className={`text-xs font-mono w-10 text-right ${r.attainment >= 1 ? 'text-emerald-600 font-bold' : 'text-muted'}`}>{Math.round(r.attainment * 100)}%</span>
                             </div>
                           </td>
-                          <td className="px-3 py-2 text-sm text-ember font-mono text-right">{fmtByCurrency(r.commission, 0)}{r.attainment >= 1 && ' ✓'}</td>
+                          <td className="px-3 py-2 text-sm text-ember font-mono text-right">{byCcy(r.commission)}{r.attainment >= 1 && ' ✓'}</td>
                         </tr>
                       ))}
                       {quotaMetrics.rows.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-dim text-sm">No sales reps with deals yet.</td></tr>}
@@ -1223,16 +1227,20 @@ export default function ReportingDashboard({ profile, onNavigate }) {
             // not what we bill them. Best case and likely case sit side by side
             // on purpose — a raw pipeline total flatters early-stage deals, and a
             // weighted one alone hides how much is genuinely in play.
-            // Venue turnover is in the venue's currency, which is the deal's. Total
-            // each currency on its own: pipelineTotals is per list, so it is called
-            // once per currency and the two are shown side by side, never added.
-            const ccyOfTrading = (d) => ccyOfDeal(rawDeals.find(x => x.id === d.deal_id) || {});
+            // Venue turnover is in the venue's currency, which is the deal's, and
+            // the deal_trading view carries deals.currency on every row, so each
+            // row answers for itself. Total each currency on its own: pipelineTotals
+            // is per list, so it is called once per currency and the two are shown
+            // side by side, never added.
+            const ccyOfTrading = ccyOfDeal;
             const tGBP = pipelineTotals(trading.filter(d => ccyOfTrading(d) === 'GBP'), weights);
             const tUSD = pipelineTotals(trading.filter(d => ccyOfTrading(d) === 'USD'), weights);
             const t = { wonCount: tGBP.wonCount + tUSD.wonCount, openCount: tGBP.openCount + tUSD.openCount,
               wonTransactions: (tGBP.wonTransactions || 0) + (tUSD.wonTransactions || 0), openTransactions: (tGBP.openTransactions || 0) + (tUSD.openTransactions || 0) };
             const pair = (k, mult = 1) => sums((tGBP[k] || 0) * mult, (tUSD[k] || 0) * mult);
             const openTotal = { GBP: tGBP.openRevenue || 0, USD: tUSD.openRevenue || 0 };
+            // Stages are ordered by the larger single-currency figure: a sort key
+            // only, never a cross-currency sum.
             const byStage = Object.entries(
               trading.filter(d => d.stage !== 'closed_won' && d.stage !== 'closed_lost')
                 .reduce((acc, d) => {
@@ -1244,7 +1252,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                   acc[k].weighted[c] += (Number(d.est_monthly_revenue) || 0) * (weights[k] ?? 0);
                   return acc;
                 }, {}),
-            ).sort((a, b) => (b[1].rev.GBP + b[1].rev.USD) - (a[1].rev.GBP + a[1].rev.USD));
+            ).sort((a, b) => Math.max(b[1].rev.GBP, b[1].rev.USD) - Math.max(a[1].rev.GBP, a[1].rev.USD));
             const missing = trading.filter(d => !d.est_monthly_revenue && d.stage !== 'closed_lost');
             const won = trading.filter(d => d.stage === 'closed_won' && d.est_monthly_revenue)
               .sort((a, b) => Number(b.est_monthly_revenue) - Number(a.est_monthly_revenue));

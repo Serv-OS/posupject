@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { computeTotals, computeTotalsInclusive, lineNet, vatFractionOfGross, round2, gbp2 } from '../../lib/money.js';
+import { computeTotals, computeTotalsInclusive, lineNet, vatFractionOfGross, round2, fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money.js';
+import { currencyForCountry } from '../../lib/region.js';
 import { isUkVat } from '../../lib/branding.js';
 import { canDeleteBill, deleteBill, billLabel } from '../../lib/billOps.js';
 import AttachmentsCard from '../crm/AttachmentsCard.jsx';
@@ -31,8 +32,8 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
       supabase.from('bills').select('*').eq('id', billId).single(),
       supabase.from('bill_line_items').select('*').eq('bill_id', billId).order('sort'),
       supabase.from('inv_suppliers').select('id, name, vat_number, default_category_id').order('name'),
-      supabase.from('companies').select('id, name').order('name'),
-      supabase.from('locations').select('id, name, company_id').order('name'),
+      supabase.from('companies').select('id, name, country').order('name'),
+      supabase.from('locations').select('id, name, company_id, country').order('name'),
       supabase.from('deals').select('id, title, company_id').order('created_at', { ascending: false }).limit(500),
       supabase.from('expense_categories').select('id, label, default_tax_rate, reclaimable').eq('active', true).order('sort'),
     ]);
@@ -51,9 +52,33 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
 
   const set = (k, v) => setBill(p => ({ ...p, [k]: v }));
   const setLine = (i, patch) => setLines(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l));
-  const addLine = () => setLines(ls => [...ls, { name: '', description: '', qty: 1, unit_price: 0, tax_rate: 20, category_id: bill.category_id || null }]);
+  // The bill's own currency drives every symbol, label and default below: a US
+  // supplier's bill is dollars and sales tax, never £ and VAT.
+  const cur = bill.currency || 'GBP';
+  const m = (v) => fmtMoney(v, cur);
+  const sym = currencySymbol(cur);
+  const taxLbl = taxLabelFor(cur);
+  // Currency is settled while the bill is a draft; once raised it is part of
+  // the payables record and stays put (savedStatus, not the working copy).
+  const ccyEditable = canWrite && savedStatus === 'draft';
+  // Changing currency re-bases the DEFAULT tax rates (20 GBP / 0 USD): lines
+  // still on the old default follow, custom rates are left alone.
+  const changeCurrency = (next) => {
+    if (next === cur) return;
+    const oldDef = defaultTaxRateFor(cur), newDef = defaultTaxRateFor(next);
+    setLines(ls => ls.map(l => Number(l.tax_rate ?? oldDef) === oldDef ? { ...l, tax_rate: newDef } : l));
+    set('currency', next);
+  };
+  // A draft follows its customer: the site's country first, then the company's.
+  const followCustomer = (locationId, companyId) => {
+    if (!ccyEditable) return;
+    const loc = locations.find(l => l.id === locationId);
+    const co = companies.find(c => c.id === (companyId || loc?.company_id));
+    if (loc || co) changeCurrency(currencyForCountry(loc?.country || co?.country));
+  };
+  const addLine = () => setLines(ls => [...ls, { name: '', description: '', qty: 1, unit_price: 0, tax_rate: defaultTaxRateFor(cur), category_id: bill.category_id || null }]);
   const removeLine = (i) => setLines(ls => ls.filter((_, j) => j !== i));
-  const notify = (m) => { setFlash(m); setTimeout(() => setFlash(''), 2500); };
+  const notify = (msg) => { setFlash(msg); setTimeout(() => setFlash(''), 2500); };
   const locs = locations.filter(l => !bill.company_id || l.company_id === bill.company_id);
 
   // When a supplier is picked, default the category + snapshot their VAT number.
@@ -72,7 +97,7 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
       company_id: bill.company_id || null, location_id: bill.location_id || null, deal_id: bill.deal_id || null,
       cost_context: bill.cost_context || 'ongoing', status: bill.status,
       description: (bill.description || '').trim() || null, supplier_ref: (bill.supplier_ref || '').trim() || null,
-      issue_date: bill.issue_date, due_date: bill.due_date || null, currency: bill.currency || 'GBP',
+      issue_date: bill.issue_date, due_date: bill.due_date || null, currency: cur,
       subtotal: totals.net, tax_amount: totals.vat, total: totals.gross,
       amounts_inclusive: inc,
       vat_reclaimable: !!bill.vat_reclaimable, vat_reclaim_amount: reclaim,
@@ -150,9 +175,9 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
                 <h3 className="text-sm font-bold text-paper">Line items</h3>
                 <div className="flex items-center gap-1 ml-3">
                   <button onClick={() => canWrite && set('amounts_inclusive', false)}
-                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition ${!inc ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Ex VAT</button>
+                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition ${!inc ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Ex {taxLbl}</button>
                   <button onClick={() => canWrite && set('amounts_inclusive', true)}
-                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition ${inc ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Inc VAT</button>
+                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition ${inc ? 'bg-ember text-white' : 'bg-card text-muted hover:text-paper'}`}>Inc {taxLbl}</button>
                 </div>
                 {canWrite && <button onClick={addLine} className="ml-auto text-xs text-ember hover:text-ember-deep font-medium">+ Add line</button>}
               </div>
@@ -166,14 +191,14 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                       <div><span className="text-[9px] text-dim block">Qty</span><input type="number" className={cell + ' w-full'} value={l.qty} onChange={e => setLine(i, { qty: e.target.value })} /></div>
-                      <div><span className="text-[9px] text-dim block">{inc ? 'Unit £ (inc VAT)' : 'Unit £ (net)'}</span><input type="number" className={cell + ' w-full'} value={l.unit_price} onChange={e => setLine(i, { unit_price: e.target.value })} /></div>
-                      <div><span className="text-[9px] text-dim block">VAT %</span><input type="number" className={cell + ' w-full'} value={l.tax_rate ?? 20} onChange={e => setLine(i, { tax_rate: e.target.value })} /></div>
+                      <div><span className="text-[9px] text-dim block">{inc ? `Unit ${sym} (inc ${taxLbl})` : `Unit ${sym} (net)`}</span><input type="number" className={cell + ' w-full'} value={l.unit_price} onChange={e => setLine(i, { unit_price: e.target.value })} /></div>
+                      <div><span className="text-[9px] text-dim block">{taxLbl} %</span><input type="number" className={cell + ' w-full'} value={l.tax_rate ?? defaultTaxRateFor(cur)} onChange={e => setLine(i, { tax_rate: e.target.value })} /></div>
                       <div className="col-span-2"><span className="text-[9px] text-dim block">Category</span>
                         <select className={cell + ' w-full'} value={l.category_id || ''} onChange={e => setLine(i, { category_id: e.target.value || null })}>
                           <option value="">—</option>{categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                         </select></div>
                     </div>
-                    <div className="text-right text-xs text-muted">{inc && <>Inc <span className="text-paper font-mono">{gbp2(lineNet(l))}</span> · </>}Net <span className="text-paper font-mono font-semibold">{gbp2(lNet(l))}</span></div>
+                    <div className="text-right text-xs text-muted">{inc && <>Inc <span className="text-paper font-mono">{m(lineNet(l))}</span> · </>}Net <span className="text-paper font-mono font-semibold">{m(lNet(l))}</span></div>
                   </div>
                 ))}
               </div>
@@ -189,9 +214,9 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
           <div className="col-span-4 space-y-4">
             <div className="glass-card rounded-2xl p-4">
               <div className="text-sm font-bold text-paper mb-1">Totals</div>
-              <Row k="Net" v={gbp2(totals.net)} />
-              <Row k="VAT" v={gbp2(totals.vat)} />
-              <Row k="Gross" v={gbp2(totals.gross)} bold />
+              <Row k="Net" v={m(totals.net)} />
+              <Row k={taxLbl} v={m(totals.vat)} />
+              <Row k="Gross" v={m(totals.gross)} bold />
             </div>
 
             <div className="glass-card rounded-2xl p-4 space-y-3">
@@ -209,6 +234,12 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
                 <div><label className={label}>Issue date</label><input type="date" className={input} value={bill.issue_date || ''} onChange={e => set('issue_date', e.target.value)} /></div>
                 <div><label className={label}>Due date</label><input type="date" className={input} value={bill.due_date || ''} onChange={e => set('due_date', e.target.value)} /></div>
               </div>
+              <div><label className={label}>Currency</label>
+                <select className={input} disabled={!ccyEditable} value={cur} onChange={e => changeCurrency(e.target.value)}>
+                  <option value="GBP">GBP £ (UK, VAT)</option>
+                  <option value="USD">USD $ (US, sales tax)</option>
+                </select>
+                {savedStatus && savedStatus !== 'draft' && <div className="text-[10px] text-dim mt-1">Fixed once the bill is raised.</div>}</div>
               <div><label className={label}>Default category</label>
                 <select className={input} value={bill.category_id || ''} onChange={e => set('category_id', e.target.value || null)}>
                   <option value="">—</option>{categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
@@ -226,11 +257,11 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
                 <div className="text-[10px] text-dim mt-1">{bill.cost_context === 'deal' ? 'Cost of winning/delivering a specific deal.' : 'Recurring cost of servicing this customer/location.'}</div>
               </div>
               <div><label className={label}>Customer</label>
-                <select className={input} value={bill.company_id || ''} onChange={e => { set('company_id', e.target.value || null); set('location_id', null); }}>
+                <select className={input} value={bill.company_id || ''} onChange={e => { const id = e.target.value || null; set('company_id', id); set('location_id', null); if (id) followCustomer(null, id); }}>
                   <option value="">—</option>{companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select></div>
               <div><label className={label}>Location</label>
-                <select className={input} value={bill.location_id || ''} onChange={e => set('location_id', e.target.value || null)}>
+                <select className={input} value={bill.location_id || ''} onChange={e => { const id = e.target.value || null; set('location_id', id); if (id) followCustomer(id, bill.company_id); }}>
                   <option value="">—</option>{locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 </select></div>
               <div><label className={label}>Deal</label>
@@ -239,13 +270,16 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
                 </select></div>
             </div>
 
-            {uk && (
+            {/* HMRC input-VAT reclaim: UK instance AND a sterling bill. A dollar
+                bill carries sales tax, which is never reclaimed, so the card
+                (and its VAT wording) stays UK-only by construction. */}
+            {uk && cur === 'GBP' && (
               <div className="glass-card rounded-2xl p-4 space-y-3">
                 <div className="text-sm font-bold text-paper">VAT reclaim</div>
                 <div><label className={label}>Supplier VAT number (optional)</label><input className={input} value={bill.supplier_vat_number || ''} onChange={e => set('supplier_vat_number', e.target.value)} placeholder="GB123456789" /></div>
                 <Check label="Valid VAT invoice held" checked={!!bill.has_vat_invoice} onChange={v => set('has_vat_invoice', v)} />
                 <Check label="Input VAT reclaimable" checked={!!bill.vat_reclaimable} onChange={v => set('vat_reclaimable', v)} />
-                <div><label className={label}>Reclaim amount (blank = full VAT {gbp2(totals.vat)})</label><input type="number" className={input} value={bill.vat_reclaim_amount ?? ''} onChange={e => set('vat_reclaim_amount', e.target.value)} placeholder={String(totals.vat)} /></div>
+                <div><label className={label}>Reclaim amount (blank = full VAT {m(totals.vat)})</label><input type="number" className={input} value={bill.vat_reclaim_amount ?? ''} onChange={e => set('vat_reclaim_amount', e.target.value)} placeholder={String(totals.vat)} /></div>
                 {!bill.has_vat_invoice && bill.vat_reclaimable && totals.vat > 0 &&
                   <div className="text-[11px] text-amber-600">⚠ Not yet reclaimable — tick "Valid VAT invoice held" once you have the invoice or receipt.</div>}
               </div>
@@ -261,7 +295,7 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
                   <div className="text-[10px] text-dim mt-1">Raised bills can't be deleted — set <span className="text-paper">Void</span> to retire one. Only drafts can be deleted.</div>
                 )}</div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className={label}>Amount paid £</label><input type="number" className={input} value={bill.amount_paid || 0} onChange={e => set('amount_paid', e.target.value)} /></div>
+                <div><label className={label}>Amount paid {sym}</label><input type="number" className={input} value={bill.amount_paid || 0} onChange={e => set('amount_paid', e.target.value)} /></div>
                 <div><label className={label}>Paid date</label><input type="date" className={input} value={bill.paid_at ? bill.paid_at.slice(0, 10) : ''} onChange={e => set('paid_at', e.target.value || null)} /></div>
                 <div><label className={label}>Method</label><input className={input} value={bill.payment_method || ''} onChange={e => set('payment_method', e.target.value)} placeholder="bank / card" /></div>
                 <div><label className={label}>Reference</label><input className={input} value={bill.payment_reference || ''} onChange={e => set('payment_reference', e.target.value)} /></div>

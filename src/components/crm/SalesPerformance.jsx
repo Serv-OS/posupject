@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { sumByCurrency, fmtByCurrency, fmtMoney0 } from '../../lib/money';
 import { TrendingUp, Phone, Mail, Users as UsersIcon, MessageSquare, FileText, Target } from 'lucide-react';
 import { LEAD_STAGES } from '../../lib/leadStages';
 
@@ -9,7 +9,6 @@ import { LEAD_STAGES } from '../../lib/leadStages';
 // against the configurable activity goals and ARR quota.
 
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-const gbp0 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 });
 
 function rangeFor(preset) {
   const now = new Date(); const start = new Date(now); start.setHours(0, 0, 0, 0);
@@ -155,6 +154,7 @@ export default function SalesPerformance({ profile, onNavigate }) {
               onSave={v => saveTargets({ ...targets, activities_per_week: v })} />
             <TargetField label="Meetings / week" value={targets.meetings_per_week} disabled={!isOwner}
               onSave={v => saveTargets({ ...targets, meetings_per_week: v })} />
+            {/* One company-wide £ figure (no currency column), so attainment counts £ ARR only. */}
             <TargetField label="Quota ARR / month" value={targets.quota_arr_month} disabled={!isOwner} money
               onSave={v => saveTargets({ ...targets, quota_arr_month: v })} />
             <TargetField label="Commission %" value={targets.commission_pct} disabled={!isOwner}
@@ -291,7 +291,7 @@ function RepDetail({ s, activities, leads, deals, from, to, onNavigate, targets 
         <span className="text-xs text-muted">{s.total} activities · {s.dealsWon} won · {fmtByCurrency(s.arrWon, 0)} ARR</span>
         {s.hitQuota
           ? <span className="text-xs font-semibold text-emerald-600 ml-auto">Quota hit — est. commission {fmtByCurrency(commission, 0)}</span>
-          : <span className="text-xs text-dim ml-auto">{fmtByCurrency(s.arrWon, 0)} / {gbp0(s.quotaScaled)} quota ({Math.round(((s.arrWon.GBP || 0) / Math.max(1, s.quotaScaled)) * 100)}%)</span>}
+          : <span className="text-xs text-dim ml-auto">{fmtByCurrency(s.arrWon, 0)} / {fmtMoney0(s.quotaScaled, 'GBP')} quota ({Math.round(((s.arrWon.GBP || 0) / Math.max(1, s.quotaScaled)) * 100)}%)</span>}
       </div>
       <div className="p-5 grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Daily activity */}

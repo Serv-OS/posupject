@@ -18,6 +18,12 @@ import DealDetail from '../components/crm/DealDetail.jsx';
 import PaymentsPanel from '../components/crm/PaymentsPanel.jsx';
 import ReportingDashboard from '../components/crm/ReportingDashboard.jsx';
 import LocationDetail from '../components/crm/LocationDetail.jsx';
+import ExpensesPanel from '../components/finance/ExpensesPanel.jsx';
+import WhatIOwePanel from '../components/finance/WhatIOwePanel.jsx';
+import ProductsPanel from '../components/crm/ProductsPanel.jsx';
+import QuotesPanel from '../components/crm/QuotesPanel.jsx';
+import InvoicesPanel from '../components/crm/InvoicesPanel.jsx';
+import SalesPerformance from '../components/crm/SalesPerformance.jsx';
 import MobileNav from '../components/MobileNav.jsx';
 import QuickAddCommand from '../components/crm/QuickAddCommand.jsx';
 import { OfflineBanner } from '../components/crm/ui.jsx';
@@ -42,6 +48,12 @@ function App() {
         {v === 'bills' && <BillsPanel profile={P} onNavigate={nav} />}
         {v === 'quote' && <QuoteBuilder quoteId="q1" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'reporting' && <ReportingDashboard profile={P} onNavigate={nav} />}
+        {v === 'expenses' && <ExpensesPanel profile={P} onNavigate={nav} />}
+        {v === 'owe' && <WhatIOwePanel profile={P} onNavigate={nav} />}
+        {v === 'products' && <ProductsPanel profile={P} onNavigate={nav} />}
+        {v === 'quotes' && <QuotesPanel profile={P} onNavigate={nav} onOpen={nav} />}
+        {v === 'invoices' && <InvoicesPanel profile={P} onNavigate={nav} />}
+        {v === 'sales' && <SalesPerformance profile={P} onNavigate={nav} />}
         {v === 'processing' && <PaymentsPanel profile={P} onNavigate={nav} />}
         {v === 'deal' && <DealDetail dealId="d1" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'lead' && <LeadDetail leadId="lead1" profile={P} onClose={nav} onNavigate={nav} />}

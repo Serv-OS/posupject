@@ -4,10 +4,10 @@ import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-rea
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
 import { loadCostTemplate, costFor, costExplain, regionForCountry, defaultMarkupFor } from '../../lib/cardCosts';
 import { STATEMENT_LINES, blankStatement, statementTotals, statementToRates } from '../../lib/statement';
-import { fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { fmtMoney, fmtMoney0, currencySymbol, sumByCurrency, fmtByCurrency } from '../../lib/money';
 
-export const gbp0 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 });
-export const gbp2 = (n) => '£' + (Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// No bare-£ helpers in here: a card can be American, so every figure goes
+// through moneyFor(ccyOf(card)) and takes the card's own symbol.
 export const pct2 = (v) => v == null || v === '' ? '—' : `${Number(v).toFixed(2)}%`;
 
 // A card is priced in the currency of the region whose costs it was built on.
@@ -142,7 +142,7 @@ export default function PaymentsPanel({ profile, onNavigate }) {
       supabase.from('processing_accounts').select('*, company:companies(name), location:locations(name)').order('created_at', { ascending: false }),
       supabase.from('processing_volumes').select('*'),
       supabase.from('companies').select('id, name, country').order('name'),
-      supabase.from('locations').select('id, name, company_id').order('name'),
+      supabase.from('locations').select('id, name, company_id, country').order('name'),
       supabase.from('processing_rates').select('*'),
     ]);
     const rates = r.data || [];
@@ -381,9 +381,12 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     || companies.find(c => c.id === f.company_id)?.country,
   );
   const region = f.region_code || suggested;
-  const sym = region === 'US' ? '$' : '£';
+  // One currency for the whole form, decided before anything renders: every
+  // label, placeholder and total below takes its symbol from this.
+  const ccy = region === 'US' ? 'USD' : 'GBP';
+  const sym = currencySymbol(ccy);
   const minor = region === 'US' ? 'c' : 'p';
-  const { m0, m2 } = moneyFor(region === 'US' ? 'USD' : 'GBP');
+  const { m0, m2 } = moneyFor(ccy);
   useEffect(() => {
     let live = true;
     loadCostTemplate(supabase, region).then(t => {
@@ -540,7 +543,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
             defaultDebitShare={costFor(template, 'cp_vm_debit').split ?? 55}
             onApply={applyStatement} />
 
-          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} channelTotal={channelTotal(ch.key)} avgTxn={f.avg_txn_size} splitSum={splitSum(ch.key)} sym={sym} minor={minor} m0={m0} template={template} />)}
+          {CHANNELS.map(ch => <RateChannel key={ch.key} ch={ch} rates={rates} setRate={setRate} channelTotal={channelTotal(ch.key)} avgTxn={f.avg_txn_size} splitSum={splitSum(ch.key)} ccy={ccy} template={template} />)}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div><label className={label}>Processing partner</label><input className={input} value={f.partner} onChange={e => set('partner', e.target.value)} placeholder="e.g. Adyen" /></div>
@@ -549,7 +552,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
 
           {/* Live preview incl. what WE make (internal) */}
           <div className="glass-inner rounded-xl p-4 grid grid-cols-2 md:grid-cols-5 gap-3 text-center">
-            <Mini value={fmtMoney0(totals.vol, region === 'US' ? 'USD' : 'GBP')} label="Monthly volume" />
+            <Mini value={m0(totals.vol)} label="Monthly volume" />
             <Mini value={totals.vol ? pct2(totals.currentEff) + ' → ' + pct2(totals.ourEff) : '—'} label="Eff. rate (their → ours)" />
             <Mini value={totals.vol ? m2(totals.saving) : '—'} label="Customer saves / mo" tone="emerald" />
             <Mini value={totals.vol ? m0(totals.savingYr) : '—'} label="Customer saves / yr" tone="emerald" />
@@ -613,7 +616,12 @@ function CostBuildUp({ template, region, minor }) {
   );
 }
 
-function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, sym = '£', minor = 'p', m0 = (n) => fmtMoney0(n, 'GBP'), template = null }) {
+function RateChannel({ ch, rates, setRate, channelTotal, avgTxn, splitSum, ccy = 'GBP', template = null }) {
+  // Symbol, minor unit and formatter all come from the card's one currency so
+  // they cannot drift apart; they used to be three separate £/p/GBP defaults.
+  const sym = currencySymbol(ccy);
+  const minor = ccy === 'USD' ? 'c' : 'p';
+  const m0 = (n) => fmtMoney0(n, ccy);
   // Placeholders are the region's own costs. They used to be hardcoded UK
   // presets, so every empty cell on a US card quietly suggested a UK number.
   // With nothing set for a card type the cell shows a dash: an unknown cost

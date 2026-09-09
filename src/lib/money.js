@@ -48,9 +48,11 @@ export const sumByCurrency = (rows, value, currencyOf = (r) => r.currency || 'GB
   return out;
 };
 // Render a per-currency sum as '£1,200.00 + $300.00' (or a lone figure).
-export const fmtByCurrency = (sums, dp = 2) => {
+// A zero has no currency of its own, so when nothing is non-zero the caller
+// says which symbol belongs on screen; a US-only view must not show "£0".
+export const fmtByCurrency = (sums, dp = 2, zeroCcy = 'GBP') => {
   const parts = CURRENCIES.filter((c) => sums[c]).map((c) => fmtMoney(sums[c], c, dp));
-  return parts.length ? parts.join(' + ') : fmtMoney(0, 'GBP', dp);
+  return parts.length ? parts.join(' + ') : fmtMoney(0, zeroCcy, dp);
 };
 export const pct = (n, dp = 2) => (n == null || n === '' ? '—' : `${Number(n).toFixed(dp)}%`);
 

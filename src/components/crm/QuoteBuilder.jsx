@@ -32,7 +32,7 @@ const cardSnapshot = (acc) => {
 
 const CAT_LABEL = { hardware: 'Hardware', services: 'Services', saas: 'SaaS', payments: 'Payments' };
 // The catalogue has ONE price column and no currency: products.default_price
-// is pounds (ProductsPanel labels it "Selling price (£)"). Print it with its
+// is pounds (ProductsPanel labels it "Selling price (£ GBP)"). Print it with its
 // OWN symbol, never the QUOTE's, and never copy it onto a quote of another
 // currency. We hold no exchange rate, so a blank price the rep must type is
 // the only honest line, and it is the one price source on this screen that
@@ -317,7 +317,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
         {/* Docked total */}
         <div className="fixed inset-x-0 z-30 px-[14px] pt-2.5 pb-2.5 border-t" style={{ bottom: 'calc(56px + env(safe-area-inset-bottom))', background: 'var(--panel-bg)', backdropFilter: 'blur(12px)', borderColor: 'var(--hair)' }}>
           <div className="flex items-baseline gap-2">
-            <span className="text-[12px] text-muted flex-1">Net {money(totals.oneOff)} · {taxLabelFor(cur)} {money(totals.tax)}{totals.recurringArr ? ` · ARR ${money(totals.recurringArr)} ex VAT` : ''}</span>
+            <span className="text-[12px] text-muted flex-1">Net {money(totals.oneOff)} · {taxLabelFor(cur)} {money(totals.tax)}{totals.recurringArr ? ` · ARR ${money(totals.recurringArr)} ex ${taxLabelFor(cur)}` : ''}</span>
             <span className="font-display text-[20px] font-extrabold text-paper">{money(totals.oneOffTotal)}</span>
           </div>
           <div className="flex gap-2 mt-2">
@@ -468,7 +468,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                       <div><span className="text-[9px] text-dim block">Qty</span><input type="number" className={cell + ' w-full'} value={it.qty} onChange={e => updateItem(idx, { qty: e.target.value })} /></div>
                       <div><span className="text-[9px] text-dim block">Unit {currencySymbol(cur)}</span><input type="number" className={cell + ' w-full'} value={it.unit_price} onChange={e => updateItem(idx, { unit_price: e.target.value })} /></div>
                       <div><span className="text-[9px] text-dim block">Disc %</span><input type="number" className={cell + ' w-full'} value={it.discount} onChange={e => updateItem(idx, { discount: e.target.value })} /></div>
-                      <div><span className="text-[9px] text-dim block">Tax %</span><input type="number" className={cell + ' w-full'} value={it.tax_rate ?? defaultTaxRateFor(cur)} onChange={e => updateItem(idx, { tax_rate: e.target.value })} /></div>
+                      <div><span className="text-[9px] text-dim block">{taxLabelFor(cur)} %</span><input type="number" className={cell + ' w-full'} value={it.tax_rate ?? defaultTaxRateFor(cur)} onChange={e => updateItem(idx, { tax_rate: e.target.value })} /></div>
                     </div>
                     <div className="text-right text-xs text-muted">Line total: <span className="text-paper font-mono font-semibold">{money(lineTotal(it))}</span>{it.billing_type === 'monthly' ? '/mo' : it.category === 'payments' ? '/yr' : ''}</div>
                   </div>
@@ -495,9 +495,9 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               <Row k="Payments (ARR)" v={money(totals.paymentsArr)} sub />
               {totals.paymentsFromCard && <div className="text-[10px] text-dim -mt-1 mb-1">From the attached rate card: what we charge minus what the cards cost us, times twelve.</div>}
               {totals.cardIgnoredForCurrency && <div className="text-[10px] text-red-600 -mt-1 mb-1">The attached rate card is priced in {totals.cardIgnoredForCurrency} and this quote is in {cur}, so its margin is not counted here.</div>}
-              <Row k="Recurring ARR (ex VAT)" v={money(totals.recurringArr)} bold />
-              {totals.recurringTax > 0 && <><Row k="VAT on recurring" v={money(totals.recurringTax)} sub />
-              <Row k="Recurring inc VAT" v={money(totals.recurringGross)} bold /></>}
+              <Row k={`Recurring ARR (ex ${taxLabelFor(cur)})`} v={money(totals.recurringArr)} bold />
+              {totals.recurringTax > 0 && <><Row k={`${taxLabelFor(cur)} on recurring`} v={money(totals.recurringTax)} sub />
+              <Row k={`Recurring inc ${taxLabelFor(cur)}`} v={money(totals.recurringGross)} bold /></>}
               <div className="text-[10px] text-dim mt-2 leading-relaxed">SaaS &amp; payments are the plan the customer agrees to (forecast ARR on the deal) — not charged here. One-off total is what Stripe captures.</div>
             </div>
 

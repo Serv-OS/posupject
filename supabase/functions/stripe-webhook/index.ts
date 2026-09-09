@@ -24,7 +24,8 @@ async function createPaidInvoiceForQuote(supabase: any, quoteId: string, paidAmo
     const patch = fullPayment || alreadyPaid + paidAmount >= Number(inv.total || 0) - 0.01
       ? { status: "paid", paid_at: now, amount_paid: alreadyPaid + paidAmount }
       : { amount_paid: alreadyPaid + paidAmount,
-          notes: `${inv.notes ? inv.notes + "\n" : ""}Deposit of ${moneyFor(q.currency)(paidAmount)} received ${now.slice(0, 10)}. Balance to follow.` };
+          // The note lives on the invoice row, so it carries the invoice's currency
+          notes: `${inv.notes ? inv.notes + "\n" : ""}Deposit of ${moneyFor(inv.currency || q.currency)(paidAmount)} received ${now.slice(0, 10)}. Balance to follow.` };
     await supabase.from("invoices").update(patch).eq("id", inv.id);
     inv = { ...inv, ...patch };
   } else {

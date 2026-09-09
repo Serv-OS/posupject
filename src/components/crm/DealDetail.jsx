@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
-import { fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { fmtMoney, fmtMoney0, sumByCurrency, fmtByCurrency, currencySymbol } from '../../lib/money';
 import { ccyOf } from './PaymentsPanel.jsx';
 import { EditSheet } from './ui.jsx';
 import { currencyForCountry } from '../../lib/region';
@@ -92,13 +92,20 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
       .limit(1);
     const locationId = locAssoc && locAssoc.length ? (locAssoc[0].from_type === 'location' ? locAssoc[0].from_id : locAssoc[0].to_id) : null;
     const validUntil = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-    // The deal's company decides the quote's currency and its tax default —
-    // a hardcoded 20 here put UK VAT on every US quote raised from a deal.
-    let currency = 'GBP';
-    if (deal.company_id) {
+    // The quote's currency and its tax default: the customer's site decides,
+    // then the company, else GBP, the same order LeadDetail stamps a deal.
+    // Company-only gave a pound quote to a US site under a UK group, and a
+    // hardcoded 20 before that put UK VAT on every US quote raised here.
+    let currency = null;
+    if (locationId) {
+      const { data: loc } = await supabase.from('locations').select('country').eq('id', locationId).maybeSingle();
+      if (loc?.country) currency = currencyForCountry(loc.country);
+    }
+    if (!currency && deal.company_id) {
       const { data: co } = await supabase.from('companies').select('country').eq('id', deal.company_id).maybeSingle();
       currency = currencyForCountry(co?.country);
     }
+    currency = currency || 'GBP';
     const { data, error } = await supabase.from('quotes').insert({
       deal_id: dealId, company_id: deal.company_id || null, contact_id: contactId, location_id: locationId,
       currency, tax_rate: defaultTaxRateFor(currency),
@@ -171,6 +178,9 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
   const dealCcy = deal.currency === 'USD' ? 'USD' : 'GBP';
   const otherCcy = dealCcy === 'USD' ? 'GBP' : 'USD';
   const fmt = (v) => (v ? fmtMoney(v, dealCcy) : '');
+  // The edit form's money boxes say which currency they take: a US deal's
+  // placeholders read $0.00, so nobody types pounds into a dollar deal.
+  const sym = currencySymbol(dealCcy);
 
   // What the rate cards on this deal's quotes are worth a year. A figure typed
   // on the deal is a deliberate override and wins; otherwise the card is the
@@ -258,12 +268,12 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                   { key: 'source', label: 'Source' }, { key: 'expected_close_date', label: 'Expected close', type: 'date' },
                   { key: 'owner_id', label: 'Owner', type: 'select', options: [['', 'Unassigned'], ...members.map(m => [m.id, m.display_name || m.email])] },
                 ] },
-                { title: 'Revenue breakdown', summary: 'one-time, ARR, total', fields: [
-                  { key: 'hardware_value', label: 'Hardware (one-time)', type: 'number', parse: (v) => (v ? parseFloat(v) : null) },
-                  { key: 'services_value', label: 'Services (one-time)', type: 'number', parse: (v) => (v ? parseFloat(v) : null) },
-                  { key: 'saas_arr', label: 'SaaS ARR', type: 'number', parse: (v) => (v ? parseFloat(v) : null) },
-                  { key: 'payments_arr', label: 'Payments ARR', type: 'number', parse: (v) => (v ? parseFloat(v) : null) },
-                  { key: 'value', label: 'Total deal value', type: 'number', parse: (v) => (v ? parseFloat(v) : null), placeholder: 'Or enter a flat total' },
+                { title: `Revenue breakdown (${dealCcy})`, summary: 'one-time, ARR, total', fields: [
+                  { key: 'hardware_value', label: 'Hardware (one-time)', type: 'number', parse: (v) => (v ? parseFloat(v) : null), placeholder: `${sym}0.00` },
+                  { key: 'services_value', label: 'Services (one-time)', type: 'number', parse: (v) => (v ? parseFloat(v) : null), placeholder: `${sym}0.00` },
+                  { key: 'saas_arr', label: 'SaaS ARR', type: 'number', parse: (v) => (v ? parseFloat(v) : null), placeholder: `${sym}0.00` },
+                  { key: 'payments_arr', label: 'Payments ARR', type: 'number', parse: (v) => (v ? parseFloat(v) : null), placeholder: `${sym}0.00` },
+                  { key: 'value', label: 'Total deal value', type: 'number', parse: (v) => (v ? parseFloat(v) : null), placeholder: `Or enter a flat total in ${dealCcy}` },
                 ] },
                 { title: 'Outcome & notes', fields: [{ key: 'lost_reason', label: 'Lost reason' }, { key: 'notes', label: 'Notes', type: 'textarea' }] },
               ]} />
@@ -282,13 +292,13 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                 <div><label className={label}>Owner</label><select className={input} value={draft.owner_id || ''} onChange={e => set('owner_id', e.target.value || null)}>
                   <option value="">Unassigned</option>{members.map(m => <option key={m.id} value={m.id}>{m.display_name || m.email}</option>)}</select></div>
               </div>
-              <div className="mt-3"><label className={label + ' mb-2'}>Revenue Breakdown</label>
+              <div className="mt-3"><label className={label + ' mb-2'}>Revenue Breakdown ({dealCcy})</label>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><label className={label}>Hardware (one-time)</label><input className={input} type="number" step="0.01" value={draft.hardware_value || ''} onChange={e => set('hardware_value', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.00" /></div>
-                  <div><label className={label}>Services (one-time)</label><input className={input} type="number" step="0.01" value={draft.services_value || ''} onChange={e => set('services_value', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.00" /></div>
-                  <div><label className={label}>SaaS ARR</label><input className={input} type="number" step="0.01" value={draft.saas_arr || ''} onChange={e => set('saas_arr', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.00" /></div>
-                  <div><label className={label}>Payments ARR</label><input className={input} type="number" step="0.01" value={draft.payments_arr || ''} onChange={e => set('payments_arr', e.target.value ? parseFloat(e.target.value) : null)} placeholder="0.00" /></div>
-                  <div><label className={label}>Total deal value</label><input className={input} type="number" step="0.01" value={draft.value || ''} onChange={e => set('value', e.target.value ? parseFloat(e.target.value) : null)} placeholder="Or enter a flat total" /></div>
+                  <div><label className={label}>Hardware (one-time)</label><input className={input} type="number" step="0.01" value={draft.hardware_value || ''} onChange={e => set('hardware_value', e.target.value ? parseFloat(e.target.value) : null)} placeholder={`${sym}0.00`} /></div>
+                  <div><label className={label}>Services (one-time)</label><input className={input} type="number" step="0.01" value={draft.services_value || ''} onChange={e => set('services_value', e.target.value ? parseFloat(e.target.value) : null)} placeholder={`${sym}0.00`} /></div>
+                  <div><label className={label}>SaaS ARR</label><input className={input} type="number" step="0.01" value={draft.saas_arr || ''} onChange={e => set('saas_arr', e.target.value ? parseFloat(e.target.value) : null)} placeholder={`${sym}0.00`} /></div>
+                  <div><label className={label}>Payments ARR</label><input className={input} type="number" step="0.01" value={draft.payments_arr || ''} onChange={e => set('payments_arr', e.target.value ? parseFloat(e.target.value) : null)} placeholder={`${sym}0.00`} /></div>
+                  <div><label className={label}>Total deal value</label><input className={input} type="number" step="0.01" value={draft.value || ''} onChange={e => set('value', e.target.value ? parseFloat(e.target.value) : null)} placeholder={`Or enter a flat total in ${dealCcy}`} /></div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 mt-3">
@@ -335,7 +345,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                     <div className="text-[10px] text-dim -mt-1">
                       {typedPayments > 0
                         ? cardCalc.priced
-                          ? <>Typed on the deal, so it wins. The rate card says {fmtByCurrency(cardArrBy)}.</>
+                          ? <>Typed on the deal, so it wins. The rate card says {fmtByCurrency(cardArrBy, 2, deal.currency === 'USD' ? 'USD' : 'GBP')}.</>
                           : <>Typed on the deal.</>
                         : <>From {cardCalc.cards === 1 ? 'the rate card' : `${cardCalc.cards} rate cards`} on this deal's quotes: what we charge minus what the cards cost us, times twelve, across {cardCalc.priced} priced card type{cardCalc.priced === 1 ? '' : 's'}.</>}
                       {cardCalc.foreign > 0 && <> <b>{cardCalc.foreign} rate card{cardCalc.foreign === 1 ? ' is' : 's are'} priced in {otherCcy}</b>, which we do not convert, so that figure is shown here and left out of the Total.</>}
