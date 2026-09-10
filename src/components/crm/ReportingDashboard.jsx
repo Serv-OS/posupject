@@ -588,8 +588,25 @@ export default function ReportingDashboard({ profile, onNavigate }) {
   const both = (m, k) => sums(m.GBP?.[k] || 0, m.USD?.[k] || 0);
   // The same for a { GBP, USD } total from sumByCurrency.
   const byCcy = (v) => sums(v?.GBP || 0, v?.USD || 0);
-  // Share bars only make sense inside one currency; blended ratios mean nothing.
-  const share = (part, whole) => (whole.GBP && !whole.USD ? (part.GBP / whole.GBP) : whole.USD && !whole.GBP ? (part.USD / whole.USD) : null);
+  // Two currencies are two figures, one per line. As a single string,
+  // "£81,309 + $19,712" wrapped in every tile with the "+" left hanging and
+  // spilled out of every narrow column. A zero takes zeroCcy.
+  const moneyParts = (gbp, usd) => {
+    const out = [];
+    if (gbp) out.push(fmtMoney0(gbp, 'GBP'));
+    if (usd) out.push(fmtMoney0(usd, 'USD'));
+    return out.length ? out : [fmtMoney0(0, zeroCcy)];
+  };
+  const partsOf = (m, k) => moneyParts(m.GBP?.[k] || 0, m.USD?.[k] || 0);
+  const partsCcy = (v) => moneyParts(v?.GBP || 0, v?.USD || 0);
+  // A figure that follows other text: one currency stays on the line as before,
+  // two drop onto their own lines underneath, so a UK-only view is unchanged.
+  const moneyAfter = (v, cls = '') => {
+    const parts = partsCcy(v);
+    return parts.length > 1
+      ? <span className={`block ${cls}`}><MoneyLines parts={parts} /></span>
+      : <> · <span className={cls}>{parts[0]}</span></>;
+  };
 
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim";
   const tabBtn = (t, lbl) => (
@@ -616,7 +633,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
             </button>
           ))}
         </div>
-        {region === 'all' && <div className="w-full text-[11px] text-dim -mt-1">Showing both regions. Money is totalled per currency and never converted, so a figure can read "£12,000 + $3,500".</div>}
+        {region === 'all' && <div className="w-full text-[11px] text-dim -mt-1">Showing both regions. Money is totalled per currency and never converted, so pounds and dollars show as two figures, one under the other.</div>}
       </div>
 
       <div className="px-6 py-2 border-b border-bdr flex gap-1 overflow-x-auto">
@@ -821,30 +838,33 @@ export default function ReportingDashboard({ profile, onNavigate }) {
 
               <div className="grid grid-cols-4 gap-3">
                 <MetricCard label="Open deals" value={pipelineMetrics.open.length} sub={`${pipelineMetrics.late} past their close date`} color={pipelineMetrics.late ? 'text-red-600' : 'text-paper'} />
-                <MetricCard label="Pipeline value" value={both(pipelineMetrics.all, 'total')} sub="one-off + ARR" />
-                <MetricCard label="Weighted" value={both(pipelineMetrics.all, 'weighted')} sub="by stage probability" color="text-emerald-600" />
-                <MetricCard label="Recurring in play" value={both(pipelineMetrics.all, 'recurring')} sub="SaaS + payments ARR" />
+                <MetricCard label="Pipeline value" money={partsOf(pipelineMetrics.all, 'total')} sub="one-off + ARR" />
+                <MetricCard label="Weighted" money={partsOf(pipelineMetrics.all, 'weighted')} sub="by stage probability" color="text-emerald-600" />
+                <MetricCard label="Recurring in play" money={partsOf(pipelineMetrics.all, 'recurring')} sub="SaaS + payments ARR" />
               </div>
 
               <div className="glass-card rounded-2xl p-4">
                 <div className={label + ' mb-3'}>What the pipeline is made of</div>
                 <div className="grid grid-cols-4 gap-3">
                   {[['Hardware', 'hardware'], ['Services', 'services'], ['SaaS ARR', 'saas'], ['Payments ARR', 'payments']].map(([l, k]) => (
-                    <div key={l}>
+                    // Every cell has the same shape, so the four bars sit on one line
+                    // whatever the figures: the value takes the spare height.
+                    <div key={l} className="flex flex-col">
                       <div className="text-[10px] text-dim uppercase tracking-wide">{l}</div>
-                      <div className="text-lg font-bold text-paper tabular-nums">{both(pipelineMetrics.all, k)}</div>
-                      {/* A zero here reads as a bug when the money is really sitting on a
-                          rate card that no deal has claimed. Say so, rather than show nothing. */}
-                      {l === 'Payments ARR' && deals.some(d => d.payments_from_card) && (
-                        <div className="text-[10px] mt-0.5 text-dim">from rate cards, counted once per customer</div>
-                      )}
-                      <div className="h-[5px] mt-1 rounded-full overflow-hidden" style={{ background: 'var(--ink-line)' }}>
-                        <div className="h-full bg-ember" style={{ width: `${Math.round((share({ GBP: pipelineMetrics.all.GBP[k], USD: pipelineMetrics.all.USD[k] }, { GBP: pipelineMetrics.all.GBP.total, USD: pipelineMetrics.all.USD.total }) ?? 0) * 100)}%` }} />
+                      <div className="flex-1 text-lg font-bold text-paper tabular-nums leading-tight mt-0.5">
+                        <MoneyLines parts={partsOf(pipelineMetrics.all, k)} />
+                      </div>
+                      <div className="mt-2">
+                        <ShareBars part={{ GBP: pipelineMetrics.all.GBP[k], USD: pipelineMetrics.all.USD[k] }} whole={{ GBP: pipelineMetrics.all.GBP.total, USD: pipelineMetrics.all.USD.total }} />
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="text-[10px] text-dim mt-3">Hardware and services are one-off. SaaS and payments are annual recurring, counted once at their yearly rate.</div>
+                <div className="text-[10px] text-dim mt-3">
+                  Hardware and services are one-off. SaaS and payments are annual recurring, counted once at their yearly rate.
+                  {/* Was a caption inside the Payments cell, which pushed its bar below the other three. */}
+                  {deals.some(d => d.payments_from_card) && ' Payments ARR includes rate cards, counted once per customer.'}
+                </div>
               </div>
 
               <div className="glass-card rounded-2xl overflow-hidden">
@@ -856,12 +876,12 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                   <div key={s.stage} className="px-4 py-2.5 border-b border-bdr last:border-b-0 flex items-center gap-3 text-sm">
                     <span className="w-32 shrink-0 text-paper truncate">{s.label}</span>
                     <span className="w-8 shrink-0 text-right font-mono text-xs text-muted">{s.count}</span>
-                    <div className="flex-1 h-[6px] rounded-full overflow-hidden" style={{ background: 'var(--ink-line)' }}>
-                      <div className="h-full bg-ember" style={{ width: `${Math.round((share({ GBP: s.GBP.total, USD: s.USD.total }, { GBP: pipelineMetrics.all.GBP.total, USD: pipelineMetrics.all.USD.total }) ?? 0) * 100)}%` }} />
+                    <div className="flex-1">
+                      <ShareBars part={{ GBP: s.GBP.total, USD: s.USD.total }} whole={{ GBP: pipelineMetrics.all.GBP.total, USD: pipelineMetrics.all.USD.total }} className="h-[6px]" />
                     </div>
                     <span className="w-10 shrink-0 text-right font-mono text-[10px] text-dim">{Math.round(s.prob * 100)}%</span>
-                    <span className="w-24 shrink-0 text-right tabular-nums text-paper">{both(s, 'total')}</span>
-                    <span className="w-24 shrink-0 text-right tabular-nums text-emerald-600">{both(s, 'weighted')}</span>
+                    <span className="w-24 shrink-0 text-right tabular-nums text-paper leading-tight"><MoneyLines parts={partsOf(s, 'total')} /></span>
+                    <span className="w-24 shrink-0 text-right tabular-nums text-emerald-600 leading-tight"><MoneyLines parts={partsOf(s, 'weighted')} /></span>
                   </div>
                 ))}
                 {pipelineMetrics.open.length === 0 && <div className="px-4 py-8 text-center text-dim text-sm italic">Nothing open in this view.</div>}
@@ -921,13 +941,13 @@ export default function ReportingDashboard({ profile, onNavigate }) {
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                <MetricCard label="Won" value={salesMetrics.won} sub={byCcy(salesMetrics.wonValue)} color="text-emerald-600" />
+                <MetricCard label="Won" value={salesMetrics.won} sub={<MoneyLines parts={partsCcy(salesMetrics.wonValue)} />} color="text-emerald-600" />
                 <MetricCard label="Close rate" value={`${salesMetrics.winRate}%`} sub={`${salesMetrics.won} won · ${salesMetrics.lost} lost`} />
-                <MetricCard label="One-off revenue" value={byCcy(salesMetrics.wonOneOff)} sub={'\u00A0'}
+                <MetricCard label="One-off revenue" money={partsCcy(salesMetrics.wonOneOff)} sub={'\u00A0'}
                   color={(salesMetrics.wonOneOff.GBP || salesMetrics.wonOneOff.USD) ? 'text-emerald-600' : 'text-dim'} />
-                <MetricCard label="Recurring (ARR)" value={byCcy(salesMetrics.wonRecurring)} sub={'\u00A0'}
+                <MetricCard label="Recurring (ARR)" money={partsCcy(salesMetrics.wonRecurring)} sub={'\u00A0'}
                   color={(salesMetrics.wonRecurring.GBP || salesMetrics.wonRecurring.USD) ? 'text-ember' : 'text-dim'} />
-                <MetricCard label="Avg deal" value={byCcy(salesMetrics.avgDeal)} sub={'\u00A0'} />
+                <MetricCard label="Avg deal" money={partsCcy(salesMetrics.avgDeal)} sub={'\u00A0'} />
                 {/* "0" here looked like a bug. Under a day is a real answer for
                     passed-in deals logged the day they sign — say it in words. */}
                 <MetricCard
@@ -947,7 +967,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                     const max = Math.max(1, ...salesMetrics.months.map(m => magOf(m.value)));
                     return salesMetrics.months.map(m => (
                       <div key={m.key} className="flex-1 min-w-0 flex flex-col items-center justify-end" title={`${m.label}: ${m.count} won, ${byCcy(m.value)}`}>
-                        {magOf(m.value) > 0 && <div className="text-[9px] font-mono text-emerald-600 whitespace-nowrap">{byCcy(m.value)}</div>}
+                        {magOf(m.value) > 0 && <div className="text-[9px] font-mono text-emerald-600 leading-tight text-center"><MoneyLines parts={partsCcy(m.value)} /></div>}
                         {m.count > 0 && <div className="text-[9px] font-mono text-dim">{m.count} won</div>}
                         <div className="w-full flex items-end justify-center border-b border-bdr" style={{ height: 96 }}>
                           <div className={`w-3/4 rounded-t ${magOf(m.value) > 0 ? 'bg-emerald-500/70' : 'bg-card'}`}
@@ -972,7 +992,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                       <div key={k} className="py-2 border-b border-bdr last:border-0">
                         <div className="flex justify-between text-xs">
                           <span className="text-paper font-medium">{k}</span>
-                          <span className="text-emerald-600 font-mono">{byCcy(v.value)}</span>
+                          <span className="text-emerald-600 font-mono text-right leading-tight"><MoneyLines parts={partsCcy(v.value)} /></span>
                         </div>
                         <div className="flex justify-between text-[11px] text-muted mt-0.5">
                           <span>{v.won} won · {v.lost} lost{v.open ? ` · ${v.open} open` : ''}</span>
@@ -991,7 +1011,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                     return (
                       <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
                         <span className="text-paper">{k}</span>
-                        <span className="text-muted">{v.won}/{closed} won · <span className="text-emerald-600 font-mono">{byCcy(v.value)}</span></span>
+                        <span className="text-muted text-right leading-tight">{v.won}/{closed} won{moneyAfter(v.value, 'text-emerald-600 font-mono')}</span>
                       </div>
                     );
                   })}
@@ -1006,7 +1026,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                     return (
                       <div key={k} className="flex justify-between py-1.5 text-xs border-b border-bdr last:border-0">
                         <span className="text-paper">{k}</span>
-                        <span className="text-muted font-mono">{rate}% · {byCcy(v.value)}</span>
+                        <span className="text-muted font-mono text-right leading-tight">{rate}%{moneyAfter(v.value)}</span>
                       </div>
                     );
                   })}
@@ -1029,7 +1049,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                 {Object.entries(salesMetrics.byStage).map(([k, v]) => (
                   <div key={k} className="flex justify-between py-1 text-xs">
                     <span className="text-paper">{k.replace(/_/g, ' ')}</span>
-                    <span className="text-muted font-mono">{v.count} · {byCcy(v.value)}</span>
+                    <span className="text-muted font-mono text-right leading-tight">{v.count}{moneyAfter(v.value)}</span>
                   </div>
                 ))}
               </div>
@@ -1048,10 +1068,10 @@ export default function ReportingDashboard({ profile, onNavigate }) {
           {tab === 'quota' && (
             <>
               <div className="grid grid-cols-4 gap-3">
-                <MetricCard label="Team ARR (this month)" value={byCcy(quotaMetrics.teamArr)} color="text-emerald-600" />
+                <MetricCard label="Team ARR (this month)" money={partsCcy(quotaMetrics.teamArr)} color="text-emerald-600" />
                 <MetricCard label="Team Quota" value={formatCurrency(quotaMetrics.teamQuota)} />
                 <MetricCard label="Attainment" value={`${quotaMetrics.teamQuota ? Math.round(((quotaMetrics.teamArr.GBP || 0) / quotaMetrics.teamQuota) * 100) : 0}%`} />
-                <MetricCard label="Commission (10%)" value={byCcy(quotaMetrics.teamCommission)} color="text-ember" />
+                <MetricCard label="Commission (10%)" money={partsCcy(quotaMetrics.teamCommission)} color="text-ember" />
               </div>
 
               <div className="glass-card rounded-2xl overflow-hidden">
@@ -1075,7 +1095,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                         <tr key={r.id} className="border-t border-bdr">
                           <td className="px-3 py-2 text-sm text-paper">{r.name}</td>
                           <td className="px-3 py-2 text-xs text-muted text-right">{r.wonCount}</td>
-                          <td className="px-3 py-2 text-sm text-emerald-600 font-mono text-right">{byCcy(r.arrClosed)}</td>
+                          <td className="px-3 py-2 text-sm text-emerald-600 font-mono text-right leading-tight"><MoneyLines parts={partsCcy(r.arrClosed)} /></td>
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-2 bg-ink rounded-full overflow-hidden min-w-[60px]">
@@ -1084,7 +1104,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                               <span className={`text-xs font-mono w-10 text-right ${r.attainment >= 1 ? 'text-emerald-600 font-bold' : 'text-muted'}`}>{Math.round(r.attainment * 100)}%</span>
                             </div>
                           </td>
-                          <td className="px-3 py-2 text-sm text-ember font-mono text-right">{byCcy(r.commission)}{r.attainment >= 1 && ' ✓'}</td>
+                          <td className="px-3 py-2 text-sm text-ember font-mono text-right leading-tight"><MoneyLines parts={partsCcy(r.commission).map((x, i, a) => (i === a.length - 1 && r.attainment >= 1 ? `${x} ✓` : x))} /></td>
                         </tr>
                       ))}
                       {quotaMetrics.rows.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-dim text-sm">No sales reps with deals yet.</td></tr>}
@@ -1237,7 +1257,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
             const tUSD = pipelineTotals(trading.filter(d => ccyOfTrading(d) === 'USD'), weights);
             const t = { wonCount: tGBP.wonCount + tUSD.wonCount, openCount: tGBP.openCount + tUSD.openCount,
               wonTransactions: (tGBP.wonTransactions || 0) + (tUSD.wonTransactions || 0), openTransactions: (tGBP.openTransactions || 0) + (tUSD.openTransactions || 0) };
-            const pair = (k, mult = 1) => sums((tGBP[k] || 0) * mult, (tUSD[k] || 0) * mult);
+            const pair = (k, mult = 1) => moneyParts((tGBP[k] || 0) * mult, (tUSD[k] || 0) * mult);
             const openTotal = { GBP: tGBP.openRevenue || 0, USD: tUSD.openRevenue || 0 };
             // Stages are ordered by the larger single-currency figure: a sort key
             // only, never a cross-currency sum.
@@ -1260,10 +1280,10 @@ export default function ReportingDashboard({ profile, onNavigate }) {
             return (
               <div className="space-y-4">
                 <div className="grid grid-cols-4 gap-4">
-                  <Stat label="Won — monthly volume" value={pair('wonRevenue')}
-                    sub={`${t.wonCount} deals · ${pair('wonRevenue', 12)}/yr`} tone="emerald" />
-                  <Stat label="Pipeline — best case" value={pair('openRevenue')} sub={`${t.openCount} open deals`} />
-                  <Stat label="Pipeline — likely" value={pair('weightedRevenue')} sub="weighted by stage" tone="amber" />
+                  <Stat label="Won — monthly volume" money={pair('wonRevenue')}
+                    sub={<>{t.wonCount} deal{t.wonCount === 1 ? '' : 's'} won<MoneyLines parts={pair('wonRevenue', 12).map(x => `${x} a year`)} /></>} tone="emerald" />
+                  <Stat label="Pipeline — best case" money={pair('openRevenue')} sub={`${t.openCount} open deals`} />
+                  <Stat label="Pipeline — likely" money={pair('weightedRevenue')} sub="weighted by stage" tone="amber" />
                   <Stat label="Transactions won / month" value={(t.wonTransactions || 0).toLocaleString('en-GB')}
                     sub={`${(t.openTransactions || 0).toLocaleString('en-GB')} more in pipeline`} />
                 </div>
@@ -1279,11 +1299,11 @@ export default function ReportingDashboard({ profile, onNavigate }) {
                         <div className="w-44 shrink-0 text-sm text-paper capitalize">{stage.replace(/_/g, ' ')}</div>
                         <div className="text-xs text-dim w-16 shrink-0">{v.n} deal{v.n === 1 ? '' : 's'}</div>
                         <div className="text-[10px] text-dim w-12 shrink-0 tabular-nums">{Math.round((weights[stage] ?? 0) * 100)}%</div>
-                        <div className="flex-1 h-2 rounded-full bg-card overflow-hidden">
-                          <div className="h-full bg-ember/60" style={{ width: `${(share(v.rev, openTotal) ?? 0) * 100}%` }} />
+                        <div className="flex-1">
+                          <ShareBars part={v.rev} whole={openTotal} className="h-2" fill="bg-ember/60" trackClass="bg-card" />
                         </div>
-                        <div className="w-28 text-right text-sm text-paper tabular-nums shrink-0">{sums(v.rev.GBP, v.rev.USD)}</div>
-                        <div className="w-28 text-right text-sm text-muted tabular-nums shrink-0">{sums(v.weighted.GBP, v.weighted.USD)}</div>
+                        <div className="w-28 text-right text-sm text-paper tabular-nums shrink-0 leading-tight"><MoneyLines parts={moneyParts(v.rev.GBP, v.rev.USD)} /></div>
+                        <div className="w-28 text-right text-sm text-muted tabular-nums shrink-0 leading-tight"><MoneyLines parts={moneyParts(v.weighted.GBP, v.weighted.USD)} /></div>
                       </div>
                     ))}
                   </div>
@@ -1397,24 +1417,55 @@ function GoalCell({ value, goal }) {
   );
 }
 
-function MetricCard({ label, value, sub, color = 'text-paper' }) {
+/**
+ * How much of the whole a part is, shown as a bar, INSIDE each currency. A share
+ * of pounds and dollars added together means nothing, and the old rule answered
+ * that by drawing no bar at all whenever both were present, so in the Both view
+ * every bar sat empty. Now each currency with a total gets its own thin bar.
+ */
+function ShareBars({ part, whole, className = 'h-[5px]', fill = 'bg-ember', trackClass }) {
+  const ccys = ['GBP', 'USD'].filter(c => Number(whole?.[c]) > 0);
+  const track = (cls) => (trackClass
+    ? { className: `${cls} rounded-full overflow-hidden ${trackClass}` }
+    : { className: `${cls} rounded-full overflow-hidden`, style: { background: 'var(--ink-line)' } });
+  if (!ccys.length) return <div {...track(className)} />;
+  const two = ccys.length > 1;
+  return (
+    <div className={two ? 'flex flex-col gap-[2px]' : ''}>
+      {ccys.map(c => (
+        <div key={c} {...track(two ? 'h-[3px]' : className)} title={two ? c : undefined}>
+          <div className={`h-full ${fill}`} style={{ width: `${Math.round(Math.min(1, Math.max(0, (Number(part?.[c]) || 0) / Number(whole[c]))) * 100)}%` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Money that can be in two currencies: one complete figure per line, never "£x + $y". */
+function MoneyLines({ parts }) {
+  return <span className="block">{parts.map((p, i) => <span key={i} className="block whitespace-nowrap">{p}</span>)}</span>;
+}
+
+function MetricCard({ label, value, money, sub, color = 'text-paper' }) {
+  // Two currencies stack, a size down, so both figures sit whole inside the tile.
+  const two = Array.isArray(money) && money.length > 1;
   return (
     <div className="glass-card rounded-2xl p-5 text-center">
-      <div className={`text-3xl font-bold font-mono ${color}`}>{value}</div>
+      <div className={`${two ? 'text-2xl leading-tight' : 'text-3xl'} font-bold font-mono ${color}`}>{money ? <MoneyLines parts={money} /> : value}</div>
       <div className="text-[9px] font-mono uppercase tracking-[0.18em] text-dim mt-1.5">{label}</div>
       {sub && <div className="text-xs text-ember mt-1">{sub}</div>}
     </div>
   );
 }
 
-function Stat({ label, value, sub, tone }) {
+function Stat({ label, value, money, sub, tone }) {
   const color = tone === 'emerald' ? 'text-emerald-600'
     : tone === 'amber' ? 'text-amber-600'
     : tone === 'red' ? 'text-red-600' : 'text-paper';
   return (
     <div className="glass-card rounded-2xl p-4">
       <div className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-dim mb-1">{label}</div>
-      <div className={`text-2xl font-bold tabular-nums ${color}`}>{value}</div>
+      <div className={`${Array.isArray(money) && money.length > 1 ? 'text-xl leading-tight' : 'text-2xl'} font-bold tabular-nums ${color}`}>{money ? <MoneyLines parts={money} /> : value}</div>
       {sub && <div className="text-[11px] text-dim mt-0.5">{sub}</div>}
     </div>
   );

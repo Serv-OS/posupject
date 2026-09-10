@@ -13,7 +13,11 @@ const DEALS = [
   { id: 'd2', name: 'Verde — second site', company_id: 'c2', stage: 'negotiation', owner_id: 'u-sarah', hardware_value: 5400, services_value: 1200, saas_arr: 3576, payments_arr: 4100, expected_close_date: d(5), created_at: ts(-60), updated_at: ts(-1) },
   { id: 'd3', name: 'Hare and Hounds — till refresh', company_id: 'c2', stage: 'qualified', owner_id: ME, hardware_value: 1800, saas_arr: 1788, expected_close_date: d(-6), created_at: ts(-90), updated_at: ts(-35) },
   { id: 'd4', name: 'Cafe Brigante — Leeds', company_id: 'c1', stage: 'demo_booked', value: 2400, expected_close_date: null, created_at: ts(-20), updated_at: ts(-20) },
-  { id: 'd5', name: 'Evuna — closed', company_id: 'c2', stage: 'closed_won', hardware_value: 4000, saas_arr: 1788, closed_at: ts(-10), created_at: ts(-70), updated_at: ts(-10) },
+  { id: 'd5', name: 'Evuna — closed', company_id: 'c2', stage: 'closed_won', owner_id: ME, hardware_value: 4000, saas_arr: 1788, closed_at: ts(-2), created_at: ts(-70), updated_at: ts(-10) },
+  // A won US deal, so Sales and Quota have to show pounds and dollars side by side.
+  { id: 'd7', name: 'Mozz Pizza — Orem (won)', company_id: 'c3', currency: 'USD', stage: 'closed_won', owner_id: ME, hardware_value: 4000, saas_arr: 1788, closed_at: ts(-1), created_at: ts(-70), updated_at: ts(-10) },
+  // An open US deal, so Reporting has to show pounds and dollars side by side.
+  { id: 'd6', name: 'Mozz Pizza — Provo', company_id: 'c3', stage: 'negotiation', currency: 'USD', owner_id: ME, hardware_value: 1774, services_value: 0, saas_arr: 4188, payments_arr: 13750, expected_close_date: d(20), created_at: ts(-12), updated_at: ts(-2) },
 ];
 const PROJECTS = [{ id: 'p1', name: 'Adyen Onboarding', status: 'active', subject_type: 'deal', subject_id: 'd1', owner_id: ME, due_date: d(9), created_at: ts(-6), updated_at: ts(0), phases: ['Account setup', 'Go live'] }, { id: 'p2', name: 'Verde refit', status: 'active', subject_type: 'location', subject_id: 'l1', owner_id: ME, due_date: d(20), created_at: ts(-3), updated_at: ts(0), phases: [] }];
 const TASKS = [
@@ -107,6 +111,9 @@ const COST_TEMPLATES = [
 ];
 
 export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
+  // Dollar rows, so the Volume tab has to show pounds and dollars side by side.
+  { deal_id: 'd7', name: 'Mozz Pizza — Orem (won)', stage: 'closed_won', owner_id: ME, company_id: 'c3', currency: 'USD', closed_at: ts(-1), site_count: 1, est_monthly_revenue: 98000, est_avg_transaction: 41, est_monthly_transactions: 2400, actual_monthly_revenue: 0, probability: 1, weighted_monthly_revenue: 98000, is_won: true, is_closed: true },
+  { deal_id: 'd6', name: 'Mozz Pizza — Provo', stage: 'negotiation', owner_id: ME, company_id: 'c3', currency: 'USD', site_count: 1, est_monthly_revenue: 131554, est_avg_transaction: 44, est_monthly_transactions: 3004, probability: 0.85, weighted_monthly_revenue: 111821, is_won: false, is_closed: false },
     // Venue turnover per deal, one in each region: the Volume tab must never add these two.
     { deal_id: 'd1', name: 'Coffee Boy — Barnsley Train Station', company_id: 'c1', stage: 'proposal_sent', site_count: 1, est_monthly_revenue: 42000, est_monthly_transactions: 5000, est_avg_transaction: 8.4 },
     { deal_id: 'dus1', name: 'Mozz Pizza — Provo', company_id: 'c3', stage: 'proposal_sent', site_count: 1, est_monthly_revenue: 131554, est_monthly_transactions: 3004, est_avg_transaction: 43.79 },
