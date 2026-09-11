@@ -18,6 +18,7 @@ const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
 
 const esc = (s: string) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
+const newToken = () => crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8);
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -49,14 +50,33 @@ serve(async (req) => {
     // One pack per venue: reuse an unsubmitted request rather than stacking up
     // links that all point at the same job (and confusing the customer).
     const { data: existing } = await supabase.from("onboarding_form_requests")
-      .select("id, token, submitted_at")
+      .select("id, token, submitted_at, sent_to")
       .eq("onboarding_id", body?.onboarding_id || null)
       .is("submitted_at", null)
       .order("created_at", { ascending: false }).limit(1).maybeSingle();
 
     let row = existing;
+    // Emailing a reused pack to a different address gets it a new link, and
+    // the old one stops working. Otherwise a pack first sent to a mistyped or
+    // wrong address stays open to whoever got it, and they could read the
+    // draft or replace the bank and ID details the real director gives. Done
+    // before the email goes, so the new address never gets a link that is not
+    // live yet. The same address keeps its link, and so does a pack that was
+    // link only (sent_to empty), which may already be in a WhatsApp chat.
+    let linkReplaced = false;
+    if (row) {
+      const before = String(row.sent_to || "").trim().toLowerCase();
+      if (before && before !== to.toLowerCase()) {
+        const token = newToken();
+        const { error } = await supabase.from("onboarding_form_requests")
+          .update({ token }).eq("id", row.id);
+        if (error) return json({ error: error.message }, 500);
+        row = { ...row, token };
+        linkReplaced = true;
+      }
+    }
     if (!row) {
-      const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+      const token = newToken();
       const { data: created, error } = await supabase.from("onboarding_form_requests").insert({
         onboarding_id: body?.onboarding_id || null,
         location_id: body?.location_id || null,
@@ -81,11 +101,17 @@ serve(async (req) => {
           information, your menu, your staff and how you'd like your kitchen tickets to print.
         </p>
         <p style="font-size:15px;line-height:1.55">
+          Have ready: photo ID for the legal representative (a passport is best) and your business bank details.
+        </p>
+        <p style="font-size:15px;line-height:1.55">
           It's all in one place here, and it saves as you go so you can stop and come back:
         </p>
         <p style="margin:26px 0">
           <a href="${link}" style="background:#15C26A;color:#06130C;padding:13px 26px;border-radius:10px;
              text-decoration:none;font-weight:700;font-size:15px;display:inline-block">Complete your onboarding pack</a>
+        </p>
+        <p style="font-size:13px;color:#5e665e;line-height:1.5">
+          We only ever ask for bank or ID details inside this secure page, never by email.
         </p>
         <p style="font-size:13px;color:#5e665e;line-height:1.5">
           You can upload your menu, logo and table plan straight into the form. If anything is easier to talk
@@ -99,20 +125,24 @@ serve(async (req) => {
 
     await sendInvoiceEmail(supabase, to, venue ? `Your onboarding pack for ${venue}` : "Your onboarding pack", html);
 
+    // A reused pack follows the venue chosen for this send. The pack asks UK or
+    // US questions (sort code or routing number) from its venue's country, and
+    // the card says which from the venue picked here, so a pack still pinned to
+    // an earlier choice would ask one set while the card promised the other.
     const now = new Date().toISOString();
     await supabase.from("onboarding_form_requests")
-      .update({ sent_to: to, sent_at: now, updated_at: now }).eq("id", row.id);
+      .update({ sent_to: to, sent_at: now, updated_at: now, location_id: body.location_id }).eq("id", row.id);
 
     if (body?.onboarding_id) {
       await supabase.from("crm_activities").insert({
         type: "note", subject_type: "onboarding", subject_id: body.onboarding_id, actor_id: user.id, is_internal: true,
         subject: "Onboarding pack sent",
-        body: `Sent to ${to}.`,
-        channel_metadata: { kind: "onboarding_form_sent" },
+        body: linkReplaced ? `Sent to ${to}. The link sent to the earlier address no longer works.` : `Sent to ${to}.`,
+        channel_metadata: { kind: "onboarding_form_sent", link_replaced: linkReplaced },
       });
     }
 
-    return json({ ok: true, link, sent_to: to });
+    return json({ ok: true, link, sent_to: to, link_replaced: linkReplaced });
   } catch (e) {
     console.error("onboarding-form-send failed", e);
     return json({ error: (e as Error).message || "Could not send" }, 500);

@@ -127,6 +127,73 @@ const TICKET_THREAD = [
   { id: 'n3', type: 'note', body: 'Tracking number sent to Dan.', subject_type: 'ticket', subject_id: 'k1', actor_id: 'u-peter', is_internal: true, occurred_at: ts(0, 0.2), created_at: ts(0, 0.2), channel_metadata: {} },
 ];
 ACTIVITIES.push(...TICKET_THREAD);
+
+// Harness only (#packcard): a submitted UK Organisation onboarding pack on the
+// o2 onboarding, written the way the onboarding-form function writes one. The
+// bank numbers, date of birth, home address and passport page are NOT in
+// answers: answers only carry _held (built as heldFrom would build it) and
+// _meta, and the values sit in the owner only onboarding_form_secure row.
+const PACK_ID = 'rq1';
+const PACK_PASSPORT = `${PACK_ID}/id_passport-a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d.jpg`;
+const PACK_REQUESTS = [{
+  id: PACK_ID, onboarding_id: 'o2', location_id: 'l1', company_id: 'c2', contact_id: 'ct1', token: 'harness-pack-card',
+  sent_to: 'dan@verde.example', sent_at: ts(-6), opened_at: ts(-5), submitted_at: ts(-1, 2), created_at: ts(-6), created_by: ME, updated_at: ts(-1, 2),
+  answers: {
+    company: { entity_type: 'Organisation', legal_name: 'Verde Restaurants Ltd', address: '2 Chestergate\nMacclesfield\nSK11 6BA', company_number: '09876543', contact_name: 'Dan Marsh' },
+    vat: { registered: 'Yes', number: 'GB220430231' },
+    bank: { holder_same: 'Yes' },
+    representative: { is_contact: 'No', name: 'Kate Lowe', phone: '+447700900456', email: 'kate@verde.example', home_same: 'No', id_type: 'Passport' },
+    trading: { trading_name: 'Verde', same_address: 'No', trading_address: '14 Mill Street\nMacclesfield\nSK11 6NN' },
+    receipt: { logo: { name: 'Verde logo.png', path: `onboarding/${PACK_ID}/0b7c-Verde_logo.png`, size: 184000, mime: 'image/png' }, footer: 'Thanks for eating with us. Find us at @verdemacc' },
+    menu: { files: [{ name: 'Verde autumn menu.pdf', path: `onboarding/${PACK_ID}/4f1a-Verde_autumn_menu.pdf`, size: 1850000, mime: 'application/pdf' }], notes: 'Brunch runs until 3pm at weekends.' },
+    users: { pos_users: 'Dan Marsh, 1234, Manager\nKate Lowe, 5678, Manager\nSam Reed, 2468, Staff', bo_users: 'dan@verde.example\nkate@verde.example' },
+    discounts: { list: 'Staff 50%\nFriends and family 20%' },
+    tables: { notes: 'Terrace tables T1 to T6 are outside.' },
+    drinks_printing: { wanted: 'Yes', areas: 'Bar\n- Everything' },
+    food_printing: { multiple: 'No' },
+    current_pos: { system: 'Lightspeed K Series' },
+    site_readiness: { internet: true, ethernet: true, wifi_coverage: true, hardware: true, power: true },
+    network: { wifi_name: 'VerdeStaff', wifi_password: 'basilandlime26' },
+    ipads: { unboxed: true, updated: true },
+    signoff: { full_name: 'Kate Lowe', position: 'Director', agreed: true },
+    _held: { 'bank.sort_code': true, 'bank.account_number': { hint: '6819' }, 'representative.dob': true, 'representative.home_address': true, 'representative.id_passport': true },
+    _meta: { v: 2, region: 'UK', saved_at: ts(-1, 3), terms_version: 2 },
+  },
+}];
+const PACK_SECURE = [{
+  request_id: PACK_ID,
+  secure_values: { 'bank.sort_code': '309634', 'bank.account_number': '31926819', 'representative.dob': '1985-07-14', 'representative.home_address': '9 Hollin Lane\nSutton\nMacclesfield SK11 0HR' },
+  files: { 'representative.id_passport': { path: PACK_PASSPORT, name: 'Passport photo page.jpg', size: 412000, mime: 'image/jpeg' } },
+  updated_at: ts(-1, 2), purged_at: null, purged_by: null,
+}];
+// A second submitted pack on a second onboarding (#packcard has a switcher),
+// so a detail shown on one card can be checked never to carry over to the next.
+const PACK2_ID = 'rq2';
+ONBOARDINGS.push({ id: 'o3', name: 'Hare and Hounds onboarding', stage: 'kickoff', location_id: 'l1', company_id: 'c2', created_at: ts(-2) });
+PACK_REQUESTS.push({
+  id: PACK2_ID, onboarding_id: 'o3', location_id: 'l1', company_id: 'c2', token: 'harness-pack-card-2',
+  sent_to: 'kate@hare.example', sent_at: ts(-3), opened_at: ts(-3), submitted_at: ts(-1), created_at: ts(-3), created_by: ME, updated_at: ts(-1),
+  answers: {
+    company: { entity_type: 'Organisation', legal_name: 'Hare and Hounds Ltd', address: '1 Market Place\nMacclesfield\nSK10 1EX', company_number: '07654321', contact_name: 'Kate Lowe' },
+    vat: { registered: 'No' },
+    bank: { holder_same: 'Yes' },
+    representative: { is_contact: 'Yes', phone: '+447700900789', email: 'kate@hare.example', home_same: 'Yes', id_type: 'Driving licence' },
+    trading: { trading_name: 'Hare and Hounds', same_address: 'Yes' },
+    signoff: { full_name: 'Kate Lowe', position: 'Owner', agreed: true },
+    _held: { 'bank.sort_code': true, 'bank.account_number': { hint: '4455' }, 'representative.dob': true, 'representative.id_front': { doc: 'Driving licence' }, 'representative.id_back': { doc: 'Driving licence' } },
+    _meta: { v: 2, region: 'UK', saved_at: ts(-1), terms_version: 2 },
+  },
+});
+PACK_SECURE.push({
+  request_id: PACK2_ID,
+  secure_values: { 'bank.sort_code': '112233', 'bank.account_number': '99884455', 'representative.dob': '1979-02-03' },
+  files: {
+    'representative.id_front': { path: `${PACK2_ID}/id_front-1a2b3c4d.jpg`, name: 'Photo ID front.jpg', size: 1000, mime: 'image/jpeg', doc: 'Driving licence' },
+    'representative.id_back': { path: `${PACK2_ID}/id_back-5e6f7a8b.jpg`, name: 'Photo ID back.jpg', size: 1000, mime: 'image/jpeg', doc: 'Driving licence' },
+  },
+  updated_at: ts(-1), purged_at: null, purged_by: null,
+});
+
 export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' }], user_integrations: [{ profile_id: ME, provider: 'google', email: 'peter@posup.co.uk' }], ticket_email_threads: [], processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
   // Dollar rows, so the Volume tab has to show pounds and dollars side by side.
   { deal_id: 'd7', name: 'Mozz Pizza — Orem (won)', stage: 'closed_won', owner_id: ME, company_id: 'c3', currency: 'USD', closed_at: ts(-1), site_count: 1, est_monthly_revenue: 98000, est_avg_transaction: 41, est_monthly_transactions: 2400, actual_monthly_revenue: 0, probability: 1, weighted_monthly_revenue: 98000, is_won: true, is_closed: true },
@@ -137,7 +204,8 @@ export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' 
   ], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [
     { id: 'ex1', expense_date: d(-2), description: 'Provo site visit, taxis', merchant: 'Uber', amount: 84.2, net: 84.2, vat_amount: 0, total: 84.2, currency: 'USD', status: 'submitted', company_id: 'c3', location_id: 'l2', created_by: ME, created_at: ts(-2) },
     { id: 'ex2', expense_date: d(-5), description: 'Train to Macclesfield', merchant: 'Northern', amount: 32.5, net: 32.5, vat_amount: 0, total: 32.5, currency: 'GBP', status: 'submitted', company_id: 'c2', location_id: 'l1', created_by: ME, created_at: ts(-5) },
-  ], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY };
+  ], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY,
+  onboarding_form_requests: PACK_REQUESTS, onboarding_form_secure: PACK_SECURE };
 export const MEMBERS_LIST = MEMBERS;
 
 function makeQuery(table) {
@@ -166,13 +234,51 @@ function makeQuery(table) {
   const proxy = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => proxy) });
   return proxy;
 }
+// Harness only: storage in memory, one list of object paths per bucket, and a
+// log of every call so a check can see what the card signed and removed. The
+// secure bucket holds the seeded passport page plus a stray upload that was
+// never saved, which "Delete ID and bank details" has to sweep up as well.
+export const BUCKETS = { 'onboarding-secure': [PACK_PASSPORT, `${PACK_ID}/id_front-9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f.png`, `${PACK2_ID}/id_front-1a2b3c4d.jpg`, `${PACK2_ID}/id_back-5e6f7a8b.jpg`] };
+export const STORAGE_CALLS = [];
+// A stand in picture for a signed ID link, so View opens something readable.
+// Made in this page, so the tab the card opened may be pointed at it.
+const sampleIdUrl = (path) => URL.createObjectURL(new Blob([
+  `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420"><rect width="640" height="420" fill="#eef1f4"/><rect x="24" y="24" width="592" height="372" rx="18" fill="#fff" stroke="#9aa4ad"/><rect x="56" y="80" width="150" height="190" rx="8" fill="#cfd6dc"/><text x="240" y="120" font-family="sans-serif" font-size="30" fill="#0f1211">Sample ID</text><text x="240" y="160" font-family="sans-serif" font-size="18" fill="#5e665e">Design harness only</text><text x="56" y="340" font-family="monospace" font-size="14" fill="#5e665e">${path}</text></svg>`,
+], { type: 'image/svg+xml' }));
+const bucketApi = (bucket) => {
+  const log = (...a) => { STORAGE_CALLS.push([bucket, ...a]); };
+  return {
+    upload: (path) => { log('upload', path); return Promise.resolve({ error: null }); },
+    createSignedUrl: (path, seconds) => {
+      log('createSignedUrl', path, seconds);
+      if (bucket !== 'onboarding-secure') return Promise.resolve({ data: { signedUrl: '#' }, error: null });
+      if (!(BUCKETS[bucket] || []).includes(path)) return Promise.resolve({ data: null, error: { message: 'Object not found' } });
+      return Promise.resolve({ data: { signedUrl: sampleIdUrl(path) }, error: null });
+    },
+    // Objects straight inside the folder, shaped like storage-api's listing.
+    list: (prefix = '', opts = {}) => {
+      log('list', prefix, opts);
+      const dir = prefix ? `${prefix.replace(/\/+$/, '')}/` : '';
+      const data = (BUCKETS[bucket] || []).filter((p) => p.startsWith(dir) && !p.slice(dir.length).includes('/'))
+        .map((p) => ({ id: `obj-${p}`, name: p.slice(dir.length), metadata: { size: 1000, mimetype: 'image/jpeg' } }));
+      return Promise.resolve({ data, error: null });
+    },
+    remove: (paths = []) => {
+      log('remove', paths);
+      BUCKETS[bucket] = (BUCKETS[bucket] || []).filter((p) => !paths.includes(p));
+      return Promise.resolve({ data: paths.map((name) => ({ name })), error: null });
+    },
+    getPublicUrl: () => ({ data: { publicUrl: '#' } }),
+  };
+};
+
 const chan = { on() { return chan; }, subscribe() { return chan; }, unsubscribe() {} };
 export const supabase = {
   from: makeQuery,
   rpc: () => Promise.resolve({ data: null, error: null }),
   channel: () => chan, removeChannel: () => {}, removeAllChannels: () => {},
   auth: { getSession: () => Promise.resolve({ data: { session: { user: { id: ME } } } }), getUser: () => Promise.resolve({ data: { user: { id: ME } } }), onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }) },
-  storage: { from: () => ({ upload: () => Promise.resolve({ error: null }), createSignedUrl: () => Promise.resolve({ data: { signedUrl: '#' }, error: null }), remove: () => Promise.resolve({ error: null }), getPublicUrl: () => ({ data: { publicUrl: '#' } }) }) },
+  storage: { from: bucketApi },
   functions: { invoke: () => Promise.resolve({ data: null, error: null }) },
 };
 export const APP_URL = 'http://localhost:5198';
