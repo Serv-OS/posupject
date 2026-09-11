@@ -8,6 +8,8 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { headerList, invalidAddresses, parseAddressList, mailboxKey } from "../_shared/addresses.ts";
+import { encodeMimeWord } from "../_shared/mime.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -149,13 +151,19 @@ serve(async (req) => {
       const r = await fetch(GMAIL + "/threads/" + body.threadId + "?format=full", { headers: H });
       const d = await r.json();
       if (!r.ok) return json({ error: d.error?.message || "Could not load thread." }, 400);
-      const messages = (d.messages || []).map((m: any) => {
+      // An unsent draft is not part of the conversation and must never become the
+      // message a reply answers, or its half-chosen recipients would be prefilled.
+      const messages = (d.messages || []).filter((m: any) => !(m.labelIds || []).includes("DRAFT")).map((m: any) => {
         const hs = m.payload?.headers || [];
         const { text, html } = extractBody(m.payload);
         return {
           id: m.id, threadId: m.threadId, messageId: header(hs, "Message-ID") || header(hs, "Message-Id"),
           from: header(hs, "From"),
           to: header(hs, "To"),
+          // Cc and Reply-To let the Inbox offer Reply all; References keeps the chain intact.
+          cc: header(hs, "Cc"),
+          replyTo: header(hs, "Reply-To"),
+          references: header(hs, "References"),
           subject: header(hs, "Subject"),
           date: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : "",
           unread: (m.labelIds || []).includes("UNREAD"),
@@ -192,17 +200,28 @@ serve(async (req) => {
 
     // ---- SEND: compose / reply ----
     if (action === "send") {
-      const { to, subject, body: text, html, threadId, inReplyTo, references } = body;
+      const { to, cc, subject, body: text, html, threadId, inReplyTo, references } = body;
       if (!to || !text) return json({ error: "Missing recipient or body" }, 422);
       const fromEmail = integ.email;
+      // Bare addresses only, nobody twice, and never the person's own address.
+      const bad = [...invalidAddresses(to), ...invalidAddresses(cc)];
+      if (bad.length) return json({ error: `Not a valid email address: ${bad.join(", ")}` }, 422);
+      const own = mailboxKey(fromEmail || "");
+      const toList = parseAddressList(to).filter((a) => mailboxKey(a.email) !== own);
+      const taken = new Set(toList.map((a) => a.email));
+      const ccList = parseAddressList(cc).filter((a) => mailboxKey(a.email) !== own && !taken.has(a.email) && !!taken.add(a.email));
+      if (!toList.length) return json({ error: "Missing recipient or body" }, 422);
+      if (toList.length + ccList.length > 20) return json({ error: "Too many recipients: 20 at most." }, 422);
       const head = [
         `From: ${fromEmail}`,
-        `To: ${to}`,
-        `Subject: ${subject || "(no subject)"}`,
+        `To: ${headerList(toList)}`,
+        `Subject: ${encodeMimeWord(subject || "(no subject)")}`,
         "MIME-Version: 1.0",
       ];
+      if (ccList.length) head.push(`Cc: ${headerList(ccList)}`);
       if (inReplyTo) head.push(`In-Reply-To: ${inReplyTo}`);
-      if (references || inReplyTo) head.push(`References: ${[references, inReplyTo].filter(Boolean).join(" ")}`);
+      const refs = [...new Set(`${references || ""} ${inReplyTo || ""}`.split(/\s+/).filter(Boolean))].join(" ");
+      if (refs) head.push(`References: ${refs}`);
 
       let mime: string;
       if (html) {

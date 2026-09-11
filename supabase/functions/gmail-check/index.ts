@@ -276,6 +276,11 @@ serve(async (req) => {
       const messageId = getHeader(headers, "Message-ID");
       const inReplyTo = getHeader(headers, "In-Reply-To");
       const references = getHeader(headers, "References");
+      // Who else the email went to, so a reply can copy them. Without these the
+      // CC'd people were dropped the moment the email arrived.
+      const toHdr = decodeMimeWords(getHeader(headers, "To"));
+      const ccHdr = decodeMimeWords(getHeader(headers, "Cc"));
+      const replyToHdr = decodeMimeWords(getHeader(headers, "Reply-To"));
       const gmailThreadId = full.threadId;
       const date = getHeader(headers, "Date");
 
@@ -461,6 +466,10 @@ serve(async (req) => {
             from: from,
             gmail_message_id: msg.id,
             gmail_thread_id: gmailThreadId,
+            to: toHdr || null,
+            cc: ccHdr || null,
+            reply_to: replyToHdr || null,
+            references: references || null,
             ...(html ? { html: html.slice(0, 200000) } : {}),
           },
           occurred_at: date ? new Date(date).toISOString() : new Date().toISOString(),

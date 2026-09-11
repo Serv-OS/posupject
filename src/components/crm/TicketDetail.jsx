@@ -613,7 +613,8 @@ export default function TicketDetail({ ticketId, profile, onClose, onNavigate })
                 Edge-to-edge on a phone so replies get the full width. */}
             <div className={`${tab === 'chat' ? 'flex' : 'hidden'} lg:flex lg:order-2 flex-1 min-w-0 flex-col min-h-0`}>
               <div className="flex-1 min-h-0 glass-card border-0 lg:border rounded-none lg:rounded-2xl overflow-hidden flex flex-col">
-                <ConversationTimeline subjectType="ticket" subjectId={ticketId} profile={profile} contacts={[]} ticket={ticket} onTicketUpdated={load} active={tab === 'chat'} />
+                {/* key: a different ticket starts fresh (scroll position, recipients, drafts). */}
+                <ConversationTimeline key={ticketId} subjectType="ticket" subjectId={ticketId} profile={profile} contacts={[]} ticket={ticket} onTicketUpdated={load} active={tab === 'chat'} />
               </div>
             </div>
           </div>

@@ -1,8 +1,11 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useGoogleConnection } from '../../lib/useGoogle';
 import { sanitizeEmailHtml } from '../../lib/emailHtml';
-import { Mail, RefreshCw, Archive, Reply, Search, Link2, Plus, ExternalLink, Ticket, CheckSquare } from 'lucide-react';
+import { hasOtherRecipients, headerList } from '../../lib/replyRecipients';
+import { replyDefaults, recipientsToSend } from '../../lib/conversation';
+import AddressInput from './AddressInput.jsx';
+import { Mail, RefreshCw, Archive, Reply, ReplyAll, Search, Link2, Plus, ExternalLink, Ticket, CheckSquare } from 'lucide-react';
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/gmail-personal`;
 
@@ -236,6 +239,39 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState('');
 
+  // Reply goes to the sender; Reply all also copies everyone else on the newest
+  // message. Both come from its headers, never including your own address.
+  const own = useMemo(() => [connectedEmail].filter(Boolean), [connectedEmail]);
+  const anchorHeaders = useMemo(
+    () => ({ from: anchor?.from, to: anchor?.to, cc: anchor?.cc, replyTo: anchor?.replyTo }),
+    [anchor]
+  );
+  const canReplyAll = hasOtherRecipients(anchorHeaders, own);
+  const [replyMode, setReplyMode] = useState('reply'); // 'reply' | 'all'
+  const [toList, setToList] = useState([]);
+  const [ccList, setCcList] = useState([]);
+  const [toPending, setToPending] = useState('');
+  const [ccPending, setCcPending] = useState('');
+  const [composerVersion, setComposerVersion] = useState(0); // remounts the chip boxes to clear typed text
+  const recipientsTouched = useRef(false);
+
+  const openReply = (mode) => {
+    if (replyOpen && mode === replyMode) { setReplyOpen(false); return; }
+    const d = replyDefaults(anchorHeaders, own, correspondent.email, mode);
+    recipientsTouched.current = false;
+    setReplyMode(mode); setToList(d.to); setCcList(d.cc); setToPending(''); setCcPending('');
+    setComposerVersion(v => v + 1); setErr('');
+    setReplyOpen(true);
+  };
+  // Opened before the full thread loaded (the list row has no Cc): fill in the
+  // real recipients once it arrives, unless they were already edited.
+  useEffect(() => {
+    if (!replyOpen || recipientsTouched.current) return;
+    const d = replyDefaults(anchorHeaders, own, correspondent.email, replyMode);
+    setToList(d.to); setCcList(d.cc);
+  }, [anchorHeaders]); // eslint-disable-line react-hooks/exhaustive-deps
+  const touchRecipients = () => { recipientsTouched.current = true; setErr(''); };
+
   const [contact, setContact] = useState(undefined);
   const [linkMsg, setLinkMsg] = useState('');
   const [linking, setLinking] = useState(false);
@@ -245,6 +281,7 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
 
   useEffect(() => {
     setReplyOpen(false); setReplyBody(''); setSent(false); setErr(''); setLinkMsg(''); setCreated(null);
+    setReplyMode('reply'); setToList([]); setCcList([]); setToPending(''); setCcPending(''); recipientsTouched.current = false;
     setContact(undefined);
     if (correspondent.email) {
       supabase.from('contacts').select('id, first_name, last_name, email').ilike('email', correspondent.email).limit(1)
@@ -299,6 +336,9 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
 
   const send = async () => {
     if (!replyBody.trim()) return;
+    // Chips plus any valid address still typed in a box; refuse a typo rather than drop someone.
+    const recipients = recipientsToSend({ to: toList, toPending, cc: ccList, ccPending });
+    if (recipients.problem) { setErr(recipients.problem); return; }
     setSending(true); setErr('');
     try {
       const sigText = signature ? `\n\n--\n${signature}` : '';
@@ -314,11 +354,15 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
           : '';
         html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1f2937;line-height:1.5">${nl2br(replyBody)}${sigHtml}</div>`;
       }
+      const to = headerList(recipients.to);
+      const cc = headerList(recipients.cc);
       await callFn({
-        action: 'send', to: correspondent.email,
+        action: 'send', to, cc: cc || undefined,
         subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
         body: plain, html,
-        threadId: conv.threadId, inReplyTo: anchor.messageId, references: anchor.messageId,
+        // References carries the whole chain so every mail client threads the reply.
+        threadId: conv.threadId, inReplyTo: anchor.messageId,
+        references: [anchor.references, anchor.messageId].filter(Boolean).join(' ') || undefined,
       });
       setSent(true); setReplyOpen(false); setReplyBody('');
       if (contact?.id) {
@@ -327,6 +371,7 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
           subject_type: 'contact', subject_id: contact.id, contact_id: contact.id,
           actor_id: profile.id, direction: 'outbound', is_internal: false,
           occurred_at: new Date().toISOString(),
+          channel_metadata: { to, cc: cc || null },
         });
       }
       setTimeout(() => setSent(false), 2500);
@@ -381,7 +426,10 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
           </div>
         </div>
         <div className="flex items-center gap-2 mt-3 flex-wrap">
-          <button onClick={() => setReplyOpen(o => !o)} className="btn-glass px-3 py-1.5 rounded-xl text-sm font-semibold flex items-center gap-1.5"><Reply size={14} /> Reply</button>
+          <button onClick={() => openReply('reply')} aria-pressed={replyOpen && replyMode === 'reply'} className="btn-glass px-3 py-1.5 rounded-xl text-sm font-semibold flex items-center gap-1.5"><Reply size={14} /> Reply</button>
+          {canReplyAll && (
+            <button onClick={() => openReply('all')} aria-pressed={replyOpen && replyMode === 'all'} className="btn-glass px-3 py-1.5 rounded-xl text-sm font-semibold flex items-center gap-1.5"><ReplyAll size={14} /> Reply all</button>
+          )}
           <button onClick={onArchive} className="btn-ghost px-3 py-1.5 rounded-xl text-sm flex items-center gap-1.5"><Archive size={14} /> Archive</button>
 
           <span className="w-px h-5 bg-bdr mx-0.5" />
@@ -412,7 +460,17 @@ function ThreadView({ conv, thread, loading, connectedEmail, profile, onNavigate
       {/* Reply composer */}
       {replyOpen && (
         <div className="px-6 py-3 border-b border-bdr bg-card/50 shrink-0">
-          <div className="text-[11px] text-dim mb-1">Replying to {correspondent.email}{(signature || useLogo) && ' · your signature will be added'}</div>
+          <div className="text-[11px] text-dim mb-1">{replyMode === 'all' ? 'Reply all' : 'Reply'}{(signature || useLogo) && ' · your signature will be added'}</div>
+          <div className="space-y-2 mb-2">
+            <AddressInput key={`to-${composerVersion}`} label="To" value={toList}
+              onChange={list => { touchRecipients(); setToList(list); }}
+              onPendingChange={t => { if (t) touchRecipients(); setToPending(t); }}
+              placeholder="Add an email address" disabled={sending} />
+            <AddressInput key={`cc-${composerVersion}`} label="Cc" value={ccList}
+              onChange={list => { touchRecipients(); setCcList(list); }}
+              onPendingChange={t => { if (t) touchRecipients(); setCcPending(t); }}
+              placeholder="Copy someone in" disabled={sending} />
+          </div>
           <textarea className={input + ' resize-none'} rows={4} autoFocus value={replyBody}
             onChange={e => setReplyBody(e.target.value)} placeholder="Write your reply…" />
           {err && <div className="text-xs text-red-600 mt-1">{err}</div>}

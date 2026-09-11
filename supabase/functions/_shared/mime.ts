@@ -16,6 +16,9 @@ export function utf8FromB64Url(data: string): string {
 
 // Encode a header value as an RFC-2047 encoded-word iff it has non-ASCII chars.
 export function encodeMimeWord(s: string): string {
+  // A header value must never carry a line break or other control character:
+  // a decoded subject like "Hi\r\nBcc: x@y.com" would otherwise add a header.
+  s = String(s ?? "").replace(/[\x00-\x1F\x7F]+/g, " ");
   const str = s ?? "";
   if (/^[\x00-\x7F]*$/.test(str)) return str; // pure ASCII -> leave as-is
   const bytes = new TextEncoder().encode(str);
@@ -25,6 +28,12 @@ export function encodeMimeWord(s: string): string {
 
 // Decode RFC-2047 encoded-words (=?charset?B/Q?text?=) in a header value.
 export function decodeMimeWords(s: string): string {
+  // Decoded header text is stored and later written back into replies, so the
+  // control characters an encoded word can smuggle in are flattened here too.
+  return decodeMimeWordsRaw(s).replace(/[\x00-\x1F\x7F]+/g, " ");
+}
+
+function decodeMimeWordsRaw(s: string): string {
   const str = s ?? "";
   return str.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_m, charset, enc, text) => {
     try {

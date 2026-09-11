@@ -326,7 +326,7 @@ export default function Shell({ session }) {
       case 'tickets':
         return <TicketList profile={profile} onSelect={(id) => { setView('ticket_detail'); setDetailId(id); }} onNavigate={navigateTo} />;
       case 'ticket_detail':
-        return <TicketDetail ticketId={detailId} profile={profile} onClose={() => setView('tickets')} onNavigate={navigateTo} />;
+        return <TicketDetail key={detailId} ticketId={detailId} profile={profile} onClose={() => setView('tickets')} onNavigate={navigateTo} />;
       case 'modules':
         return <ModulesPanel profile={profile} />;
       case 'feature_requests':

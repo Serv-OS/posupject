@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import AttachmentsCard from './AttachmentsCard.jsx';
 import { getRunning, startTimer, stopTimer, fmtClock, fmtDuration } from '../../lib/timer';
 import { PRIORITY_LABEL, PRIORITY_SLA } from '../../lib/priority';
+import { isSendShortcut, sendShortcutLabel } from '../../lib/conversation';
 import {
   Avatar, Check, LinkChip, SectionLabel, Mono, PageTitle, PrimaryBtn, GhostBtn, SolidChipBtn, Card, SkeletonList, MobileDock, MobileSheet, SheetRow,
   hair, dueLabel, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL, initialsOf,
@@ -48,6 +49,12 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
   const [subOpen, setSubOpen] = useState(false);
   const [err, setErr] = useState('');
   const subRef = useRef(null);
+  const noteRef = useRef(null);
+  // Inline edit of one of your own notes; the draft is kept apart from the row.
+  const [editNoteId, setEditNoteId] = useState(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteEditErr, setNoteEditErr] = useState('');
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   useEffect(() => { load(); }, [taskId]);
@@ -113,7 +120,8 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
 
   const feed = useMemo(() => {
     const rows = [];
-    for (const a of activities) rows.push({ kind: a.type === 'note' ? 'notes' : 'notes', at: a.occurred_at, who: a.actor_id, text: a.body || a.subject, label: a.type === 'note' ? 'added a note' : `logged ${a.type}` });
+    // id, type, is_internal and edited_at ride along so a note's author can edit it in place.
+    for (const a of activities) rows.push({ key: a.id, id: a.id, type: a.type, is_internal: a.is_internal, actor_id: a.actor_id, edited_at: a.edited_at, kind: a.type === 'note' ? 'notes' : 'notes', at: a.occurred_at, who: a.actor_id, text: a.body || a.subject, label: a.type === 'note' ? 'added a note' : `logged ${a.type}` });
     for (const e of entries) rows.push({ kind: 'time', at: e.started_at, who: e.profile_id, sys: true, text: e.ended_at ? `Logged ${fmtDuration(e.duration_seconds)}` : 'Timer started' });
     if (task?.completed_at) rows.push({ kind: 'status', at: task.completed_at, who: task.owner_id, sys: true, text: 'Marked done' });
     if (task?.created_at) rows.push({ kind: 'status', at: task.created_at, who: task.created_by, sys: !task.created_by, text: linked?.ticket ? `Created from ticket #${linked.ticket.ticket_number}` : 'Created' });
@@ -156,6 +164,37 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
       subject: noteText.trim().slice(0, 120), body: noteText.trim(), occurred_at: new Date().toISOString(), direction: 'outbound', is_internal: true });
     if (error) { setErr(error.message); return; }
     setNoteText(''); load();
+  };
+  // Grow the note box with what is typed (Enter makes a new line now), up to a cap.
+  useEffect(() => {
+    const el = noteRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight + 2, 220) + 'px';
+  }, [noteText]);
+  const canEditNote = (r) => canWrite && r.type === 'note' && !!r.is_internal && r.actor_id === profile.id;
+  const startNoteEdit = (r) => { setEditNoteId(r.id); setNoteDraft(r.text || ''); setNoteEditErr(''); };
+  const cancelNoteEdit = () => { setEditNoteId(null); setNoteDraft(''); setNoteEditErr(''); };
+  const saveNoteEdit = async (r) => {
+    if (noteSaving) return;
+    const text = noteDraft.trim();
+    if (!text) { setNoteEditErr('A note cannot be empty. Press Cancel to keep it as it was.'); return; }
+    if (text === (r.text || '').trim()) { cancelNoteEdit(); return; }
+    setNoteSaving(true); setNoteEditErr('');
+    // postNote writes the text to both subject and body, so an edit changes both.
+    // Filtered to your own internal note: anyone else's comes back empty, unchanged.
+    const { data, error } = await supabase.from('crm_activities')
+      .update({ subject: text.slice(0, 120), body: text })
+      .eq('id', r.id).eq('actor_id', profile.id).eq('type', 'note').eq('is_internal', true)
+      .select('id, subject, body, edited_at');
+    setNoteSaving(false);
+    const row = Array.isArray(data) ? data[0] : null;
+    if (error || !row) {
+      setNoteEditErr(error ? `Could not save the edit: ${error.message}` : 'Could not save the edit. Only the person who wrote a note can change it.');
+      return; // the draft stays in the box
+    }
+    setActivities(prev => prev.map(a => (a.id === row.id ? { ...a, ...row } : a)));
+    cancelNoteEdit();
   };
   const addSubtask = async () => {
     if (!newSub.trim()) return;
@@ -335,22 +374,46 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
               <div className="flex-1 px-[18px] py-[14px] flex flex-col gap-[14px]">
                 {feed.length === 0 && <div className="text-[13px] text-dim">Nothing here yet.</div>}
                 {feed.map((r, i) => (
-                  <div key={i} className="flex gap-[11px]">
+                  <div key={r.key || `${r.kind}-${i}`} className="flex gap-[11px]">
                     {r.sys ? <span className="w-[26px] h-[26px] rounded-full shrink-0 border" style={{ background: 'var(--ink-soft)', borderColor: 'var(--ink-line)' }} /> : <Avatar id={r.who} name={nameOf(r.who)} />}
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="text-[13px] text-muted">
                         {r.sys ? <>{r.text}{r.who ? <> by <strong className="font-semibold text-paper">{nameOf(r.who)}</strong></> : ''} · {fmtRel(r.at)}</>
                           : <><strong className="font-semibold text-paper">{nameOf(r.who) || 'Someone'}</strong> {r.label} · {fmtRel(r.at)}</>}
+                        {r.edited_at && <> · <span className="italic cursor-default" title={`Edited ${new Date(r.edited_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`}>edited</span></>}
+                        {canEditNote(r) && editNoteId !== r.id && <> · <button type="button" onClick={() => startNoteEdit(r)} className="font-semibold hover:text-paper">Edit</button></>}
                       </div>
-                      {!r.sys && <div className="text-[14px] text-paper whitespace-pre-wrap">{r.text}</div>}
+                      {editNoteId === r.id ? (
+                        <div className="mt-1">
+                          <textarea autoFocus value={noteDraft} readOnly={noteSaving}
+                            rows={Math.min(10, Math.max(2, noteDraft.split('\n').length + 1))}
+                            onChange={e => { setNoteDraft(e.target.value); if (noteEditErr) setNoteEditErr(''); }}
+                            onKeyDown={e => {
+                              if (isSendShortcut(e)) { e.preventDefault(); saveNoteEdit(r); }
+                              else if (e.key === 'Escape') { e.preventDefault(); cancelNoteEdit(); }
+                            }}
+                            onFocus={e => { const n = e.target.value.length; e.target.setSelectionRange(n, n); }}
+                            className={inputCls + ' resize-y leading-relaxed'} style={inputStyle} />
+                          {noteEditErr && <div className="text-[12px] mt-1" style={{ color: 'rgb(var(--c-coral-deep))' }}>{noteEditErr}</div>}
+                          <div className="flex items-center gap-2 mt-2">
+                            <PrimaryBtn small onClick={() => saveNoteEdit(r)} disabled={noteSaving || !noteDraft.trim()}>{noteSaving ? 'Saving...' : 'Save'}</PrimaryBtn>
+                            <GhostBtn onClick={cancelNoteEdit} disabled={noteSaving}>Cancel</GhostBtn>
+                            <span className="hidden lg:inline text-[12px] text-dim ml-auto">{sendShortcutLabel()} to save, Esc to cancel</span>
+                          </div>
+                        </div>
+                      ) : (!r.sys && <div className="text-[14px] text-paper whitespace-pre-wrap">{r.text}</div>)}
                     </div>
                   </div>
                 ))}
               </div>
               {canWrite && (
-                <div className="px-[18px] py-3 border-t flex items-center gap-2.5" style={hair}>
-                  <input value={noteText} onChange={e => setNoteText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postNote(); } }}
-                    placeholder="Write a note — @ to mention someone" className="flex-1 px-[13px] py-[10px] rounded-[11px] text-[14px] text-paper placeholder-dim focus:outline-none border" style={inputStyle} />
+                <div className="px-[18px] py-3 border-t flex items-end gap-2.5" style={hair}>
+                  {/* A textarea, not an input: Enter and Shift+Enter make a new line,
+                      so a note is never posted half written. Cmd/Ctrl+Enter or Post sends it. */}
+                  <textarea ref={noteRef} rows={1} value={noteText} onChange={e => setNoteText(e.target.value)}
+                    onKeyDown={e => { if (isSendShortcut(e)) { e.preventDefault(); postNote(); } }}
+                    placeholder="Write a note, @ to mention someone" className="flex-1 px-[13px] py-[10px] rounded-[11px] text-[14px] leading-[20px] text-paper placeholder-dim focus:outline-none border resize-none" style={inputStyle} />
+                  <span className="hidden lg:inline text-[12px] text-dim shrink-0 pb-[11px]">{sendShortcutLabel()}</span>
                   <PrimaryBtn onClick={postNote} disabled={!noteText.trim()} className="!rounded-[11px] !py-[9px]">Post</PrimaryBtn>
                 </div>
               )}
@@ -412,7 +475,7 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
             {task.status === 'done'
               ? <button onClick={() => setStatus('todo')} className="flex-1 py-[14px] rounded-[12px] text-[15px] font-semibold border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>Reopen</button>
               : <button onClick={() => setStatus('done')} className="flex-1 py-[14px] rounded-[12px] text-[15px] font-semibold" style={{ background: 'linear-gradient(180deg, rgb(var(--c-primary)), rgb(var(--c-primary-deep)))', color: 'rgb(var(--c-ink))' }}>Complete</button>}
-            <button onClick={() => { const el = document.querySelector('input[placeholder^="Write a note"]'); el?.scrollIntoView({ block: 'center', behavior: 'smooth' }); el?.focus(); }} className="px-[18px] py-[14px] rounded-[12px] text-[15px] font-semibold border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>Note</button>
+            <button onClick={() => { const el = noteRef.current; el?.scrollIntoView({ block: 'center', behavior: 'smooth' }); el?.focus(); }} className="px-[18px] py-[14px] rounded-[12px] text-[15px] font-semibold border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>Note</button>
             <button onClick={() => setSheet(true)} className="px-4 py-[14px] rounded-[12px] text-[15px] border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>…</button>
           </div>
         </MobileDock>

@@ -41,7 +41,7 @@ const WORK = [
   W({ source_id: 't7', title: 'Book install — Leeds', subtitle: 'Cafe Brigante', owner_id: ME, status: 'todo', priority: 'P2', due_at: d(0) + 'T00:00:00Z', updated_at: ts(-1) }),
 ];
 const TICKETS = [
-  { id: 'k1', ticket_number: 1042, subject: 'Card machine offline', priority: 'P1', stage: 'in_progress', location_id: 'l1', company_id: 'c2', sla_due_at: new Date(Date.now() - 40 * 60e3).toISOString(), first_response_due_at: new Date(Date.now() - 40 * 60e3).toISOString(), created_at: ts(0, 3) },
+  { id: 'k1', ticket_number: 1042, customer_email: 'dan@verde.example', channel: 'email', contact_id: 'ct1', subject: 'Card machine offline', priority: 'P1', stage: 'in_progress', location_id: 'l1', company_id: 'c2', sla_due_at: new Date(Date.now() - 40 * 60e3).toISOString(), first_response_due_at: new Date(Date.now() - 40 * 60e3).toISOString(), created_at: ts(0, 3) },
 ];
 const ONBOARDINGS = [{ id: 'o2', name: 'LS FFA Onboarding', stage: 'quote_sent', location_id: 'l1', company_id: 'c2', created_at: ts(-4) }];
 const CONTACTS = [{ id: 'ct1', first_name: 'Dan', last_name: 'Marsh', job_title: 'General manager', phone: '07700 900123', email: 'dan@verde.example' }];
@@ -72,7 +72,7 @@ const PRODUCTS = [{ id: 'pr1', name: 'Lightspeed terminal', category: 'hardware'
 const SERIALS = [{ id: 'sn1', serial: 'LS-88213', location_id: 'l1', product: { name: 'Lightspeed terminal' }, status: 'deployed' }, { id: 'sn2', serial: 'LS-88214', location_id: 'l1', product: { name: 'Lightspeed terminal' }, status: 'deployed' }, { id: 'sn3', serial: 'CR-1120', location_id: 'l1', product: { name: 'Card reader' }, status: 'deployed' }];
 const ACTIVITIES = [
   { id: 'c1', type: 'call', direction: 'outbound', actor_id: ME, occurred_at: ts(0, 2), channel_metadata: { to: '+447700900123', duration_seconds: 182 }, contact_id: 'ct1', subject_type: 'contact', subject_id: 'ct1' },
-  { id: 'c2', type: 'call', direction: 'inbound', actor_id: ME, occurred_at: ts(0, 5), channel_metadata: { from_number: '+441625442118', duration_seconds: 0 } },{ id: 'a1', type: 'note', subject: 'Cannot add sub account button is missing from my account', body: 'Cannot add sub account button is missing from my account', actor_id: ME, occurred_at: ts(0, 0.05), subject_type: 'task', subject_id: 't3', created_at: ts(0, 0.05) }];
+  { id: 'c2', type: 'call', direction: 'inbound', actor_id: ME, occurred_at: ts(0, 5), channel_metadata: { from_number: '+441625442118', duration_seconds: 0 } },{ id: 'a1', type: 'note', is_internal: true, subject: 'Cannot add sub account button is missing from my account', body: 'Cannot add sub account button is missing from my account', actor_id: ME, occurred_at: ts(0, 0.05), subject_type: 'task', subject_id: 't3', created_at: ts(0, 0.05) }];
 const TIME = [{ id: 'te1', profile_id: ME, subject_type: 'task', subject_id: 't3', started_at: ts(0, 1), ended_at: null, duration_seconds: 1440 }];
 const STAGE_HISTORY = [
   { id: 'sh1', object_type: 'deal', object_id: 'd1', to_stage: 'proposal_sent', changed_at: ts(-3), changed_by: ME },
@@ -110,7 +110,24 @@ const COST_TEMPLATES = [
             cnp_amex: { ic_rate_pct: 2.80, ic_txn_minor: 10, split_pct: 10 } } },
 ];
 
-export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
+// Harness only: a long email ticket, so the scroll, Reply all and note edit fixes can be seen.
+// The latest email copies Kate and the ops inbox, and copies our own mailbox in capitals.
+const TICKET_THREAD = [
+  { id: 'e1', type: 'email', direction: 'inbound', subject: 'Card machine offline', body: 'Hi, our terminal went offline this morning. The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', contact_id: 'ct1', is_internal: false, occurred_at: ts(0, 30), created_at: ts(0, 30), channel_metadata: { from: 'Dan Marsh <dan@verde.example>', gmail_message_id: 'gm-e1' } },
+  { id: 'e2', type: 'email', direction: 'outbound', subject: 'Re: Card machine offline', body: 'Thanks Dan, we are looking into it now. The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', actor_id: ME, is_internal: false, occurred_at: ts(0, 29), created_at: ts(0, 29), channel_metadata: { from: 'support@serv-os.app', to: 'dan@verde.example', gmail_message_id: 'gm-e2' } },
+  { id: 'n1', type: 'note', body: 'Checked the terminal logs, it loses Wi-Fi every 20 minutes.', subject_type: 'ticket', subject_id: 'k1', actor_id: 'u-sarah', is_internal: true, occurred_at: ts(0, 28), created_at: ts(0, 28), channel_metadata: {} },
+  { id: 'e3', type: 'email', direction: 'inbound', subject: 'Card machine offline', body: 'It happened again at lunch. The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', contact_id: 'ct1', is_internal: false, occurred_at: ts(0, 26), created_at: ts(0, 26), channel_metadata: { from: 'Dan Marsh <dan@verde.example>', gmail_message_id: 'gm-e3' } },
+  { id: 'e4', type: 'email', direction: 'outbound', subject: 'Re: Card machine offline', body: 'Could you try the ethernet cable in the box? The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', actor_id: ME, is_internal: false, occurred_at: ts(0, 25), created_at: ts(0, 25), channel_metadata: { from: 'support@serv-os.app', to: 'dan@verde.example', gmail_message_id: 'gm-e4' } },
+  { id: 'e5', type: 'email', direction: 'inbound', subject: 'Card machine offline', body: 'Ethernet is in, still dropping. The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', contact_id: 'ct1', is_internal: false, occurred_at: ts(0, 20), created_at: ts(0, 20), channel_metadata: { from: 'Dan Marsh <dan@verde.example>', gmail_message_id: 'gm-e5' } },
+  { id: 'e6', type: 'email', direction: 'outbound', subject: 'Re: Card machine offline', body: 'We will send a replacement unit. The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', actor_id: ME, is_internal: false, occurred_at: ts(0, 19), created_at: ts(0, 19), channel_metadata: { from: 'support@serv-os.app', to: 'dan@verde.example', gmail_message_id: 'gm-e6' } },
+  { id: 'n2', type: 'note', body: 'Chased Adyen, waiting on a replacment terminal.', subject_type: 'ticket', subject_id: 'k1', actor_id: 'u-peter', is_internal: true, occurred_at: ts(0, 18), created_at: ts(0, 18), channel_metadata: {} },
+  { id: 'e7', type: 'email', direction: 'inbound', subject: 'Card machine offline', body: 'Any update on the replacement? The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', contact_id: 'ct1', is_internal: false, occurred_at: ts(0, 10), created_at: ts(0, 10), channel_metadata: { from: 'Dan Marsh <dan@verde.example>', gmail_message_id: 'gm-e7' } },
+  { id: 'e8', type: 'email', direction: 'outbound', subject: 'Re: Card machine offline', body: 'It ships today, tracking to follow. The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', actor_id: ME, is_internal: false, occurred_at: ts(0, 9), created_at: ts(0, 9), channel_metadata: { from: 'support@serv-os.app', to: 'dan@verde.example', gmail_message_id: 'gm-e8' } },
+  { id: 'e9', type: 'email', direction: 'inbound', subject: 'Card machine offline', body: 'Copying Kate who runs the floor and our ops inbox. The card machine keeps dropping its connection during service and staff are taking cash instead. The card machine keeps dropping its connection during service and staff are taking cash instead.', subject_type: 'ticket', subject_id: 'k1', contact_id: 'ct1', is_internal: false, occurred_at: ts(0, 2), created_at: ts(0, 2), channel_metadata: { from: 'Dan Marsh <dan@verde.example>', gmail_message_id: 'gm-e9', to: 'support@serv-os.app, ops@verde.example', cc: 'Kate Lowe <kate@verde.example>, SUPPORT@SERV-OS.APP' } },
+  { id: 'n3', type: 'note', body: 'Tracking number sent to Dan.', subject_type: 'ticket', subject_id: 'k1', actor_id: 'u-peter', is_internal: true, occurred_at: ts(0, 0.2), created_at: ts(0, 0.2), channel_metadata: {} },
+];
+ACTIVITIES.push(...TICKET_THREAD);
+export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' }], user_integrations: [{ profile_id: ME, provider: 'google', email: 'peter@posup.co.uk' }], ticket_email_threads: [], processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
   // Dollar rows, so the Volume tab has to show pounds and dollars side by side.
   { deal_id: 'd7', name: 'Mozz Pizza — Orem (won)', stage: 'closed_won', owner_id: ME, company_id: 'c3', currency: 'USD', closed_at: ts(-1), site_count: 1, est_monthly_revenue: 98000, est_avg_transaction: 41, est_monthly_transactions: 2400, actual_monthly_revenue: 0, probability: 1, weighted_monthly_revenue: 98000, is_won: true, is_closed: true },
   { deal_id: 'd6', name: 'Mozz Pizza — Provo', stage: 'negotiation', owner_id: ME, company_id: 'c3', currency: 'USD', site_count: 1, est_monthly_revenue: 131554, est_avg_transaction: 44, est_monthly_transactions: 3004, probability: 0.85, weighted_monthly_revenue: 111821, is_won: false, is_closed: false },
@@ -124,8 +141,17 @@ export const TABLES = { processing_cost_templates: COST_TEMPLATES, monthly_volum
 export const MEMBERS_LIST = MEMBERS;
 
 function makeQuery(table) {
-  let rows = (TABLES[table] || []).slice(); let head = false; let single = false;
-  const res = () => ({ data: single ? (rows[0] ?? null) : head ? null : rows, error: null, count: rows.length });
+  let rows = (TABLES[table] || []).slice(); let head = false; let single = false; let patch = null; let inserted = null;
+  // Harness only: an update changes the rows the filters matched and an insert
+  // adds rows, the way the database would, so note edits and new notes show up.
+  const res = () => {
+    if (inserted) { (TABLES[table] = TABLES[table] || []).push(...inserted); rows = inserted; inserted = null; }
+    if (patch) {
+      rows.forEach((r) => { const textChanged = table === 'crm_activities' && 'body' in patch && patch.body !== r.body; Object.assign(r, patch); if (textChanged) r.edited_at = new Date().toISOString(); });
+      patch = null;
+    }
+    return { data: single ? (rows[0] ?? null) : head ? null : rows, error: null, count: rows.length };
+  };
   const filt = (fn) => { rows = rows.filter(fn); return proxy; };
   const api = {
     select: (_c, o) => { if (o?.head) head = true; return proxy; },
@@ -133,7 +159,8 @@ function makeQuery(table) {
     is: (k, v) => filt(r => (v === null ? r[k] == null : r[k] === v)), not: () => proxy, or: () => proxy, gte: () => proxy, lte: () => proxy, gt: () => proxy, lt: () => proxy, ilike: () => proxy, like: () => proxy, contains: () => proxy, textSearch: () => proxy,
     order: () => proxy, limit: (n) => { rows = rows.slice(0, n); return proxy; }, range: () => proxy,
     single: () => { single = true; return proxy; }, maybeSingle: () => { single = true; return proxy; },
-    insert: () => proxy, update: () => proxy, upsert: () => proxy, delete: () => proxy,
+    insert: (v) => { const now = new Date().toISOString(); inserted = (Array.isArray(v) ? v : [v]).map((r) => ({ id: `stub-${Math.random().toString(36).slice(2, 9)}`, created_at: now, occurred_at: now, ...r })); return proxy; },
+    update: (v) => { patch = v; return proxy; }, upsert: () => proxy, delete: () => proxy,
     then: (r, j) => Promise.resolve(res()).then(r, j), catch: (j) => Promise.resolve(res()).catch(j), finally: (f) => Promise.resolve(res()).finally(f),
   };
   const proxy = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => proxy) });
