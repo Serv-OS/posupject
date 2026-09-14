@@ -4,6 +4,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=denonext";
+import { balanceDue } from "../_shared/invoiceEmail.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -28,8 +29,11 @@ serve(async (req) => {
     if (!conn?.secret_key) return json({ error: "Payments are not configured." }, 400);
     const stripe = new Stripe(conn.secret_key, { apiVersion: "2023-10-16" });
 
-    const amount = Number(inv.total) || 0;
-    if (amount <= 0) return json({ error: "Nothing to charge on this invoice." }, 400);
+    // Charge what is still owed, not the invoice total: a deposit already
+    // taken or a credit note already issued must not be charged again. The
+    // same rule as the balance the public page shows, to the penny.
+    const amount = balanceDue(inv);
+    if (amount <= 0) return json({ error: "Nothing left to pay on this invoice." }, 400);
 
     const base = origin || new URL(req.url).origin;
     const session = await stripe.checkout.sessions.create({
@@ -41,6 +45,10 @@ serve(async (req) => {
       success_url: `${base}/i/${token}?paid=1`,
       cancel_url: `${base}/i/${token}`,
       metadata: { invoice_id: inv.id },
+      // An hour, not Stripe's default of a day: a page left open charges the
+      // balance as it was when opened, and a credit note issued since would
+      // make that more than is owed. Stripe allows 30 minutes at the least.
+      expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
     });
 
     await supabase.from("invoices").update({ stripe_checkout_id: session.id }).eq("id", inv.id);

@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { BarChart3, ArrowUpDown } from 'lucide-react';
 import { invStatus } from './InvoicesPanel.jsx';
 import { fmtMoney, CURRENCIES } from '../../lib/money';
+import { balanceDue } from '../../lib/creditNotes';
 
 // ── date helpers ────────────────────────────────────────────────────────────
 const iso = (d) => d.toISOString().slice(0, 10);
@@ -13,8 +14,15 @@ const addMonths = (d, n) => { const x = new Date(d); x.setMonth(x.getMonth() + n
 const inRange = (dstr, from, to) => { const d = (dstr || '').slice(0, 10); return !!d && d >= from && d <= to; };
 const acctDate = (i) => (i.issue_date || i.created_at || '').slice(0, 10);   // when invoiced
 const billed = (i) => Number(i.total || 0);
-const owed = (i) => Math.max(0, Number(i.total || 0) - Number(i.amount_paid || 0));   // still outstanding
+// Still outstanding: total less payments less issued credit notes, never below 0.
+const owed = (i) => balanceDue(i);
+const creditAmt = (c) => Number(c.total || 0);
 const collectedAmt = (i) => Number(i.amount_paid ?? i.total ?? 0);
+// Money handed back on a credit note, taken off Collected in the period it was
+// refunded: a March payment refunded in April still counts in March, and April
+// shows the money going back out.
+const isRefunded = (c) => c.refund_status === 'refunded' && !!c.refunded_at;
+const refundAmt = (c) => Number(c.refund_due || 0);
 
 // ── tiny UI atoms (match the codebase idiom) ────────────────────────────────
 function Stat({ label, value, tone, sub }) {
@@ -39,6 +47,7 @@ const PRESETS = [
 export default function ReportsPanel({ profile, onNavigate }) {
   const [cur, setCur] = useState('GBP');   // currency lens — every figure below is per-currency, never mixed
   const [invoices, setInvoices] = useState([]);
+  const [credits, setCredits] = useState([]);   // issued credit notes
   const [companies, setCompanies] = useState([]);
   const [out, setOut] = useState([]);          // money-out rows (paid bills + expenses)
   const [hasOut, setHasOut] = useState(false);
@@ -54,14 +63,21 @@ export default function ReportsPanel({ profile, onNavigate }) {
 
   useEffect(() => { (async () => {
     setLoading(true);
-    const [inv, co] = await Promise.all([
-      supabase.from('invoices')
-        .select('id, invoice_number, total, amount_paid, currency, status, paid_at, due_date, issue_date, created_at, company_id, location_id, company:companies(name), location:locations(name)')
-        .order('issue_date', { ascending: false }),
+    const INV_COLS = 'id, invoice_number, total, amount_paid, currency, status, paid_at, due_date, issue_date, created_at, company_id, location_id, company:companies(name), location:locations(name)';
+    const [invC, co, cn] = await Promise.all([
+      supabase.from('invoices').select(`${INV_COLS}, amount_credited`).order('issue_date', { ascending: false }),
       supabase.from('companies').select('id, name').order('name'),
+      supabase.from('credit_notes').select('id, invoice_id, total, currency, status, issue_date, refund_status, refund_due, refunded_at').eq('status', 'issued'),
     ]);
+    // Guarded like money-out below: until the credit notes migration is
+    // applied, amount_credited does not exist and the whole select would fail.
+    // Fall back to the old columns so the report still loads, with no credit.
+    const inv = invC.error
+      ? await supabase.from('invoices').select(INV_COLS).order('issue_date', { ascending: false })
+      : invC;
     setInvoices(inv.data || []);
     setCompanies(co.data || []);
+    setCredits(cn.error ? [] : (cn.data || []));
     // Money-out (bills + expenses) only exists on the finance module. Query
     // guarded — the table simply won't exist on the construction CRMs.
     const rows = []; let exists = false;
@@ -80,10 +96,25 @@ export default function ReportsPanel({ profile, onNavigate }) {
   const live = useMemo(() => invoices.filter(i => !['draft', 'void'].includes(i.status) && (i.currency || 'GBP') === cur), [invoices, cur]);
   const scoped = useMemo(() => live.filter(i => !companyId || i.company_id === companyId), [live, companyId]);
   const outScoped = useMemo(() => out.filter(o => (o.currency || 'GBP') === cur).filter(o => !companyId || o.company_id === companyId), [out, cur, companyId]);
+  // Issued credit notes, in the currency lens, against invoices that still
+  // count. A credit on an invoice later voided is left out: the invoice is
+  // already gone from the figures, so taking the credit off too would count
+  // it twice. Each note takes its invoice's company, so the per company table
+  // and the company filter match the invoices they reduce.
+  const liveById = useMemo(() => new Map(live.map(i => [i.id, i])), [live]);
+  const creditsLive = useMemo(() => credits
+    .filter(c => (c.currency || 'GBP') === cur && liveById.has(c.invoice_id))
+    .map(c => ({ ...c, company_id: liveById.get(c.invoice_id).company_id, company: liveById.get(c.invoice_id).company })),
+  [credits, cur, liveById]);
+  const creditsScoped = useMemo(() => creditsLive.filter(c => !companyId || c.company_id === companyId), [creditsLive, companyId]);
 
   // ── period + point-in-time roll-ups ──
-  const invoicedPeriod = scoped.filter(i => inRange(acctDate(i), from, to)).reduce((s, i) => s + billed(i), 0);
-  const collectedPeriod = scoped.filter(i => i.paid_at && inRange(i.paid_at, from, to)).reduce((s, i) => s + collectedAmt(i), 0);
+  // Invoiced is net of credit notes, each taken off in the period of its own
+  // issue date (a March credit on a January invoice reduces March).
+  const creditedPeriod = creditsScoped.filter(c => inRange(c.issue_date, from, to)).reduce((s, c) => s + creditAmt(c), 0);
+  const invoicedPeriod = scoped.filter(i => inRange(acctDate(i), from, to)).reduce((s, i) => s + billed(i), 0) - creditedPeriod;
+  const refundedPeriod = creditsScoped.filter(c => isRefunded(c) && inRange(c.refunded_at, from, to)).reduce((s, c) => s + refundAmt(c), 0);
+  const collectedPeriod = scoped.filter(i => i.paid_at && inRange(i.paid_at, from, to)).reduce((s, i) => s + collectedAmt(i), 0) - refundedPeriod;
   const outPeriod = outScoped.filter(o => o.paid_at && inRange(o.paid_at, from, to)).reduce((s, o) => s + Number(o.amount_paid ?? o.total ?? 0), 0);
   const outstandingNow = scoped.filter(i => ['sent', 'viewed'].includes(i.status)).reduce((s, i) => s + owed(i), 0);
   const overdueNow = scoped.filter(i => invStatus(i) === 'overdue').reduce((s, i) => s + owed(i), 0);
@@ -97,10 +128,12 @@ export default function ReportsPanel({ profile, onNavigate }) {
   }, [from, to]);
   const series = useMemo(() => months.map(mk => ({
     key: mk,
-    invoiced: scoped.filter(i => monthKey(acctDate(i)) === mk).reduce((s, i) => s + billed(i), 0),
-    collected: scoped.filter(i => i.paid_at && monthKey(i.paid_at) === mk).reduce((s, i) => s + collectedAmt(i), 0),
+    invoiced: scoped.filter(i => monthKey(acctDate(i)) === mk).reduce((s, i) => s + billed(i), 0)
+      - creditsScoped.filter(c => monthKey(c.issue_date) === mk).reduce((s, c) => s + creditAmt(c), 0),
+    collected: scoped.filter(i => i.paid_at && monthKey(i.paid_at) === mk).reduce((s, i) => s + collectedAmt(i), 0)
+      - creditsScoped.filter(c => isRefunded(c) && monthKey(c.refunded_at) === mk).reduce((s, c) => s + refundAmt(c), 0),
     out: outScoped.filter(o => o.paid_at && monthKey(o.paid_at) === mk).reduce((s, o) => s + Number(o.amount_paid ?? o.total ?? 0), 0),
-  })), [months, scoped, outScoped]);
+  })), [months, scoped, outScoped, creditsScoped]);
   const seriesMax = Math.max(1, ...series.map(m => Math.max(m.invoiced, m.collected)));
 
   // ── per-company breakdown ──
@@ -118,11 +151,17 @@ export default function ReportsPanel({ profile, onNavigate }) {
       if (['sent', 'viewed'].includes(i.status)) bump(id, name, { outstanding: owed(i) });
       if (invStatus(i) === 'overdue') bump(id, name, { overdue: owed(i) });
     }
+    for (const c of creditsLive) {
+      if (companyId && c.company_id !== companyId) continue;
+      // '\u2014' is the same key as the no company row the invoices use above.
+      if (inRange(c.issue_date, from, to)) bump(c.company_id || '\u2014', c.company?.name, { invoiced: -creditAmt(c) });
+      if (isRefunded(c) && inRange(c.refunded_at, from, to)) bump(c.company_id || '\u2014', c.company?.name, { collected: -refundAmt(c) });
+    }
     const rows = [...map.values()].filter(r => r.invoiced || r.collected || r.outstanding);
     const dir = sort.dir === 'asc' ? 1 : -1;
     rows.sort((a, b) => sort.key === 'name' ? a.name.localeCompare(b.name) * dir : (a[sort.key] - b[sort.key]) * dir);
     return rows;
-  }, [live, companyId, from, to, sort]);
+  }, [live, creditsLive, companyId, from, to, sort]);
 
   // ── aged debtors (as of today) ──
   const aged = useMemo(() => {
@@ -203,8 +242,10 @@ export default function ReportsPanel({ profile, onNavigate }) {
       <div className="px-6 py-4 space-y-4">
         {/* KPI row */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Stat label="Invoiced (period)" value={fmtMoney(invoicedPeriod, cur)} tone="accent" sub={`${from} → ${to}`} />
-          <Stat label="Collected (period)" value={fmtMoney(collectedPeriod, cur)} tone="good" sub="Payments received" />
+          <Stat label="Invoiced (period)" value={fmtMoney(invoicedPeriod, cur)} tone="accent"
+            sub={creditedPeriod > 0 ? `${from} → ${to}, less ${fmtMoney(creditedPeriod, cur)} credit notes` : `${from} → ${to}`} />
+          <Stat label="Collected (period)" value={fmtMoney(collectedPeriod, cur)} tone="good"
+            sub={refundedPeriod > 0 ? `Payments received, less ${fmtMoney(refundedPeriod, cur)} refunded` : 'Payments received'} />
           <Stat label="Outstanding (now)" value={fmtMoney(outstandingNow, cur)} sub="Sent, not yet paid" />
           <Stat label="Overdue (now)" value={fmtMoney(overdueNow, cur)} tone="bad" sub="Past due date" />
         </div>
@@ -229,8 +270,10 @@ export default function ReportsPanel({ profile, onNavigate }) {
             {series.map(m => (
               <div key={m.key} className="flex-1 min-w-[26px] flex flex-col items-center gap-1" title={`${monthLabel(m.key)}\nInvoiced ${fmtMoney(m.invoiced, cur)}\nCollected ${fmtMoney(m.collected, cur)}${hasOut ? `\nPaid out ${fmtMoney(m.out, cur)}` : ''}`}>
                 <div className="w-full flex items-end justify-center gap-0.5 h-full">
-                  <div className="w-1/3 rounded-t bg-ember/70" style={{ height: `${(m.invoiced / seriesMax) * 100}%`, minHeight: m.invoiced ? 2 : 0 }} />
-                  <div className="w-1/3 rounded-t bg-emerald-500" style={{ height: `${(m.collected / seriesMax) * 100}%`, minHeight: m.collected ? 2 : 0 }} />
+                  {/* A month whose credit notes outweigh what it invoiced nets below 0:
+                      no bar, rather than a negative height the browser throws away. */}
+                  <div className="w-1/3 rounded-t bg-ember/70" style={{ height: `${(Math.max(0, m.invoiced) / seriesMax) * 100}%`, minHeight: m.invoiced > 0 ? 2 : 0 }} />
+                  <div className="w-1/3 rounded-t bg-emerald-500" style={{ height: `${(Math.max(0, m.collected) / seriesMax) * 100}%`, minHeight: m.collected > 0 ? 2 : 0 }} />
                   {hasOut && <div className="w-1/3 rounded-t bg-red-400/80" style={{ height: `${(m.out / seriesMax) * 100}%`, minHeight: m.out ? 2 : 0 }} />}
                 </div>
                 <div className="text-[9px] text-dim font-mono whitespace-nowrap">{monthLabel(m.key)}</div>

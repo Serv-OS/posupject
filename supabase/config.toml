@@ -2,6 +2,8 @@ project_id = "yuevuqvldtmjwwzjrddo"
 
 # CI mirrors deployed JWT posture. Listed = public (no JWT: webhooks/cron/
 # public links). Unlisted functions default to verify_jwt=true (authenticated).
+[functions.credit-note-public]
+verify_jwt = false
 [functions.forms-public]
 verify_jwt = false
 [functions.gmail-check]

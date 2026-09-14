@@ -2,8 +2,14 @@
 // InvoiceBuilder so jsPDF stays out of the main bundle. buildInvoiceDoc is kept
 // pure (returns the doc) so it can be unit-tested in Node; downloadInvoicePdf
 // wraps it with the browser save().
+//
+// The credit note is the same document with different words, so both are drawn
+// by the one set of layout pieces below (header, customer block, line table,
+// totals column, text blocks, footer). Change the look there and the invoice
+// and the credit note stay matched.
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { amountPaid, balanceDue, creditNoteLabel, creditState, creditTotals } from './creditNotes.js'
 
 const hexToRgb = (hex) => {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '')
@@ -16,6 +22,8 @@ const fmtDate = (d, locale = 'en-US') => {
   if (isNaN(date)) return String(d)
   return date.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })
 }
+
+const moneyFn = (fmt) => (typeof fmt === 'function' ? fmt : (n) => (Number(n) || 0).toFixed(2))
 
 // Best-effort: turn a remote logo URL into a data URL for embedding. Returns
 // null on any failure (CORS, 404, non-image) so the PDF falls back to text.
@@ -35,16 +43,20 @@ async function toDataUrl(url) {
   }
 }
 
-export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, seller = {}, billTo = {}, fmt, taxLabel = 'Tax', dateLocale = 'en-US' }) {
-  const money = typeof fmt === 'function' ? fmt : (n) => (Number(n) || 0).toFixed(2)
+// ── Shared layout ────────────────────────────────────────────────────────────
+// Every piece draws at ctx.y and moves it on, so the pieces can be stacked in
+// whatever order a document needs.
+function startDoc(seller = {}) {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
-  const W = doc.internal.pageSize.getWidth()
-  const M = 48
-  const [ar, ag, ab] = hexToRgb(seller.accent)
-  const number = inv.invoice_number ?? inv.number ?? ''
-  let y = M
+  return { doc, W: doc.internal.pageSize.getWidth(), M: 48, y: 48, accent: hexToRgb(seller.accent) }
+}
 
-  // ── Header — seller (left) + INVOICE meta (right) ──────────────────────────
+// Seller (left) + document title, meta rows and status pill (right).
+async function drawHeader(ctx, { seller = {}, title, fallbackName, meta = [], pill = null }) {
+  const { doc, W, M } = ctx
+  const [ar, ag, ab] = ctx.accent
+  const y = ctx.y
+
   const logoData = seller.logo_url ? await toDataUrl(seller.logo_url) : null
   let leftBottom = y
   if (logoData) {
@@ -60,11 +72,11 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
   }
   if (leftBottom === y) {
     doc.setFont('helvetica', 'bold').setFontSize(18).setTextColor(20, 20, 20)
-    doc.text(seller.name || 'Invoice', M, y + 16)
+    doc.text(seller.name || fallbackName, M, y + 16)
     leftBottom = y + 28
   }
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(110, 110, 110)
-  const leftW = 300 // keep seller text clear of the right-hand invoice meta column
+  const leftW = 300 // keep seller text clear of the right-hand meta column
   const sellerLines = []
   if (seller.address) sellerLines.push(...doc.splitTextToSize(String(seller.address), leftW))
   const sellerContact = [seller.email, seller.phone].filter(Boolean).join('   ·   ')
@@ -74,27 +86,15 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
   leftBottom = sy
 
   doc.setFont('helvetica', 'bold').setFontSize(22).setTextColor(ar, ag, ab)
-  doc.text('INVOICE', W - M, y + 16, { align: 'right' })
+  doc.text(title, W - M, y + 16, { align: 'right' })
   doc.setFontSize(10).setFont('helvetica', 'normal')
   let ry = y + 38
-  const meta = [
-    ['Invoice', `INV-${number}`],
-    inv.po_number ? ['PO', String(inv.po_number)] : null,
-    ['Issued', fmtDate(inv.issue_date, dateLocale)],
-    inv.due_date ? ['Due', fmtDate(inv.due_date, dateLocale)] : null,
-  ].filter(Boolean)
-  for (const [k, v] of meta) {
+  for (const [k, v] of meta.filter(Boolean)) {
     doc.setTextColor(150, 150, 150).text(k, W - M - 140, ry)
     doc.setTextColor(40, 40, 40).text(String(v), W - M, ry, { align: 'right' })
     ry += 15
   }
 
-  // status pill
-  const status = (inv.status || '').toLowerCase()
-  const pill = status === 'paid'
-    ? { t: 'PAID', bg: [209, 250, 229], fg: [6, 95, 70] }
-    : (inv.overdue || status === 'overdue') ? { t: 'OVERDUE', bg: [254, 226, 226], fg: [153, 27, 27] }
-      : null
   if (pill) {
     ry += 4
     doc.setFillColor(...pill.bg).roundedRect(W - M - 78, ry - 11, 78, 18, 4, 4, 'F')
@@ -102,9 +102,13 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
     ry += 16
   }
 
-  y = Math.max(leftBottom, ry) + 14
+  ctx.y = Math.max(leftBottom, ry) + 14
+}
 
-  // ── Bill To / Service location ─────────────────────────────────────────────
+// Customer (left) / Service location (right), each wrapped to its own column.
+function drawParties(ctx, { billTo = {}, label }) {
+  const { doc, W, M } = ctx
+  let y = ctx.y
   doc.setDrawColor(232).line(M, y, W - M, y)
   y += 20
   const col2 = M + (W - 2 * M) / 2
@@ -112,7 +116,7 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
   const locW = (W - M) - col2
   const wrapParts = (parts, w) => parts.filter(Boolean).flatMap((p) => doc.splitTextToSize(String(p), w))
   doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(150, 150, 150)
-  doc.text('BILL TO', M, y)
+  doc.text(label, M, y)
   const billLines = wrapParts([billTo.companyName, billTo.companyAddress, billTo.contactName, billTo.contactEmail], billW)
   const locLines = wrapParts([billTo.locationName, billTo.locationAddress], locW)
   if (locLines.length) doc.text('SERVICE LOCATION', col2, y)
@@ -121,9 +125,12 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
   for (const l of (billLines.length ? billLines : ['—'])) { doc.text(l, M, by); by += 13 }
   let ly = y + 15
   for (const l of locLines) { doc.text(l, col2, ly); ly += 13 }
-  y = Math.max(by, ly) + 8
+  ctx.y = Math.max(by, ly) + 8
+}
 
-  // ── Line items ─────────────────────────────────────────────────────────────
+function drawLines(ctx, { lines, taxLabel, money }) {
+  const { doc, M } = ctx
+  const [ar, ag, ab] = ctx.accent
   const body = (lines || [])
     .filter((l) => (l.name || '').trim() || Number(l.qty) || Number(l.unit_price))
     .map((l) => {
@@ -132,7 +139,7 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
       return [desc, String(Number(l.qty) || 0), money(l.unit_price), `${Number(l.tax_rate) || 0}%`, money(net)]
     })
   autoTable(doc, {
-    startY: y,
+    startY: ctx.y,
     head: [['Description', 'Qty', 'Unit', taxLabel, 'Amount']],
     body: body.length ? body : [['—', '', '', '', money(0)]],
     theme: 'striped',
@@ -148,54 +155,202 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
     },
     margin: { left: M, right: M },
   })
-  y = (doc.lastAutoTable?.finalY || y) + 16
+  ctx.y = (doc.lastAutoTable?.finalY || ctx.y) + 16
+}
 
-  // ── Totals (right column) ──────────────────────────────────────────────────
+// The right-hand totals column. Each row is [label, value, opts]: opts.bold
+// for the headline figure, opts.color, opts.rule for the divider above it,
+// opts.minus for a figure taken off (credit, payments), and opts.note for a
+// small line of text under the row.
+function drawTotals(ctx, rows, money) {
+  const { doc, W, M } = ctx
   const tx = W - M - 220
-  const row = (label, val, opts = {}) => {
+  for (const r of rows.filter(Boolean)) {
+    const [label, val, opts = {}] = r
+    // A long credit note or invoice can end its lines near the foot of the
+    // page; the refund or balance row would then print over the footer or off
+    // the page. Room for a row and its note, as the invoice lines leave.
+    if (ctx.y > doc.internal.pageSize.getHeight() - 70) { doc.addPage(); ctx.y = M }
+    // ctx.y is the row's baseline. The divider used to sit 6pt above it, which
+    // ran through the middle of "Total" like a strike through; on a credit note
+    // that reads as cancelled. 11pt clears the row above and the text below.
+    if (opts.rule) doc.setDrawColor(225).line(tx, ctx.y - 11, W - M, ctx.y - 11)
     doc.setFont('helvetica', opts.bold ? 'bold' : 'normal').setFontSize(opts.bold ? 11 : 10)
-    doc.setTextColor(...(opts.color || [90, 90, 90])).text(label, tx, y)
-    doc.setTextColor(...(opts.color || [40, 40, 40])).text(money(val), W - M, y, { align: 'right' })
-    y += opts.bold ? 20 : 16
+    doc.setTextColor(...(opts.color || [90, 90, 90])).text(label, tx, ctx.y)
+    // A plain hyphen: the PDF's built-in font has no minus sign.
+    doc.setTextColor(...(opts.color || [40, 40, 40])).text(`${opts.minus ? '-' : ''}${money(val)}`, W - M, ctx.y, { align: 'right' })
+    ctx.y += opts.bold ? 20 : 16
+    if (opts.note) {
+      doc.setFont('helvetica', 'normal').setFontSize(8.5).setTextColor(130, 130, 130).text(String(opts.note), tx, ctx.y - 4)
+      ctx.y += 10
+    }
   }
-  row('Subtotal', totals.subtotal ?? inv.subtotal ?? 0)
-  row(taxLabel, totals.tax ?? inv.tax_amount ?? 0)
-  doc.setDrawColor(225).line(tx, y - 6, W - M, y - 6)
-  row('Total', totals.total ?? inv.total ?? 0, { bold: true, color: [ar, ag, ab] })
-  if (status === 'paid') {
-    const paid = totals.paid ?? inv.amount_paid ?? totals.total ?? inv.total ?? 0
-    row('Paid', paid, { color: [6, 120, 70] })
-    const bal = (Number(totals.total ?? inv.total ?? 0) - Number(paid))
-    if (Math.abs(bal) > 0.005) row('Balance due', bal, { bold: true })
-  }
-  y += 8
+  ctx.y += 8
+}
 
-  // ── Notes + terms ──────────────────────────────────────────────────────────
-  const block = (title, text) => {
-    if (!text) return
-    if (y > doc.internal.pageSize.getHeight() - 90) { doc.addPage(); y = M }
-    doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(150, 150, 150).text(title, M, y)
-    y += 13
-    doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(80, 80, 80)
-    const wrapped = doc.splitTextToSize(String(text), W - 2 * M)
-    doc.text(wrapped, M, y)
-    y += wrapped.length * 12 + 10
-  }
-  block('NOTES', inv.notes)
-  block('TERMS', inv.terms)
+// A titled paragraph (notes, terms, the credit reason). Skipped when empty.
+function drawBlock(ctx, title, text) {
+  if (!text) return
+  const { doc, W, M } = ctx
+  if (ctx.y > doc.internal.pageSize.getHeight() - 90) { doc.addPage(); ctx.y = M }
+  doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(150, 150, 150).text(title, M, ctx.y)
+  ctx.y += 13
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(80, 80, 80)
+  const wrapped = doc.splitTextToSize(String(text), W - 2 * M)
+  doc.text(wrapped, M, ctx.y)
+  ctx.y += wrapped.length * 12 + 10
+}
 
-  // ── Footer ─────────────────────────────────────────────────────────────────
+function drawFooter(ctx, seller = {}, label) {
+  const { doc, W, M } = ctx
   const fy = doc.internal.pageSize.getHeight() - 36
   doc.setDrawColor(238).line(M, fy - 12, W - M, fy - 12)
   doc.setFont('helvetica', 'normal').setFontSize(8.5).setTextColor(160, 160, 160)
   doc.text([seller.name, seller.email, seller.phone].filter(Boolean).join('   ·   ') || 'Thank you for your business', M, fy)
-  doc.text(`INV-${number}`, W - M, fy, { align: 'right' })
+  doc.text(label, W - M, fy, { align: 'right' })
+}
 
-  return doc
+// ── Invoice ──────────────────────────────────────────────────────────────────
+export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, seller = {}, billTo = {}, fmt, taxLabel = 'Tax', dateLocale = 'en-US' }) {
+  const money = moneyFn(fmt)
+  const ctx = startDoc(seller)
+  const number = inv.invoice_number ?? inv.number ?? ''
+
+  const status = (inv.status || '').toLowerCase()
+  const total = totals.total ?? inv.total ?? 0
+
+  // Credit notes (src/lib/creditNotes.js). With none, everything below reads
+  // exactly as it did before credit notes existed.
+  const credited = Number(totals.credited ?? inv.amount_credited) || 0
+  const hasCredit = credited > 0
+  const state = { status, total, amount_paid: totals.paid ?? inv.amount_paid, amount_credited: credited }
+  const balance = balanceDue(state)
+  const paid = amountPaid(state)
+
+  // Fully credited with nothing paid is not overdue: nothing is owed.
+  const pill = status === 'paid'
+    ? { t: 'PAID', bg: [209, 250, 229], fg: [6, 95, 70] }
+    : (hasCredit && creditState(state) === 'full' && paid === 0) ? { t: 'CREDITED', bg: [224, 231, 255], fg: [55, 48, 163] }
+      : ((inv.overdue || status === 'overdue') && !(hasCredit && balance === 0)) ? { t: 'OVERDUE', bg: [254, 226, 226], fg: [153, 27, 27] }
+        : null
+  await drawHeader(ctx, {
+    seller, title: 'INVOICE', fallbackName: 'Invoice', pill,
+    meta: [
+      ['Invoice', `INV-${number}`],
+      inv.po_number ? ['PO', String(inv.po_number)] : null,
+      ['Issued', fmtDate(inv.issue_date, dateLocale)],
+      inv.due_date ? ['Due', fmtDate(inv.due_date, dateLocale)] : null,
+    ],
+  })
+  drawParties(ctx, { billTo, label: 'BILL TO' })
+  drawLines(ctx, { lines, taxLabel, money })
+
+  const [ar, ag, ab] = ctx.accent
+  const rows = [
+    ['Subtotal', totals.subtotal ?? inv.subtotal ?? 0],
+    [taxLabel, totals.tax ?? inv.tax_amount ?? 0],
+    ['Total', total, { bold: true, color: [ar, ag, ab], rule: true }],
+  ]
+  if (hasCredit) {
+    // The customer pays the balance, so every step down to it is shown.
+    rows.push(['Credited', credited, { minus: true }])
+    if (paid > 0) rows.push(['Paid', paid, { color: [6, 120, 70], minus: true }])
+    // Paid in full and then credited: the balance stops at 0, so say where the
+    // rest went rather than print sums that do not add up. The credit note
+    // itself says whether it has been refunded.
+    const over = paid - (Number(total) - credited)
+    rows.push(['Balance due', balance, { bold: true, note: over > 0.005 ? `${money(over)} more was paid than is now owed` : null }])
+  } else if (status === 'paid') {
+    const paid = totals.paid ?? inv.amount_paid ?? totals.total ?? inv.total ?? 0
+    rows.push(['Paid', paid, { color: [6, 120, 70] }])
+    const bal = (Number(totals.total ?? inv.total ?? 0) - Number(paid))
+    if (Math.abs(bal) > 0.005) rows.push(['Balance due', bal, { bold: true }])
+  }
+  drawTotals(ctx, rows, money)
+
+  drawBlock(ctx, 'NOTES', inv.notes)
+  drawBlock(ctx, 'TERMS', inv.terms)
+  drawFooter(ctx, seller, `INV-${number}`)
+  return ctx.doc
 }
 
 export async function downloadInvoicePdf(data) {
   const doc = await buildInvoiceDoc(data)
   const number = data?.inv?.invoice_number ?? data?.inv?.number ?? 'invoice'
   doc.save(`INV-${number}.pdf`)
+}
+
+// ── Credit note ──────────────────────────────────────────────────────────────
+// note: a credit_notes row (credit_number or number, issue_date, reason, status,
+// subtotal, tax_amount, total, refund_status, refund_due, refunded_at,
+// refund_method, cancelled_at). lines: its credit_note_lines. invoice: the
+// invoice it credits (invoice_number or number, issue_date). The rest is the
+// same as buildInvoiceDoc, and fmt should format in the note's currency.
+export async function buildCreditNoteDoc({ note = {}, lines = [], invoice = {}, seller = {}, billTo = {}, fmt, taxLabel = 'Tax', dateLocale = 'en-US' } = {}) {
+  const money = moneyFn(fmt)
+  const ctx = startDoc(seller)
+  const { doc, M } = ctx
+  const label = creditNoteLabel(note.credit_number ?? note.number) || 'Credit note'
+  const invNumber = invoice?.invoice_number ?? invoice?.number ?? note.invoice_number
+  const invLabel = invNumber == null || invNumber === '' ? '' : `INV-${invNumber}`
+  const cancelled = note.status === 'cancelled'
+
+  const pill = cancelled ? { t: 'CANCELLED', bg: [254, 226, 226], fg: [153, 27, 27] }
+    : note.refund_status === 'owed' ? { t: 'REFUND OWED', bg: [254, 243, 199], fg: [146, 64, 14] }
+      : note.refund_status === 'refunded' ? { t: 'REFUNDED', bg: [209, 250, 229], fg: [6, 95, 70] }
+        : null
+  await drawHeader(ctx, {
+    seller, title: 'CREDIT NOTE', fallbackName: 'Credit note', pill,
+    meta: [
+      ['Credit note', label],
+      invLabel ? ['Invoice', invLabel] : null,
+      ['Issued', fmtDate(note.issue_date, dateLocale)],
+    ],
+  })
+  drawParties(ctx, { billTo, label: 'CUSTOMER' })
+
+  // Say up front which invoice this reduces and why, before any figures.
+  if (invLabel) {
+    const issued = invoice?.issue_date ? `, issued ${fmtDate(invoice.issue_date, dateLocale)}` : ''
+    doc.setFont('helvetica', 'bold').setFontSize(10).setTextColor(40, 40, 40)
+    doc.text(`Credit for invoice ${invLabel}${issued}`, M, ctx.y + 6)
+    ctx.y += 24
+  }
+  drawBlock(ctx, 'REASON', note.reason)
+  drawLines(ctx, { lines, taxLabel, money })
+
+  // The stored figures are the ones the database issued; the lines are only a
+  // fallback for a note passed in without them.
+  const sums = creditTotals(lines)
+  const [ar, ag, ab] = ctx.accent
+  const rows = [
+    ['Subtotal', note.subtotal ?? sums.subtotal],
+    [taxLabel, note.tax_amount ?? sums.tax_amount],
+    ['Total credited', note.total ?? sums.total, { bold: true, color: [ar, ag, ab], rule: true }],
+  ]
+  if (!cancelled && note.refund_status === 'owed') {
+    rows.push(['Refund owed', note.refund_due, { color: [146, 64, 14], note: 'Paid on the invoice, to be refunded' }])
+  } else if (!cancelled && note.refund_status === 'refunded') {
+    const how = [note.refund_method, fmtDate(note.refunded_at, dateLocale)].filter(Boolean).join(', ')
+    rows.push(['Refunded', note.refund_due, { color: [6, 120, 70], note: how || null }])
+  }
+  drawTotals(ctx, rows, money)
+
+  if (cancelled) {
+    const on = note.cancelled_at ? ` on ${fmtDate(note.cancelled_at, dateLocale)}` : ''
+    drawBlock(ctx, 'CANCELLED', `This credit note was cancelled${on}. It no longer reduces the invoice.`)
+  }
+  drawFooter(ctx, seller, label)
+  return doc
+}
+
+/**
+ * Builds the credit note PDF and saves it as CN-1001.pdf. Takes the same
+ * object as buildCreditNoteDoc and resolves to the jsPDF doc.
+ */
+export async function creditNotePdf(data) {
+  const doc = await buildCreditNoteDoc(data)
+  const label = creditNoteLabel(data?.note?.credit_number ?? data?.note?.number) || 'credit-note'
+  doc.save(`${label}.pdf`)
+  return doc
 }

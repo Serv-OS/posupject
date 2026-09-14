@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
-import { MobileTable, MobileDock, DockField, Mono } from './ui.jsx';
+import { MobileTable, MobileDock, DockField, Mono, Segmented } from './ui.jsx';
 import { supabase } from '../../lib/supabase';
-import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download } from 'lucide-react';
+import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download, FileMinus } from 'lucide-react';
 import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
 import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, currencyLocale, defaultTaxRateFor } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
+import { balanceDue, creditState, amountPaid, creditNoteLabel, creditNoteStatusLabel, overpaidNotOnCredit } from '../../lib/creditNotes';
 
 // Currency-aware and back-compatible: money(v) keeps meaning GBP for every
 // existing caller, money(v, inv.currency) renders the document's own currency.
@@ -16,17 +17,40 @@ export const curOf = (x) => x?.currency || 'GBP';
 // and a dollar price, and a document takes the one in its own currency.
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
 
-// Effective display status: sent/viewed past due = overdue
+// Effective display status: sent/viewed past due = overdue.
+// Credit notes never touch the status column; they change what is owed. So a
+// sent or viewed invoice that credit has brought down to nothing owed is not
+// overdue (and is never chased), and one credited in full with nothing paid
+// reads "credited". amount_credited is only there when the row was selected
+// with it, and without it nothing below changes.
 export const invStatus = (inv) => {
   if (['paid', 'void', 'draft'].includes(inv.status)) return inv.status;
+  if (Number(inv.amount_credited) > 0 && balanceDue(inv) === 0) {
+    return creditState(inv) === 'full' && amountPaid(inv) === 0 ? 'credited' : inv.status;
+  }
   if (inv.due_date && new Date(inv.due_date) < new Date(new Date().toDateString())) return 'overdue';
   return inv.status;
 };
 export const INV_BADGE = {
   draft: 'bg-slate-200 text-slate-600', sent: 'bg-blue-100 text-blue-700', viewed: 'bg-indigo-100 text-indigo-700',
   paid: 'bg-emerald-100 text-emerald-700', overdue: 'bg-red-100 text-red-700', void: 'bg-slate-100 text-slate-400',
+  credited: 'bg-violet-100 text-violet-700',
+};
+// The small note beside the status chip. Nothing when the chip already says
+// credited; "Credited" when a paid invoice was credited in full (so money is
+// owed back); "Part credited" for anything less than the whole invoice.
+export const creditMarker = (inv) => {
+  const state = creditState(inv);
+  if (state === 'none' || invStatus(inv) === 'credited') return null;
+  return state === 'full' ? 'Credited' : 'Part credited';
+};
+// Credit note chips, keyed by creditNoteStatusLabel.
+export const CN_BADGE = {
+  Issued: 'bg-violet-100 text-violet-700', 'Refund owed': 'bg-amber/15 text-amber-deep',
+  Refunded: 'bg-emerald-100 text-emerald-700', Cancelled: 'bg-slate-100 text-slate-400',
 };
 const FIELD_LABEL = { all: 'all fields', company: 'customer', location: 'location', number: 'invoice number', po: 'PO number' };
+const STATUS_WORDS = { sent: 'sent or viewed', credited: 'credited' };
 
 // A printed total obeys the same rule as the headline stats: £ and $ are never
 // added together. fmtByCurrency writes '£1,200.00 + $300.00', so a dual-region
@@ -40,13 +64,20 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const [locations, setLocations] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [products, setProducts] = useState([]);
+  // Credit notes for the Credit notes tab. creditsReady stays false when the
+  // table is not there yet (the migration not applied), so the tab hides
+  // rather than sitting there empty.
+  const [credits, setCredits] = useState([]);
+  const [creditsReady, setCreditsReady] = useState(false);
+  const [creditFilter, setCreditFilter] = useState('all');
   // Chasing payment means opening an invoice and coming back over and over, so
   // the tab, status filter and search you were working survive the round trip.
   const [filters, setFilters] = useStickyState('invoices', {
-    tab: 'invoices', statusFilter: 'all', search: '', searchField: 'all',
+    tab: 'invoices', statusFilter: 'all', search: '', searchField: 'all', creditSearch: '',
     cols: { num: '', company: '', location: '', dueFrom: '', dueTo: '', min: '', max: '' },
   });
   const { tab, statusFilter, search, searchField } = filters;
+  const creditSearch = filters.creditSearch || '';
   const cols = filters.cols || { num: '', company: '', location: '', dueFrom: '', dueTo: '', min: '', max: '' };
   const setFilter = (k, v) => setFilters(p => ({ ...p, [k]: v }));
   const [editSched, setEditSched] = useState(null);
@@ -56,7 +87,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [i, r, c, l, ct, pr] = await Promise.all([
+    const [i, r, c, l, ct, pr, cn] = await Promise.all([
       supabase.from('invoices').select('*, company:companies(name), location:locations(name)').order('created_at', { ascending: false }),
       supabase.from('recurring_invoices').select('*, company:companies(name), location:locations(name)').order('created_at', { ascending: false }),
       // country on both: a new recurring schedule picks its currency from the
@@ -65,9 +96,14 @@ export default function InvoicesPanel({ profile, onNavigate }) {
       supabase.from('locations').select('id, name, company_id, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
       supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd').eq('active', true).order('name'),
+      // Newest first. An error (the credit notes migration not applied yet)
+      // just leaves the tab empty rather than breaking the invoice list.
+      supabase.from('credit_notes').select('*, invoice:invoices(invoice_number), company:companies(name), location:locations(name)')
+        .order('created_at', { ascending: false }),
     ]);
     setInvoices(i.data || []); setSchedules(r.data || []); setCompanies(c.data || []);
     setLocations(l.data || []); setContacts(ct.data || []); setProducts(pr.data || []);
+    setCredits(cn.error ? [] : (cn.data || [])); setCreditsReady(!cn.error);
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -144,20 +180,33 @@ export default function InvoicesPanel({ profile, onNavigate }) {
 
 
   // Never sum £ and $ into one figure — each currency keeps its own total.
-  const open = invoices.filter(i => ['sent', 'viewed'].includes(i.status));
-  const outstanding = sumByCurrency(open, i => i.total);
+  // What is owed is the balance due: total less payments less credit notes,
+  // so an invoice credited down to nothing is no longer outstanding.
+  const open = invoices.filter(i => ['sent', 'viewed'].includes(i.status) && balanceDue(i) > 0);
+  const outstanding = sumByCurrency(open, balanceDue);
   const overdueList = invoices.filter(i => invStatus(i) === 'overdue');
-  const overdueSum = sumByCurrency(overdueList, i => i.total);
+  const overdueSum = sumByCurrency(overdueList, balanceDue);
   const mStart = new Date(); mStart.setDate(1);
-  const paidThisMonth = sumByCurrency(
-    invoices.filter(i => i.status === 'paid' && i.paid_at && new Date(i.paid_at) >= mStart),
-    i => i.amount_paid ?? i.total ?? 0);
+  // Money in this month, less refunds marked on credit notes this month: that
+  // money went back out, so counting only the payment overstates what came in.
+  const paidThisMonth = sumByCurrency([
+    ...invoices.filter(i => i.status === 'paid' && i.paid_at && new Date(i.paid_at) >= mStart)
+      .map(i => ({ currency: curOf(i), amount: Number(i.amount_paid ?? i.total ?? 0) })),
+    ...credits.filter(c => c.status === 'issued' && c.refund_status === 'refunded' && c.refunded_at && new Date(c.refunded_at) >= mStart)
+      .map(c => ({ currency: curOf(c), amount: -Number(c.refund_due || 0) })),
+  ], r => r.amount);
+  // Paid more than it asks for with no credit note owing it back (a card
+  // payment that landed after a credit, or paid twice): flagged on the row so
+  // it is refunded, not kept.
+  const notesByInvoice = new Map();
+  credits.forEach(c => notesByInvoice.set(c.invoice_id, [...(notesByInvoice.get(c.invoice_id) || []), c]));
+  const overpaidOf = (inv) => (creditsReady ? overpaidNotOnCredit(inv, notesByInvoice.get(inv.id) || []) : 0);
 
   const matchesTab = (inv) => {
     const st = invStatus(inv);
     if (statusFilter === 'all') return true;
     if (statusFilter === 'sent') return st === 'sent' || st === 'viewed';
-    return st === statusFilter; // draft, overdue, paid
+    return st === statusFilter; // draft, overdue, paid, credited
   };
   // Every column filters independently and they AND together — the old single
   // search box could only ever ask about one field at a time.
@@ -198,6 +247,27 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   };
   const filtered = invoices.filter(i => matchesTab(i) && matchesSearch(i) && colMatch(i));
 
+  // A remembered "credits" tab is only honoured once the credit notes table
+  // answers, so a database without it simply shows the invoices.
+  const view = tab === 'credits' && !creditsReady ? 'invoices' : tab;
+  // The credit notes tab: one search box over what each row shows. The phone
+  // list has the search only; the desk list adds the Refund owed and
+  // Cancelled filters.
+  const invLabel = (cn) => (cn.invoice?.invoice_number != null ? `INV-${cn.invoice.invoice_number}` : '');
+  const cq = creditSearch.trim().toLowerCase();
+  const searchedCredits = credits.filter(cn => {
+    if (!cq) return true;
+    const { company, site } = partiesOf(cn);
+    return [creditNoteLabel(cn), invLabel(cn), company, site, cn.reason]
+      .some(v => String(v || '').toLowerCase().includes(cq));
+  });
+  const isOwed = (cn) => cn.status === 'issued' && cn.refund_status === 'owed';
+  const refundsOwed = credits.filter(isOwed);
+  const shownCredits = creditFilter === 'owed' ? searchedCredits.filter(isOwed)
+    : creditFilter === 'cancelled' ? searchedCredits.filter(cn => cn.status === 'cancelled')
+    : searchedCredits;
+  const statusText = (inv) => [invStatus(inv), creditMarker(inv)?.toLowerCase(), overpaidOf(inv) > 0 ? 'overpaid' : null].filter(Boolean).join(', ');
+
   // What a schedule bills each run. Shared with the row below so the printed
   // list and the screen can never quietly disagree about the number.
   const schedAmount = (s) => (Array.isArray(s.lines) ? s.lines : [])
@@ -206,9 +276,9 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const exportPdf = async () => {
     setPdfBusy(true);
     try {
-      if (tab === 'invoices') {
+      if (view === 'invoices') {
         const active = [];
-        if (statusFilter !== 'all') active.push(`Status: ${statusFilter === 'sent' ? 'sent or viewed' : statusFilter}`);
+        if (statusFilter !== 'all') active.push(`Status: ${STATUS_WORDS[statusFilter] || statusFilter}`);
         if (q) active.push(`Search: "${search.trim()}" in ${FIELD_LABEL[searchField]}`);
         await downloadListPdf({
           title: 'Invoices',
@@ -218,10 +288,25 @@ export default function InvoicesPanel({ profile, onNavigate }) {
           rows: filtered.map(inv => [
             `INV-${inv.invoice_number}`, custName(inv), inv.po_number || '—',
             fmtD(inv.issue_date), fmtD(inv.due_date),
-            invStatus(inv), curOf(inv), money(inv.total, curOf(inv)),
+            statusText(inv), curOf(inv), money(inv.total, curOf(inv)),
           ]),
           filters: active,
           footNote: totalNote('Total', filtered, i => i.total),
+        });
+      } else if (view === 'credits') {
+        await downloadListPdf({
+          title: 'Credit notes',
+          columns: ['Credit note', 'Invoice', 'Customer', 'Date', 'Status', 'Currency', 'Total'],
+          rows: shownCredits.map(cn => [
+            creditNoteLabel(cn), invLabel(cn), custName(cn), fmtD(cn.issue_date),
+            creditNoteStatusLabel(cn), curOf(cn), money(cn.total, curOf(cn)),
+          ]),
+          filters: [
+            creditFilter === 'owed' ? 'Refund owed' : creditFilter === 'cancelled' ? 'Cancelled' : null,
+            cq ? `Search: "${creditSearch.trim()}"` : null,
+          ].filter(Boolean),
+          // Cancelled notes are listed but count for nothing.
+          footNote: totalNote('Issued', shownCredits.filter(cn => cn.status === 'issued'), cn => cn.total),
         });
       } else {
         await downloadListPdf({
@@ -241,6 +326,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
   // One definition for header, filters and rows so the columns cannot drift.
   const GRID = 'grid items-center gap-3 px-5 grid-cols-[96px_minmax(0,1.4fr)_minmax(0,1.4fr)_178px_108px_84px_34px]';
+  const CN_GRID = 'grid items-center gap-3 px-5 grid-cols-[88px_88px_minmax(0,1.6fr)_96px_108px_104px]';
   const colInput = 'w-full px-2 py-1 bg-card border border-bdr rounded-lg text-[11px] text-paper placeholder-dim focus:outline-none focus:border-ember';
   // Safari draws an EMPTY date box with today's date greyed in, so an untouched
   // filter looks like it is already narrowing the list. Never let the browser's
@@ -253,10 +339,43 @@ export default function InvoicesPanel({ profile, onNavigate }) {
     <div className="h-full flex flex-col">
       <div className="lg:hidden flex-1 min-h-0 flex flex-col">
         <div className="px-[18px] pt-3 pb-2.5">
-          <div className="font-display text-[23px] font-extrabold text-paper">Invoices</div>
-          <Mono className="!tracking-[.18em] uppercase">{filtered.length} shown · {invoices.filter(i => invStatus(i) === 'overdue').length} overdue</Mono>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="font-display text-[23px] font-extrabold text-paper">Invoices</div>
+            {creditsReady && (
+              <div className="ml-auto">
+                <Segmented value={view === 'credits' ? 'credits' : 'invoices'} options={[['invoices', 'Invoices'], ['credits', 'Credit notes']]}
+                  onChange={(k) => setFilter('tab', k)} />
+              </div>
+            )}
+          </div>
+          {view === 'credits'
+            ? <Mono className="!tracking-[.18em] uppercase">{searchedCredits.length} credit note{searchedCredits.length === 1 ? '' : 's'} · {refundsOwed.length} refund{refundsOwed.length === 1 ? '' : 's'} owed</Mono>
+            : <Mono className="!tracking-[.18em] uppercase">{filtered.length} shown · {invoices.filter(i => invStatus(i) === 'overdue').length} overdue</Mono>}
         </div>
         <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
+          {view === 'credits' ? (
+            <div className="flex flex-col gap-2.5">
+              <input className={input + ' w-full !text-[16px]'} value={creditSearch} onChange={e => setFilter('creditSearch', e.target.value)}
+                placeholder="Search credit notes" />
+              <MobileTable storageKey="creditnotes.mobile" rows={searchedCredits} onRow={(cn) => onNavigate?.('invoice', cn.invoice_id)}
+                empty={cq ? 'Nothing matches that search.' : 'No credit notes yet. Raise one from a sent, viewed or paid invoice.'}
+                columns={[
+                  { key: 'customer', label: 'Customer', pinned: true, render: (cn) => partiesOf(cn).company || partiesOf(cn).site || '' },
+                  { key: 'number', label: 'Number', mono: true, render: (cn) => creditNoteLabel(cn) },
+                  { key: 'invoice', label: 'Invoice', mono: true, render: (cn) => invLabel(cn) || null },
+                  { key: 'date', label: 'Date', render: (cn) => fmtD(cn.issue_date) },
+                  { key: 'total', label: 'Total', align: 'right', mono: true, render: (cn) => money(cn.total, curOf(cn)) },
+                  { key: 'status', label: 'Status', render: (cn) => creditNoteStatusLabel(cn) },
+                  { key: 'site', label: 'Site', render: (cn) => partiesOf(cn).site || null },
+                ]}
+                card={(cn) => {
+                  const lbl = creditNoteStatusLabel(cn);
+                  const tone = lbl === 'Refund owed' ? 'amber' : lbl === 'Refunded' ? 'primary' : lbl === 'Cancelled' ? 'ink' : 'uv';
+                  return { title: partiesOf(cn).company || partiesOf(cn).site || creditNoteLabel(cn), amount: money(cn.total, curOf(cn)), chip: { text: lbl, tone },
+                    meta: [creditNoteLabel(cn), invLabel(cn), fmtD(cn.issue_date)].filter(Boolean).join(' · ') };
+                }} />
+            </div>
+          ) : (
           <MobileTable storageKey="invoices.mobile" rows={filtered} onRow={(inv) => onNavigate?.('invoice', inv.id)} empty="No invoices yet — raise your first one."
             columns={[
               { key: 'customer', label: 'Customer', pinned: true, render: (inv) => partiesOf(inv).company || inv.label || '—' },
@@ -264,20 +383,27 @@ export default function InvoicesPanel({ profile, onNavigate }) {
               { key: 'site', label: 'Site', render: (inv) => partiesOf(inv).site || '—' },
               { key: 'due', label: 'Due', render: (inv) => fmtD(inv.due_date) },
               { key: 'total', label: 'Total', align: 'right', mono: true, render: (inv) => money(inv.total, inv.currency) },
-              { key: 'status', label: 'Status', render: (inv) => invStatus(inv) },
+              { key: 'status', label: 'Status', render: (inv) => statusText(inv) },
               { key: 'issued', label: 'Issued', render: (inv) => fmtD(inv.issue_date) },
               { key: 'currency', label: 'Currency', render: (inv) => curOf(inv) },
               { key: 'po', label: 'PO', render: (inv) => inv.po_number || '—' },
               { key: 'recurring', label: 'Recurring', render: (inv) => (inv.recurring_id ? 'yes' : '—') },
               { key: 'viewed', label: 'Viewed', render: (inv) => (inv.viewed_at ? fmtD(inv.viewed_at) : '—') },
+              { key: 'balance', label: 'Balance due', align: 'right', mono: true, render: (inv) => (['draft', 'void'].includes(inv.status) ? null : money(balanceDue(inv), inv.currency)) },
             ]}
             card={(inv) => {
               const st = invStatus(inv); const { company, site } = partiesOf(inv);
-              const chip = st === 'overdue' ? { text: 'Overdue', tone: 'coral' } : st === 'paid' ? { text: 'Paid', tone: 'primary' } : st === 'draft' ? { text: 'Draft', tone: 'muted' } : { text: `Due ${fmtD(inv.due_date)}`, tone: 'amber' };
+              const chip = st === 'overdue' ? { text: 'Overdue', tone: 'coral' } : st === 'paid' ? { text: 'Paid', tone: 'primary' } : st === 'draft' ? { text: 'Draft', tone: 'muted' } : st === 'credited' ? { text: 'Credited', tone: 'uv' } : { text: `Due ${fmtD(inv.due_date)}`, tone: 'amber' };
+              // In the chip, not meta: once columns are chosen a card shows
+              // those instead of meta, so a marker there never shows.
+              const mark = creditMarker(inv);
+              if (mark) chip.text = `${chip.text} · ${mark}`;
+              if (overpaidOf(inv) > 0) chip.text = `${chip.text} · Overpaid`;
               return { title: company || inv.label || '—', amount: money(inv.total, inv.currency), chip, tone: st === 'overdue' ? 'coral' : undefined, meta: [`INV-${inv.invoice_number}`, site, inv.recurring_id ? 'recurring' : null].filter(Boolean).join(' · ') };
             }} />
+          )}
         </div>
-        {canWrite && <MobileDock><DockField onClick={() => (typeof newInvoice === 'function' ? newInvoice() : null)}>New invoice</DockField></MobileDock>}
+        {canWrite && view !== 'credits' && <MobileDock><DockField onClick={() => (typeof newInvoice === 'function' ? newInvoice() : null)}>New invoice</DockField></MobileDock>}
       </div>
       <div className="hidden lg:flex px-6 py-5 border-b border-bdr items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2.5">
@@ -289,15 +415,17 @@ export default function InvoicesPanel({ profile, onNavigate }) {
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-0.5 bg-card rounded-xl p-0.5">
-            <button onClick={() => setFilter('tab', 'invoices')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab === 'invoices' ? 'bg-ember text-white' : 'text-muted'}`}>Invoices</button>
-            <button onClick={() => setFilter('tab', 'recurring')} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold ${tab === 'recurring' ? 'bg-ember text-white' : 'text-muted'}`}><Repeat size={12} /> Recurring</button>
+            <button onClick={() => setFilter('tab', 'invoices')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${view === 'invoices' ? 'bg-ember text-white' : 'text-muted'}`}>Invoices</button>
+            <button onClick={() => setFilter('tab', 'recurring')} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold ${view === 'recurring' ? 'bg-ember text-white' : 'text-muted'}`}><Repeat size={12} /> Recurring</button>
+            {creditsReady && <button onClick={() => setFilter('tab', 'credits')} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold ${view === 'credits' ? 'bg-ember text-white' : 'text-muted'}`}><FileMinus size={12} /> Credit notes</button>}
           </div>
-          <button onClick={exportPdf} disabled={pdfBusy || !(tab === 'invoices' ? filtered.length : schedules.length)}
+          <button onClick={exportPdf} disabled={pdfBusy || !(view === 'invoices' ? filtered.length : view === 'credits' ? shownCredits.length : schedules.length)}
             title="Download the list you are looking at as a PDF"
             className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 disabled:opacity-50">
             <FileDown size={14} /> {pdfBusy ? 'Preparing…' : 'PDF'}
           </button>
-          {canWrite && (tab === 'invoices'
+          {/* A credit note is always raised from its invoice, so that tab has no New button. */}
+          {canWrite && view !== 'credits' && (view === 'invoices'
             ? <button onClick={newInvoice} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5"><Plus size={15} /> New invoice</button>
             : <button onClick={() => setEditSched({})} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5"><Plus size={15} /> New schedule</button>)}
         </div>
@@ -313,14 +441,14 @@ export default function InvoicesPanel({ profile, onNavigate }) {
             <Stat label="Paid this month" value={fmtByCurrency(paidThisMonth)} tone="emerald" />
           </div>
 
-          {tab === 'invoices' ? (
+          {view === 'invoices' ? (
             <div className="glass-card rounded-2xl overflow-hidden">
               <div className="px-5 py-3.5 border-b border-bdr space-y-3">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-[13px] font-bold text-paper">Invoices</h3>
                   <span className="text-xs text-dim font-mono">({filtered.length})</span>
                   <div className="ml-auto flex items-center gap-1 flex-wrap">
-                    {[['all', 'All'], ['draft', 'Draft'], ['sent', 'Sent'], ['overdue', 'Overdue'], ['paid', 'Paid']].map(([k, lbl]) => (
+                    {[['all', 'All'], ['draft', 'Draft'], ['sent', 'Sent'], ['overdue', 'Overdue'], ['paid', 'Paid'], ...(creditsReady ? [['credited', 'Credited']] : [])].map(([k, lbl]) => (
                       <button key={k} onClick={() => setFilter('statusFilter', k)}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${statusFilter === k ? 'bg-ember text-white' : 'text-muted hover:text-paper'}`}>{lbl}</button>
                     ))}
@@ -375,6 +503,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                 <select className={colCls(statusFilter !== 'all')} value={statusFilter} onChange={e => setFilter('statusFilter', e.target.value)}>
                   <option value="all">All</option><option value="draft">Draft</option>
                   <option value="sent">Sent</option><option value="overdue">Overdue</option><option value="paid">Paid</option>
+                  {creditsReady && <option value="credited">Credited</option>}
                 </select>
                 <div className="flex justify-center">
                   {colsActive && (
@@ -390,6 +519,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                     </div>
                   : filtered.map(inv => {
                     const st = invStatus(inv);
+                    const mark = creditMarker(inv);
                     const { company, site } = partiesOf(inv);
                     return (
                       <div key={inv.id} onClick={() => onNavigate?.('invoice', inv.id)}
@@ -406,12 +536,68 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                         </div>
                         <div className="text-xs text-muted text-right">Due {fmtD(inv.due_date)}</div>
                         <div className="text-sm font-semibold text-paper tabular-nums text-right">{money(inv.total, inv.currency)}</div>
-                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg text-center ${INV_BADGE[st]}`}>{st}</span>
+                        <div className="flex flex-col items-center gap-0.5 min-w-0">
+                          <span className={`w-full text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg text-center ${INV_BADGE[st]}`}>{st}</span>
+                          {mark && <span className="text-[9px] font-semibold text-violet-700 whitespace-nowrap">{mark}</span>}
+                          {overpaidOf(inv) > 0 && <span className="text-[9px] font-semibold text-amber-deep whitespace-nowrap" title={`${money(overpaidOf(inv), inv.currency)} more was paid than this invoice asks for`}>Overpaid</span>}
+                        </div>
                         <button onClick={(e) => downloadOne(inv, e)} disabled={pdfFor === inv.id}
                           title={`Download INV-${inv.invoice_number} as a PDF`}
                           className="p-1.5 rounded-lg text-dim hover:text-ember hover:bg-ember/10 transition disabled:opacity-40">
                           <Download size={15} />
                         </button>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          ) : view === 'credits' ? (
+            <div className="glass-card rounded-2xl overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-bdr space-y-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-[13px] font-bold text-paper">Credit notes</h3>
+                  <span className="text-xs text-dim font-mono">({shownCredits.length})</span>
+                  <span className="text-[11px] text-dim ml-2">Raised from an invoice. Open one to see or change its credit notes.</span>
+                  <div className="ml-auto flex items-center gap-1">
+                    {[['all', 'All'], ['owed', `Refund owed${refundsOwed.length ? ` (${refundsOwed.length})` : ''}`], ['cancelled', 'Cancelled']].map(([k, lbl]) => (
+                      <button key={k} onClick={() => setCreditFilter(k)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${creditFilter === k ? 'bg-ember text-white' : 'text-muted hover:text-paper'}`}>{lbl}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input className={input + ' !py-1.5 text-xs flex-1'} value={creditSearch} onChange={e => setFilter('creditSearch', e.target.value)}
+                    placeholder="Search by credit note, invoice, customer or reason" />
+                  {creditSearch && <button onClick={() => setFilter('creditSearch', '')} className="text-xs text-dim hover:text-paper px-2 shrink-0">Clear</button>}
+                </div>
+              </div>
+              <div className={`${CN_GRID} py-2 border-b border-bdr`}>
+                {['Credit #', 'Invoice', 'Customer', 'Date', 'Total', 'Status'].map((h, i) => (
+                  <div key={h} className={`text-[10px] font-mono font-bold uppercase tracking-wider text-ember ${i === 3 || i === 4 ? 'text-right' : i === 5 ? 'text-center' : ''}`}>{h}</div>
+                ))}
+              </div>
+              <div className="divide-y divide-bdr">
+                {loading ? <div className="p-6 text-center text-dim text-sm">Loading…</div>
+                  : shownCredits.length === 0 ? <div className="p-8 text-center text-dim text-sm italic">
+                      {cq ? 'Nothing matches that search.' : creditFilter !== 'all' ? 'Nothing matches that filter.' : 'No credit notes yet. Raise one from a sent, viewed or paid invoice.'}
+                    </div>
+                  : shownCredits.map(cn => {
+                    const { company, site } = partiesOf(cn);
+                    const lbl = creditNoteStatusLabel(cn);
+                    const gone = cn.status === 'cancelled';
+                    return (
+                      <div key={cn.id} onClick={() => onNavigate?.('invoice', cn.invoice_id)}
+                        title={`Open ${invLabel(cn) || 'the invoice'}`}
+                        className={`${CN_GRID} py-3 hover:bg-card/50 cursor-pointer`}>
+                        <div className={`font-mono text-xs ${gone ? 'line-through text-dim' : 'text-paper'}`}>{creditNoteLabel(cn)}</div>
+                        <div className="font-mono text-xs text-dim">{invLabel(cn)}</div>
+                        <div className="min-w-0">
+                          <div className="text-sm text-paper font-medium truncate">{company || site || ''}</div>
+                          <div className="text-[10px] text-muted truncate">{[company && site, cn.reason].filter(Boolean).join(' · ')}</div>
+                        </div>
+                        <div className="text-xs text-muted text-right">{fmtD(cn.issue_date)}</div>
+                        <div className={`text-sm font-semibold tabular-nums text-right ${gone ? 'line-through text-dim' : 'text-paper'}`}>{money(cn.total, curOf(cn))}</div>
+                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg text-center whitespace-nowrap ${CN_BADGE[lbl]}`}>{lbl}</span>
                       </div>
                     );
                   })}

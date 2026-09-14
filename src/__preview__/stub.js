@@ -1,4 +1,5 @@
 // In-memory Supabase for the design harness. Any query chain works; rows come from TABLES.
+import { cancelCreditEffect, creditTotals, issuedTotal, refundFor, validateCredit, REFUND_METHODS } from '../lib/creditNotes.js';
 const d = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
 const ts = (n, h = 0) => { const x = new Date(); x.setDate(x.getDate() + n); x.setHours(x.getHours() - h); return x.toISOString(); };
 const ME = 'u-peter';
@@ -194,6 +195,46 @@ PACK_SECURE.push({
   updated_at: ts(-1), purged_at: null, purged_by: null,
 });
 
+// Harness only (#creditnote, #invoice-credits, #invoice-paid): credit notes.
+// INV-1045 is a sent invoice with three lines at mixed tax (20%, 5% and 0%),
+// its totals stored unrounded the way InvoiceBuilder saves them, one issued
+// credit note (CN-1001) and one cancelled (CN-1002). INV-1046 is paid in full
+// with no credit yet, so a credit raised on it owes a refund and Mark refunded
+// can be tried. The joined names (company, location, invoice) are on the rows
+// because this stub ignores joins in select().
+const INV_PARTIES = { company_id: 'c2', location_id: 'l1', contact_id: 'ct1', company: { name: COMPANIES.find((c) => c.id === 'c2').name }, location: { name: LOCATIONS.find((l) => l.id === 'l1').name } };
+const INVOICES = [
+  { id: 'inv1045', invoice_number: 1045, status: 'sent', ...INV_PARTIES, currency: 'GBP', tax_rate: 20,
+    issue_date: d(-20), due_date: d(-6), email_to: 'dan@verde.example', po_number: 'PO-7731', public_token: 'harness-inv-1045',
+    subtotal: 991.5, tax_amount: 159.125, total: 1150.625, amount_paid: null, amount_credited: 468,
+    terms: 'Payment within 14 days.', notes: null, sent_at: ts(-20), viewed_at: ts(-19), paid_at: null, created_by: ME, created_at: ts(-20), updated_at: ts(-3) },
+  { id: 'inv1046', invoice_number: 1046, status: 'paid', ...INV_PARTIES, currency: 'GBP', tax_rate: 20,
+    issue_date: d(-12), due_date: d(2), email_to: 'dan@verde.example', po_number: null, public_token: 'harness-inv-1046',
+    subtotal: 298, tax_amount: 59.6, total: 357.6, amount_paid: 357.6, amount_credited: 0,
+    terms: null, notes: null, sent_at: ts(-12), viewed_at: ts(-11), paid_at: ts(-10), created_by: ME, created_at: ts(-12), updated_at: ts(-10) },
+];
+const INVOICE_LINES = [
+  { id: 'il1', invoice_id: 'inv1045', name: 'Lightspeed terminal', description: 'Countertop, with stand', qty: 2, unit_price: 390, tax_rate: 20, sort: 0 },
+  { id: 'il2', invoice_id: 'inv1045', name: 'Printed table menus', description: null, qty: 50, unit_price: 1.25, tax_rate: 5, sort: 1 },
+  { id: 'il3', invoice_id: 'inv1045', name: 'Card processing set up', description: 'Zero rated', qty: 1, unit_price: 149, tax_rate: 0, sort: 2 },
+  { id: 'il4', invoice_id: 'inv1046', name: 'Card reader', description: null, qty: 2, unit_price: 149, tax_rate: 20, sort: 0 },
+];
+const CN_COMMON = { refunded_at: null, refund_method: null, refund_note: null, sent_at: null, cancelled_at: null, cancelled_by: null, cancel_reason: null, created_by: ME };
+const CREDIT_NOTES = [
+  { id: 'cn1001', credit_number: 1001, invoice_id: 'inv1045', ...INV_PARTIES, invoice: { invoice_number: 1045 }, status: 'issued', issue_date: d(-3),
+    reason: 'One terminal came back unused.', subtotal: 390, tax_amount: 78, total: 468, currency: 'GBP', refund_status: 'none', refund_due: 0,
+    public_token: 'harness-cn-1001', ...CN_COMMON, email_to: 'dan@verde.example', sent_at: ts(-3), created_at: ts(-3), updated_at: ts(-3) },
+  { id: 'cn1002', credit_number: 1002, invoice_id: 'inv1045', ...INV_PARTIES, invoice: { invoice_number: 1045 }, status: 'cancelled', issue_date: d(-2),
+    reason: 'Goodwill for the late install.', subtotal: 50, tax_amount: 10, total: 60, currency: 'GBP', refund_status: 'none', refund_due: 0,
+    public_token: 'harness-cn-1002', ...CN_COMMON, email_to: null, created_at: ts(-2), updated_at: ts(-1),
+    cancelled_at: ts(-1), cancelled_by: ME, cancel_reason: 'Raised against the wrong invoice.' },
+];
+const CREDIT_NOTE_LINES = [
+  { id: 'cnl1', credit_note_id: 'cn1001', invoice_line_id: 'il1', name: 'Lightspeed terminal', description: 'Countertop, with stand', qty: 1, unit_price: 390, tax_rate: 20, sort: 0 },
+  { id: 'cnl2', credit_note_id: 'cn1002', invoice_line_id: null, name: 'Goodwill credit', description: null, qty: 1, unit_price: 50, tax_rate: 20, sort: 0 },
+];
+const SUPPORT_SETTINGS = [{ id: 1, business_name: 'ServOS', business_address: '1 Harness Street, Manchester M1 1AA', business_email: 'accounts@serv-os.app', business_phone: '0161 000 0000', logo_url: null, quote_accent: '#15C26A', invoice_terms: 'Payment within 14 days of the invoice date.' }];
+
 export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' }], user_integrations: [{ profile_id: ME, provider: 'google', email: 'peter@posup.co.uk' }], ticket_email_threads: [], processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
   // Dollar rows, so the Volume tab has to show pounds and dollars side by side.
   { deal_id: 'd7', name: 'Mozz Pizza — Orem (won)', stage: 'closed_won', owner_id: ME, company_id: 'c3', currency: 'USD', closed_at: ts(-1), site_count: 1, est_monthly_revenue: 98000, est_avg_transaction: 41, est_monthly_transactions: 2400, actual_monthly_revenue: 0, probability: 1, weighted_monthly_revenue: 98000, is_won: true, is_closed: true },
@@ -205,15 +246,26 @@ export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' 
     { id: 'ex1', expense_date: d(-2), description: 'Provo site visit, taxis', merchant: 'Uber', amount: 84.2, net: 84.2, vat_amount: 0, total: 84.2, currency: 'USD', status: 'submitted', company_id: 'c3', location_id: 'l2', created_by: ME, created_at: ts(-2) },
     { id: 'ex2', expense_date: d(-5), description: 'Train to Macclesfield', merchant: 'Northern', amount: 32.5, net: 32.5, vat_amount: 0, total: 32.5, currency: 'GBP', status: 'submitted', company_id: 'c2', location_id: 'l1', created_by: ME, created_at: ts(-5) },
   ], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY,
-  onboarding_form_requests: PACK_REQUESTS, onboarding_form_secure: PACK_SECURE };
+  onboarding_form_requests: PACK_REQUESTS, onboarding_form_secure: PACK_SECURE,
+  invoices: INVOICES, invoice_line_items: INVOICE_LINES, credit_notes: CREDIT_NOTES, credit_note_lines: CREDIT_NOTE_LINES, support_settings: SUPPORT_SETTINGS };
 export const MEMBERS_LIST = MEMBERS;
 
+// Harness only: delete() really removes rows from these tables, so saving an
+// invoice (which deletes and re-inserts its lines) does not leave the old lines
+// behind. Every other table keeps delete() as a no-op, as it always was.
+const DELETES = new Set(['invoices', 'invoice_line_items', 'credit_notes', 'credit_note_lines']);
+
 function makeQuery(table) {
-  let rows = (TABLES[table] || []).slice(); let head = false; let single = false; let patch = null; let inserted = null;
+  let rows = (TABLES[table] || []).slice(); let head = false; let single = false; let patch = null; let inserted = null; let removing = false;
   // Harness only: an update changes the rows the filters matched and an insert
   // adds rows, the way the database would, so note edits and new notes show up.
   const res = () => {
     if (inserted) { (TABLES[table] = TABLES[table] || []).push(...inserted); rows = inserted; inserted = null; }
+    if (removing) {
+      const all = TABLES[table] || [];
+      for (const r of rows) { const i = all.indexOf(r); if (i >= 0) all.splice(i, 1); }
+      removing = false;
+    }
     if (patch) {
       rows.forEach((r) => { const textChanged = table === 'crm_activities' && 'body' in patch && patch.body !== r.body; Object.assign(r, patch); if (textChanged) r.edited_at = new Date().toISOString(); });
       patch = null;
@@ -228,7 +280,7 @@ function makeQuery(table) {
     order: () => proxy, limit: (n) => { rows = rows.slice(0, n); return proxy; }, range: () => proxy,
     single: () => { single = true; return proxy; }, maybeSingle: () => { single = true; return proxy; },
     insert: (v) => { const now = new Date().toISOString(); inserted = (Array.isArray(v) ? v : [v]).map((r) => ({ id: `stub-${Math.random().toString(36).slice(2, 9)}`, created_at: now, occurred_at: now, ...r })); return proxy; },
-    update: (v) => { patch = v; return proxy; }, upsert: () => proxy, delete: () => proxy,
+    update: (v) => { patch = v; return proxy; }, upsert: () => proxy, delete: () => { removing = DELETES.has(table); return proxy; },
     then: (r, j) => Promise.resolve(res()).then(r, j), catch: (j) => Promise.resolve(res()).catch(j), finally: (f) => Promise.resolve(res()).finally(f),
   };
   const proxy = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => proxy) });
@@ -272,10 +324,82 @@ const bucketApi = (bucket) => {
   };
 };
 
+// Harness only: the three credit note database functions, in memory. They run
+// the rules from src/lib/creditNotes.js, which carries the SQL's sums and its
+// messages word for word, so the raise screen, Mark refunded and Cancel behave
+// as they will live. Every other rpc answers as it always did.
+const creditFail = (message) => ({ data: null, error: { message } });
+const syncCredited = (invoiceId) => {
+  const inv = TABLES.invoices.find((i) => i.id === invoiceId);
+  if (!inv) return;
+  inv.amount_credited = issuedTotal(TABLES.credit_notes.filter((c) => c.invoice_id === invoiceId));
+  inv.updated_at = new Date().toISOString();
+};
+function creditRpc(name, args = {}) {
+  const now = new Date().toISOString();
+  if (name === 'issue_credit_note') {
+    const inv = TABLES.invoices.find((i) => i.id === args.p_invoice_id);
+    if (!inv) return creditFail('Invoice not found.');
+    const invoiceLines = TABLES.invoice_line_items.filter((l) => l.invoice_id === inv.id);
+    const issuedIds = TABLES.credit_notes.filter((c) => c.invoice_id === inv.id && c.status === 'issued').map((c) => c.id);
+    const creditedLines = TABLES.credit_note_lines.filter((l) => issuedIds.includes(l.credit_note_id));
+    const lines = Array.isArray(args.p_lines) ? args.p_lines : [];
+    // today is the database's own date, UTC.
+    const problems = validateCredit({ invoice: inv, lines, reason: args.p_reason, invoiceLines, creditedLines, issueDate: args.p_issue_date, today: now.slice(0, 10) });
+    if (problems.length) return creditFail(problems[0]);
+    const totals = creditTotals(lines);
+    const number = Math.max(1000, ...TABLES.credit_notes.map((c) => c.credit_number)) + 1;
+    const note = {
+      id: `cn${number}`, credit_number: number, invoice_id: inv.id,
+      company_id: inv.company_id, location_id: inv.location_id, contact_id: inv.contact_id,
+      company: inv.company, location: inv.location, invoice: { invoice_number: inv.invoice_number },
+      status: 'issued', issue_date: args.p_issue_date || now.slice(0, 10), reason: String(args.p_reason).trim(),
+      ...totals, currency: inv.currency || 'GBP', ...refundFor({ invoice: inv, creditTotal: totals.total }),
+      public_token: `harness-cn-${number}`, ...CN_COMMON, email_to: inv.email_to, created_at: now, updated_at: now,
+    };
+    TABLES.credit_notes.push(note);
+    lines.forEach((l, i) => TABLES.credit_note_lines.push({
+      id: `cnl${number}-${i}`, credit_note_id: note.id, invoice_line_id: l.invoice_line_id || null,
+      name: String(l.name).trim(), description: String(l.description || '').trim() || null,
+      qty: Number(l.qty), unit_price: Number(l.unit_price), tax_rate: Number(l.tax_rate) || 0, sort: i,
+    }));
+    syncCredited(inv.id);
+    return { data: { ...note }, error: null };
+  }
+  const note = TABLES.credit_notes.find((c) => c.id === args.p_id);
+  if (name === 'cancel_credit_note') {
+    if (!note) return creditFail('Credit note not found.');
+    // The same refusals, refund changes and reopening as the database.
+    const inv = TABLES.invoices.find((i) => i.id === note.invoice_id);
+    const notes = TABLES.credit_notes.filter((c) => c.invoice_id === note.invoice_id);
+    const effect = cancelCreditEffect({ invoice: inv, notes, noteId: note.id, reason: args.p_reason ?? '' });
+    if (effect.problem) return creditFail(effect.problem);
+    const why = String(args.p_reason || '').trim();
+    Object.assign(note, { status: 'cancelled', cancelled_at: now, cancelled_by: ME, cancel_reason: why, refund_status: 'none', refund_due: 0, updated_at: now });
+    effect.refunds.forEach((r) => Object.assign(notes.find((c) => c.id === r.id), { refund_status: r.refund_status, refund_due: r.refund_due, updated_at: now }));
+    syncCredited(note.invoice_id);
+    if (inv && effect.reopen) inv.status = 'sent';
+    return { data: { ...note }, error: null };
+  }
+  if (name === 'mark_credit_note_refunded') {
+    if (!note) return creditFail('Credit note not found.');
+    if (note.status !== 'issued') return creditFail('This credit note is cancelled.');
+    if (note.refund_status === 'refunded') return creditFail('This refund is already marked as refunded.');
+    if (note.refund_status !== 'owed') return creditFail('There is no refund owed on this credit note.');
+    if (!REFUND_METHODS.includes(args.p_method)) return creditFail('Choose how it was refunded: Bank transfer, Card refund or Other.');
+    const text = String(args.p_note || '').trim();
+    if ([...text].length > 500) return creditFail('Keep the refund note to 500 characters or fewer.');
+    // Noon UTC on the chosen day, as the database stores it.
+    Object.assign(note, { refund_status: 'refunded', refunded_at: `${args.p_refunded_on || now.slice(0, 10)}T12:00:00.000Z`, refund_method: args.p_method, refund_note: text || null, updated_at: now });
+    return { data: { ...note }, error: null };
+  }
+  return { data: null, error: null };
+}
+
 const chan = { on() { return chan; }, subscribe() { return chan; }, unsubscribe() {} };
 export const supabase = {
   from: makeQuery,
-  rpc: () => Promise.resolve({ data: null, error: null }),
+  rpc: (name, args) => Promise.resolve(creditRpc(name, args)),
   channel: () => chan, removeChannel: () => {}, removeAllChannels: () => {},
   auth: { getSession: () => Promise.resolve({ data: { session: { user: { id: ME } } } }), getUser: () => Promise.resolve({ data: { user: { id: ME } } }), onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }) },
   storage: { from: bucketApi },

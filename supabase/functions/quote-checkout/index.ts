@@ -6,6 +6,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=deno";
+import { balanceDue } from "../_shared/invoiceEmail.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -37,6 +38,18 @@ serve(async (req) => {
       label += ` — ${quote.deposit_percent}% deposit`;
     }
     if (amount <= 0) return json({ error: "Nothing to charge on this quote." }, 400);
+
+    // A signed quote already has its invoice, and a credit note or a payment
+    // on that invoice lowers what is left to pay. Never charge more than the
+    // invoice's balance: the webhook records this payment against it, and the
+    // rest would be money taken that is not owed.
+    const { data: invs } = await supabase.from("invoices").select("*").eq("quote_id", quote.id).neq("status", "void").limit(1);
+    const inv = invs?.[0];
+    if (inv) {
+      const due = balanceDue(inv);
+      if (due <= 0) return json({ error: "Nothing left to pay on this quote." }, 400);
+      amount = Math.min(amount, due);
+    }
 
     const base = origin || new URL(req.url).origin;
     const session = await stripe.checkout.sessions.create({

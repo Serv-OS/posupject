@@ -8,26 +8,35 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=deno";
 import { invoiceEmailHtml, sendInvoiceEmail, moneyFor } from "../_shared/invoiceEmail.ts";
 import { ensureInvoiceForQuote, quoteContactEmail } from "../_shared/quoteInvoice.ts";
+import { recordInvoicePayment, logPayment } from "../_shared/invoicePayment.ts";
 
 // Quote paid -> find the invoice raised at signing (or create it now) and mark
 // it paid in full, or record a deposit against it. Then email the receipt.
-async function createPaidInvoiceForQuote(supabase: any, quoteId: string, paidAmount: number) {
+async function createPaidInvoiceForQuote(supabase: any, quoteId: string, paidAmount: number, sessionId: string, sessionCurrency: string) {
   const { data: q } = await supabase.from("quotes").select("*").eq("id", quoteId).maybeSingle();
   if (!q) return;
 
   let inv = await ensureInvoiceForQuote(supabase, q);
   const now = new Date().toISOString();
-  const fullPayment = paidAmount >= Number(q.one_off_total || 0) - 0.01;
 
   if (inv) {
-    const alreadyPaid = Number(inv.amount_paid || 0);
-    const patch = fullPayment || alreadyPaid + paidAmount >= Number(inv.total || 0) - 0.01
-      ? { status: "paid", paid_at: now, amount_paid: alreadyPaid + paidAmount }
-      : { amount_paid: alreadyPaid + paidAmount,
-          // The note lives on the invoice row, so it carries the invoice's currency
-          notes: `${inv.notes ? inv.notes + "\n" : ""}Deposit of ${moneyFor(inv.currency || q.currency)(paidAmount)} received ${now.slice(0, 10)}. Balance to follow.` };
-    await supabase.from("invoices").update(patch).eq("id", inv.id);
-    inv = { ...inv, ...patch };
+    // Recorded exactly as a payment on the invoice's own pay link: added to
+    // what was paid, once per Stripe session, paid once nothing is left, and
+    // anything beyond the balance (credit notes issued on the invoice since
+    // the quote pay page opened) owed back on its credit notes. Recording the
+    // quote total as paid hid that refund.
+    const r = await recordInvoicePayment(supabase, inv.id, paidAmount, sessionId);
+    logPayment(r, sessionId, paidAmount, sessionCurrency);
+    // A repeat delivery was receipted the first time.
+    if (!r.recorded) return;
+    if (r.status !== "paid") {
+      // The note lives on the invoice row, so it carries the invoice's currency
+      await supabase.from("invoices").update({
+        notes: `${inv.notes ? inv.notes + "\n" : ""}Deposit of ${moneyFor(inv.currency || q.currency)(paidAmount)} received ${now.slice(0, 10)}. Balance to follow.`,
+      }).eq("id", inv.id);
+    }
+    const { data: fresh } = await supabase.from("invoices").select("*").eq("id", inv.id).maybeSingle();
+    inv = fresh || inv;
   } else {
     // Quote with no one-off value (shouldn't happen for a payment) — receipt-only invoice
     const today = now.slice(0, 10);
@@ -78,6 +87,11 @@ serve(async (req) => {
     return new Response(`Webhook signature failed: ${(e as Error).message}`, { status: 400 });
   }
 
+  // Declared out here because the response below reads it. Inside the if it
+  // was out of scope there, so every delivery threw a ReferenceError AFTER its
+  // work was done: Stripe saw a 500 and re-sent the event for days.
+  let mismatch = false;
+  let unrecorded = false;
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as any;
     // A $500 session must never mark a £500 document paid. The checkout
@@ -85,7 +99,6 @@ serve(async (req) => {
     // means something is genuinely wrong — record nothing automatically and
     // shout, so the money is reconciled by a person, not a guess.
     const sessionCurrency = String(session.currency || "gbp").toUpperCase();
-    let mismatch = false;
     const currencyMatches = async (table: string, id: string) => {
       const { data } = await supabase.from(table).select("currency, notes, stripe_payment_intent").eq("id", id).maybeSingle();
       const docCurrency = (data?.currency || "GBP").toUpperCase();
@@ -121,7 +134,7 @@ serve(async (req) => {
       await supabase.rpc("execute_quote", { p_quote_id: quoteId });
       // Generate a PAID invoice (receipt) for the payment and email it
       try {
-        await createPaidInvoiceForQuote(supabase, quoteId, (session.amount_total || 0) / 100);
+        await createPaidInvoiceForQuote(supabase, quoteId, (session.amount_total || 0) / 100, session.id, sessionCurrency);
       } catch (e) {
         console.error("receipt invoice failed:", (e as Error).message);
       }
@@ -129,16 +142,24 @@ serve(async (req) => {
     // Invoice payments (one-off + recurring)
     const invoiceId = session.metadata?.invoice_id;
     if (invoiceId && await currencyMatches("invoices", invoiceId)) {
-      await supabase.from("invoices").update({
-        status: "paid",
-        paid_at: new Date().toISOString(),
-        amount_paid: (session.amount_total || 0) / 100,
-      }).eq("id", invoiceId);
+      // invoice-checkout charges the BALANCE DUE (total less what was paid and
+      // less issued credit notes), so this payment adds to amount_paid rather
+      // than replacing it; see _shared/invoicePayment.ts for the rest. A
+      // failure to record is answered with a 500 so Stripe sends the event
+      // again, which is safe: a session is only ever counted once.
+      const paidNow = (session.amount_total || 0) / 100;
+      try {
+        logPayment(await recordInvoicePayment(supabase, invoiceId, paidNow, session.id), session.id, paidNow, sessionCurrency);
+      } catch (e) {
+        console.error(`stripe-webhook: payment for invoice ${invoiceId} (session ${session.id}) not recorded:`, (e as Error).message);
+        unrecorded = true;
+      }
     }
   }
 
   // A mismatch is a failure: Stripe keeps retrying and flags the endpoint,
   // which is exactly the alarm a mis-currencied captured payment deserves.
   if (mismatch) return new Response("currency mismatch — manual reconciliation required", { status: 500 });
+  if (unrecorded) return new Response("payment not recorded, retry", { status: 500 });
   return new Response(JSON.stringify({ received: true }), { headers: { "Content-Type": "application/json" } });
 });

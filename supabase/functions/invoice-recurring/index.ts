@@ -12,7 +12,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { invoiceEmailHtml, sendInvoiceEmail, moneyFor, taxLabelFor, dateLocaleFor } from "../_shared/invoiceEmail.ts";
+import { invoiceEmailHtml, sendInvoiceEmail, moneyFor, taxLabelFor, dateLocaleFor, balanceDue } from "../_shared/invoiceEmail.ts";
 import { buildInvoicePdfBytes } from "../_shared/invoicePdf.ts";
 
 // "Today" in a named timezone. The cron fires at 06:00 UTC, which is still
@@ -157,6 +157,11 @@ serve(async (req) => {
         if (sends.length >= SEND_PER_RUN) break;
         const sched: any = (inv as any).recurring;
         if (!sched?.auto_send) continue;
+        // Never ask for money a credit note has already cancelled out. The
+        // database only credits sent, viewed or paid invoices, so a draft here
+        // should never carry credit; this keeps it that way if one ever does.
+        // A zero-total draft with no credit still goes out as it always has.
+        if (Number((inv as any).amount_credited || 0) > 0 && balanceDue(inv) <= 0) continue;
         let recipient = (sched.email_to || "").trim();
         if (!recipient && sched.contact_id) {
           const { data: c } = await supabase.from("contacts").select("email").eq("id", sched.contact_id).maybeSingle();

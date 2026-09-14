@@ -24,6 +24,8 @@ import WhatIOwePanel from '../components/finance/WhatIOwePanel.jsx';
 import ProductsPanel from '../components/crm/ProductsPanel.jsx';
 import QuotesPanel from '../components/crm/QuotesPanel.jsx';
 import InvoicesPanel from '../components/crm/InvoicesPanel.jsx';
+import InvoiceBuilder from '../components/crm/InvoiceBuilder.jsx';
+import CreditNoteModal from '../components/crm/CreditNoteModal.jsx';
 import SalesPerformance from '../components/crm/SalesPerformance.jsx';
 import MobileNav from '../components/MobileNav.jsx';
 import QuickAddCommand from '../components/crm/QuickAddCommand.jsx';
@@ -205,6 +207,17 @@ if (!window.__fnPatched) {
       return Promise.resolve(new Response(JSON.stringify(out), { status, headers: { 'Content-Type': 'application/json' } }));
     }
     if (fn === 'booking-public') return ok(body.action === 'slots' ? { slots: harnessSlots() } : { durationMins: 30 });
+    // credit-note-send: stamps the note as the function does with its service
+    // role, and answers with the same shape. window.__cnSendFail = 'text'
+    // makes it refuse, to see an issued note whose email did not go.
+    if (fn === 'credit-note-send') {
+      if (window.__cnSendFail) return Promise.resolve(new Response(JSON.stringify({ error: window.__cnSendFail }), { status: 422, headers: { 'Content-Type': 'application/json' } }));
+      const note = TABLES.credit_notes.find((c) => c.id === body.credit_note_id);
+      if (!note) return Promise.resolve(new Response(JSON.stringify({ error: 'Credit note not found.' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+      const to = String(body.to || note.email_to || '').trim();
+      note.sent_at = new Date().toISOString(); note.email_to = to;
+      return ok({ success: true, to, sent_at: note.sent_at });
+    }
     if (fn === 'gmail-personal') {
       if (body.action === 'list') return ok({ messages: LIST });
       if (body.action === 'thread') return ok({ messages: THREAD, subject: 'Re: Menu changes for the weekend' });
@@ -251,12 +264,59 @@ function PackCardView({ role }) {
   );
 }
 
+// #creditnote: the raise screen open on INV-1045 (seeded in stub.js), on its
+// own so it can be screenshotted at phone width. Issuing runs the in-memory
+// issue_credit_note; Close or issue shows a button to open it again, fresh.
+function CreditNoteView() {
+  const [open, setOpen] = useState(true);
+  const [round, setRound] = useState(0);
+  const [said, setSaid] = useState('');
+  const inv = TABLES.invoices.find((i) => i.id === 'inv1045');
+  const lines = TABLES.invoice_line_items.filter((l) => l.invoice_id === inv.id);
+  // What the invoice's issued credit notes already used, as loadCreditBasis reads it.
+  const issuedIds = TABLES.credit_notes.filter((c) => c.invoice_id === inv.id && c.status === 'issued').map((c) => c.id);
+  const creditedLines = TABLES.credit_note_lines.filter((l) => issuedIds.includes(l.credit_note_id));
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--scene-bg)', padding: 16 }}>
+      <div style={{ maxWidth: 420, margin: '0 auto', fontSize: 13 }} className="space-y-3 text-paper">
+        <div>INV-{inv.invoice_number}: credited {inv.amount_credited} of {inv.total}.</div>
+        {said && <div data-harness-said>{said}</div>}
+        {!open && <button type="button" className="btn-glass px-4 py-2 rounded-xl text-sm" onClick={() => { setRound((r) => r + 1); setOpen(true); }}>Raise a credit note again</button>}
+      </div>
+      {open && (
+        <CreditNoteModal key={round} invoice={{ ...inv }} invoiceLines={lines.map((l) => ({ ...l }))} creditedLines={creditedLines.map((l) => ({ ...l }))} contactEmail="dan@verde.example"
+          onClose={() => setOpen(false)}
+          onIssued={(note, { emailedTo, emailError }) => {
+            setOpen(false);
+            setSaid(`CN-${note.credit_number} issued for ${note.total}${emailedTo ? `, sent to ${emailedTo}` : ''}${emailError ? `, email failed: ${emailError}` : ''}.`);
+          }} />
+      )}
+    </div>
+  );
+}
+
+// #invoice-credits (INV-1045, with its issued and cancelled credit notes) and
+// #invoice-paid (INV-1046, paid, so a credit on it owes a refund). Mounted as
+// the Shell mounts an invoice: invoice screens are not work views, so no
+// .work class, which would stop the header from wrapping on a phone.
+function InvoiceView({ id }) {
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--scene-bg)' }}>
+      <main className="flex-1 min-w-0 min-h-0 overflow-hidden lg:flex lg:flex-col">
+        <InvoiceBuilder key={id} invoiceId={id} profile={P} onClose={() => {}} onNavigate={() => {}} />
+      </main>
+    </div>
+  );
+}
+
 function App() {
   const [v, setV] = useState(() => (location.hash || '#today').slice(1));
   useEffect(() => { const f = () => setV(location.hash.slice(1) || 'today'); window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f); }, []);
   const nav = () => {};
   if (PACK_ROUTES[v]) return <OnboardingPack key={v} token={PACK_ROUTES[v]} />;
   if (v === 'packcard' || v === 'packcard-editor') return <PackCardView key={v} role={v === 'packcard' ? 'owner' : 'editor'} />;
+  if (v === 'creditnote') return <CreditNoteView />;
+  if (v === 'invoice-credits' || v === 'invoice-paid') return <InvoiceView id={v === 'invoice-paid' ? 'inv1046' : 'inv1045'} />;
   return (
     <div className="work" style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--scene-bg)' }}>
       <main className="work flex-1 min-w-0 overflow-hidden lg:flex lg:flex-col">

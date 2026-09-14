@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { currencyForCountry } from '../../lib/region';
 import { Receipt, Repeat } from 'lucide-react';
-import { money, invStatus, INV_BADGE } from './InvoicesPanel.jsx';
+import { money, invStatus, INV_BADGE, creditMarker, CN_BADGE } from './InvoicesPanel.jsx';
+import { balanceDue, creditNoteLabel, creditNoteStatusLabel } from '../../lib/creditNotes';
 
 // Invoices associated with a record. Pass exactly one of companyId /
 // locationId / contactId. "+ New" raises a draft pre-associated to the record.
 export default function InvoicesCard({ companyId, locationId, contactId, profile, onNavigate }) {
   const [invoices, setInvoices] = useState([]);
+  const [credits, setCredits] = useState([]);
   const [recurringCount, setRecurringCount] = useState(0);
   const canWrite = profile?.role === 'owner' || profile?.role === 'editor';
 
@@ -16,10 +18,25 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
 
   useEffect(() => {
     if (!value) return;
+    let live = true;
     supabase.from('invoices').select('*').eq(field, value).order('created_at', { ascending: false }).limit(8)
-      .then(r => setInvoices(r.data || []));
+      .then(async (r) => {
+        const rows = r.data || [];
+        if (!live) return;
+        setInvoices(rows);
+        // Credit notes sit under the invoice they reduce, so fetch only the
+        // ones for the invoices shown. An error (the credit notes migration
+        // not applied yet) just shows none.
+        const ids = rows.filter(i => i.status !== 'draft').map(i => i.id);
+        if (!ids.length) { setCredits([]); return; }
+        const c = await supabase.from('credit_notes')
+          .select('id, invoice_id, credit_number, status, total, currency, issue_date, refund_status')
+          .in('invoice_id', ids).order('credit_number');
+        if (live) setCredits(c.error ? [] : (c.data || []));
+      });
     supabase.from('recurring_invoices').select('id', { count: 'exact', head: true }).eq(field, value).eq('active', true)
       .then(r => setRecurringCount(r.count || 0));
+    return () => { live = false; };
   }, [field, value]);
 
   const newInvoice = async () => {
@@ -41,8 +58,10 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
     onNavigate?.('invoice', data.id);
   };
 
+  // Outstanding is the balance due (total less payments less credit notes),
+  // so a credited invoice stops counting as money owed.
   const outstanding = invoices.filter(i => !['paid', 'void', 'draft'].includes(i.status))
-    .reduce((acc, i) => { const c = i.currency || 'GBP'; acc[c] = (acc[c] || 0) + Number(i.total || 0); return acc; }, {});
+    .reduce((acc, i) => { const c = i.currency || 'GBP'; acc[c] = (acc[c] || 0) + balanceDue(i); return acc; }, {});
   const outstandingTotal = Object.values(outstanding).reduce((s, v) => s + v, 0);
 
   return (
@@ -59,13 +78,28 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
           <div className="px-4 py-4 text-xs text-dim italic text-center">No invoices yet</div>
         ) : invoices.map(inv => {
           const st = invStatus(inv);
+          const mark = creditMarker(inv);
+          const notes = credits.filter(c => c.invoice_id === inv.id);
           return (
-            <div key={inv.id} onClick={() => onNavigate?.('invoice', inv.id)}
-              className="px-4 py-2.5 flex items-center gap-2 hover:bg-card/50 cursor-pointer">
-              <span className="font-mono text-[11px] text-dim shrink-0">INV-{inv.invoice_number}</span>
-              {inv.recurring_id && <Repeat size={10} className="text-uv shrink-0" />}
-              <span className="text-sm text-paper tabular-nums ml-auto shrink-0">{money(inv.total, inv.currency)}</span>
-              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${INV_BADGE[st]}`}>{st}</span>
+            <div key={inv.id} onClick={() => onNavigate?.('invoice', inv.id)} className="hover:bg-card/50 cursor-pointer">
+              <div className="px-4 py-2.5 flex items-center gap-2">
+                <span className="font-mono text-[11px] text-dim shrink-0">INV-{inv.invoice_number}</span>
+                {inv.recurring_id && <Repeat size={10} className="text-uv shrink-0" />}
+                {mark && <span className="text-[9px] font-semibold text-violet-700 truncate">{mark}</span>}
+                <span className="text-sm text-paper tabular-nums ml-auto shrink-0">{money(inv.total, inv.currency)}</span>
+                <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${INV_BADGE[st]}`}>{st}</span>
+              </div>
+              {notes.map(cn => {
+                const lbl = creditNoteStatusLabel(cn);
+                const gone = cn.status === 'cancelled';
+                return (
+                  <div key={cn.id} className="pl-8 pr-4 pb-2 -mt-1 flex items-center gap-2">
+                    <span className={`font-mono text-[10px] shrink-0 ${gone ? 'line-through text-dim' : 'text-muted'}`}>{creditNoteLabel(cn)}</span>
+                    <span className={`text-xs tabular-nums ml-auto shrink-0 ${gone ? 'line-through text-dim' : 'text-violet-700'}`}>-{money(cn.total, cn.currency || inv.currency)}</span>
+                    <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${CN_BADGE[lbl]}`}>{lbl}</span>
+                  </div>
+                );
+              })}
             </div>
           );
         })}

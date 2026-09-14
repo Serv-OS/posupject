@@ -17,6 +17,7 @@
 //    else. Never assume RLS is protecting you inside an edge function.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { balanceDue } from "../_shared/invoiceEmail.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -81,13 +82,25 @@ async function supportContext(): Promise<string[]> {
   return lines;
 }
 
+// Invoices that still ask for money. Payments and issued credit notes both come
+// off (balanceDue, the rule the invoice screens and invoice-checkout use), so a
+// credited invoice is never offered up as one to chase. select("*") rather than
+// named columns: amount_credited only exists once the credit notes migration is
+// applied, and posupcrm's invoices have no currency column, and naming a column
+// that is not there fails the whole query (it read as no unpaid invoices).
+// Only the fields below reach the prompt.
+async function unpaidInvoices() {
+  const { data } = await admin.from("invoices").select("*").in("status", ["sent", "viewed"]).limit(50);
+  return { data: (data || []).filter((i: any) => balanceDue(i) > 0) };
+}
+
 async function overviewContext(isOwner: boolean): Promise<string[]> {
   const today = new Date().toISOString().slice(0, 10);
   const [{ data: tickets }, { data: deals }, { data: invoices }, { data: onboardings }, { data: tasks }] =
     await Promise.all([
       admin.from("tickets").select("stage, owner_id, created_at").not("stage", "in", '("closed")'),
       admin.from("deals").select("name, stage, value, currency, expected_close_date").not("stage", "in", '("closed_won","closed_lost")').limit(50),
-      admin.from("invoices").select("invoice_number, total, status, due_date, currency").in("status", ["sent", "viewed"]).limit(50),
+      unpaidInvoices(),
       admin.from("onboardings").select("id, stage, go_live_date").not("stage", "in", '("live","cancelled")').limit(50),
       admin.from("tasks").select("title, status, due_date, owner_id").neq("status", "done").limit(50),
     ]);
@@ -100,7 +113,7 @@ async function overviewContext(isOwner: boolean): Promise<string[]> {
     `DEALS: ${(deals || []).length} open.` + (deals || []).slice(0, 10).map((d) =>
       `\n  - ${clip(d.name, 60)} | ${d.stage} | ${d.currency || "GBP"} ${d.value ?? "?"}${d.expected_close_date ? ` | expected ${d.expected_close_date}` : ""}`).join(""),
     `UNPAID INVOICES: ${(invoices || []).length}.` + (invoices || []).slice(0, 10).map((i) =>
-      `\n  - INV-${i.invoice_number} | ${i.currency || "GBP"} ${i.total} | ${i.status}${i.due_date ? ` | due ${i.due_date}${i.due_date < today ? " (OVERDUE)" : ""}` : ""}`).join(""),
+      `\n  - INV-${i.invoice_number} | ${i.currency || "GBP"} ${balanceDue(i)} due${balanceDue(i) !== Number(i.total) ? ` of ${i.total}` : ""} | ${i.status}${i.due_date ? ` | due ${i.due_date}${i.due_date < today ? " (OVERDUE)" : ""}` : ""}`).join(""),
     `ONBOARDINGS IN FLIGHT: ${(onboardings || []).length}.` + (onboardings || []).slice(0, 10).map((o) =>
       `\n  - stage ${o.stage}${o.go_live_date ? ` | go live ${o.go_live_date}` : ""}`).join(""),
     `OPEN TASKS: ${(tasks || []).length}.` + (tasks || []).slice(0, 10).map((t) =>
