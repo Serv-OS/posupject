@@ -39,10 +39,15 @@ export const dateLocaleFor = (currency?: string | null) => (currency === "USD" ?
 const fmtDate = (d: string | null, locale = "en-GB") => d ? new Date(d + "T00:00:00").toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" }) : "";
 
 // ── Balance due ─────────────────────────────────────────────────────────────
-// What the customer still owes: total less payments less credit notes, never
-// below 0. The SAME rule as balanceDue in src/lib/creditNotes.js, repeated here
-// because Deno cannot import src/lib. Keep the two in step, or the public page
-// would show one balance and Stripe charge another.
+// What the customer still owes: total less payments less credit notes less
+// credit applied to it from other invoices' credit notes, never below 0. The
+// SAME rule as balanceDue in src/lib/creditNotes.js, repeated here because Deno
+// cannot import src/lib. Keep the two in step, or the public page would show
+// one balance and Stripe charge another.
+//
+// Credit applied (invoices.amount_allocated, the credit allocations migration)
+// is a settlement, not cash: amount_paid stays the cash received, and only the
+// balance comes down.
 //
 // Invoice totals are stored unrounded (3 x 33.33 at 20% is saved as 119.988),
 // so the sum is done on exact decimals and rounded once: to 6 places to wash
@@ -52,8 +57,9 @@ const fmtDate = (d: string | null, locale = "en-GB") => d ? new Date(d + "T00:00
 // as 1,235.00.
 //
 // A paid invoice with no amount_paid was paid in full, as the invoice screens
-// already show it (amount_paid ?? total). A row without amount_credited (the
-// credit notes migration not applied yet) counts as no credit.
+// already show it (amount_paid ?? total), less whatever credit applied to it
+// settled. A row without amount_credited or amount_allocated (a migration not
+// applied yet) counts as no credit.
 type Dec = { n: bigint; s: number };   // the value n / 10^s
 const DZERO: Dec = { n: 0n, s: 0 };
 // The number shapes the database and src/lib/creditNotes.js accept.
@@ -97,19 +103,72 @@ function decToNumber(a: Dec): number {
   // `|| 0` so a zero never comes back as -0.
   return Number(`${neg ? "-" : ""}${digits.slice(0, cut)}.${digits.slice(cut) || "0"}`) || 0;
 }
+const max0Dec = (a: Dec): Dec => (a.n > 0n ? a : DZERO);
+// The cash taken. A paid invoice with no amount_paid was paid in full, less
+// what credit applied to it settled: the database reads it the same way.
 function paidDec(inv: any): Dec {
   if (inv?.amount_paid != null && inv.amount_paid !== "") return toDec(inv.amount_paid);
-  return inv?.status === "paid" ? toDec(inv.total) : DZERO;
+  return inv?.status === "paid" ? max0Dec(subDec(toDec(inv.total), toDec(inv.amount_allocated))) : DZERO;
 }
 
 /** Money figures added up exactly and rounded to the penny by the rule above. */
 export const addPennies = (...values: unknown[]): number =>
   decToNumber(penniesDec(values.reduce<Dec>((sum, v) => addDec(sum, toDec(v)), DZERO)));
 
-/** What is still owed on an invoice, in pennies: total - paid - credited, never below 0. */
+/**
+ * What is still owed on an invoice, in pennies: total - paid - credited -
+ * credit applied, never below 0.
+ */
 export function balanceDue(inv: any): number {
-  const due = penniesDec(subDec(subDec(toDec(inv?.total), paidDec(inv)), toDec(inv?.amount_credited)));
+  const due = penniesDec(subDec(subDec(subDec(toDec(inv?.total), paidDec(inv)), toDec(inv?.amount_credited)), toDec(inv?.amount_allocated)));
   return due.n > 0n ? decToNumber(due) : 0;
+}
+
+/**
+ * The cash taken on an invoice, in pennies: amountPaid in src/lib/creditNotes.js.
+ * Credit applied from another invoice is not cash and is not in here.
+ */
+export const amountPaidOn = (inv: any): number => decToNumber(penniesDec(paidDec(inv)));
+
+/** Credit applied to an invoice from other invoices' credit notes, in pennies (0 without the column). */
+export const amountAllocated = (inv: any): number => decToNumber(penniesDec(max0Dec(toDec(inv?.amount_allocated))));
+
+/**
+ * Whether two rows (an invoice, a credit note) are for the same customer: the
+ * same company, or with no company on either, the same contact. The public
+ * pages only link across to the other side of applied credit when this holds.
+ */
+export const sameCustomer = (a: any, b: any): boolean =>
+  a?.company_id || b?.company_id
+    ? !!a?.company_id && a.company_id === b?.company_id
+    : !!a?.contact_id && a.contact_id === b?.contact_id;
+
+// ── What a credit note's credit has been used for ───────────────────────────
+// The SAME rules as creditUse and creditAvailable in src/lib/creditNotes.js.
+// refund_due is all the money a note hands back. Of it, amount_allocated has
+// been applied to other invoices and refunded_amount refunded; the rest is
+// credit available, and only while refund_status is owed. A note refunded
+// before refunded_amount existed had its whole refund_due refunded.
+function noteRefundedDec(note: any): Dec {
+  if (note?.refunded_amount != null && note.refunded_amount !== "") return toDec(note.refunded_amount);
+  return note?.refund_status === "refunded" ? max0Dec(subDec(toDec(note.refund_due), toDec(note.amount_allocated))) : DZERO;
+}
+
+/**
+ * How a credit note's credit has been used, in pennies: used (applied to
+ * invoices), refunded, and left (credit available, 0 unless the note is issued
+ * with refund_status owed).
+ */
+export function creditUse(note: any): { used: number; refunded: number; left: number } {
+  const refunded = noteRefundedDec(note);
+  const left = note?.status === "issued" && note.refund_status === "owed"
+    ? max0Dec(penniesDec(subDec(subDec(toDec(note.refund_due), toDec(note.amount_allocated)), refunded)))
+    : DZERO;
+  return {
+    used: decToNumber(penniesDec(toDec(note?.amount_allocated))),
+    refunded: decToNumber(penniesDec(refunded)),
+    left: decToNumber(left),
+  };
 }
 
 // Staff type the reason freely; it must reach the customer as text, never as
@@ -121,28 +180,40 @@ export function invoiceEmailHtml(inv: any, seller: any, link: string, opts: { pa
   const accent = seller.quote_accent || "#15C26A";
   const name = seller.business_name || "ServOS";
   const fmt = moneyFor(inv.currency);
+  // The cash taken: credit applied from another invoice is not money paid.
+  const cash = amountPaidOn(inv);
   const subject = opts.paid
-    ? `Receipt — Invoice INV-${inv.invoice_number} from ${name} (${fmt(inv.amount_paid ?? inv.total)} paid)`
+    ? `Receipt — Invoice INV-${inv.invoice_number} from ${name} (${fmt(cash)} paid)`
     : `Invoice INV-${inv.invoice_number} from ${name} — ${fmt(inv.total)}`;
   const statusLine = opts.paid
     ? `<div style="display:inline-block;background:#d1fae5;color:#065f46;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:1px;padding:4px 12px;border-radius:8px;margin-bottom:14px">Paid — thank you</div>`
     : (inv.due_date ? `<div style="font-size:14px;color:#555;margin-bottom:18px">Due ${fmtDate(inv.due_date, dateLocaleFor(inv.currency))}</div>` : `<div style="margin-bottom:18px"></div>`);
-  // Once a credit note has taken something off, the total alone asks for more
-  // than is owed, so say what is left: the figure the pay page charges. An
-  // invoice with no credit gets exactly the email it always did.
+  // Once a credit note, or credit applied from another invoice's credit note,
+  // has taken something off, the total alone asks for more than is owed, so
+  // say what is left: the figure the pay page charges. A receipt for an
+  // invoice that credit helped to settle says how much credit that was, since
+  // the figure paid is less than the total. An invoice with no credit gets
+  // exactly the email it always did.
   const credited = Number(inv.amount_credited) || 0;
+  const allocated = amountAllocated(inv);
   const left = balanceDue(inv);
-  const creditLine = !opts.paid && credited > 0
-    ? `<div style="font-size:14px;color:#555;margin-bottom:6px">${fmt(credited)} credited · ${left > 0 ? `${fmt(left)} left to pay` : "nothing left to pay"}</div>`
-    : "";
+  const creditParts = [
+    credited > 0 ? `${fmt(credited)} credited` : "",
+    allocated > 0 ? `${fmt(allocated)} credit applied` : "",
+  ].filter(Boolean);
+  const creditLine = !opts.paid && creditParts.length
+    ? `<div style="font-size:14px;color:#555;margin-bottom:6px">${creditParts.join(" · ")} · ${left > 0 ? `${fmt(left)} left to pay` : "nothing left to pay"}</div>`
+    : opts.paid && allocated > 0
+      ? `<div style="font-size:14px;color:#555;margin-bottom:6px">${fmt(allocated)} credit applied</div>`
+      : "";
   const html = `
 <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1a1a1a">
   ${seller.logo_url ? `<img src="${seller.logo_url}" alt="${name}" style="height:40px;margin-bottom:20px" />` : `<div style="font-size:20px;font-weight:700;margin-bottom:20px">${name}</div>`}
   <div style="border:1px solid #e5e5e5;border-radius:12px;padding:24px">
     <div style="font-size:13px;color:#777;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">${opts.paid ? "Receipt · " : ""}Invoice INV-${inv.invoice_number}${inv.po_number ? ` · PO ${inv.po_number}` : ""}</div>
-    <div style="font-size:30px;font-weight:700;margin-bottom:8px">${fmt(opts.paid ? (inv.amount_paid ?? inv.total) : inv.total)}</div>
+    <div style="font-size:30px;font-weight:700;margin-bottom:8px">${fmt(opts.paid ? cash : inv.total)}</div>
     ${creditLine}${statusLine}
-    <div><a href="${link}" style="display:inline-block;background:${accent};color:#fff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:10px">${opts.paid || (credited > 0 && left <= 0) ? "View invoice" : "View &amp; pay invoice"}</a></div>
+    <div><a href="${link}" style="display:inline-block;background:${accent};color:#fff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:10px">${opts.paid || (creditParts.length && left <= 0) ? "View invoice" : "View &amp; pay invoice"}</a></div>
     <div style="font-size:12px;color:#999;margin-top:16px">Or copy this link: <a href="${link}" style="color:${accent}">${link}</a></div>
   </div>
   <div style="font-size:12px;color:#999;margin-top:18px">${name}${seller.business_email ? ` · ${seller.business_email}` : ""}${seller.business_phone ? ` · ${seller.business_phone}` : ""}</div>
@@ -153,7 +224,10 @@ export function invoiceEmailHtml(inv: any, seller: any, link: string, opts: { pa
 // The credit note email, in the invoice email's look. `note` is the
 // credit_notes row and `inv` its invoice as it stands now, so amount_credited
 // already includes this note and the balance shown is today's balance.
-export function creditNoteEmailHtml(note: any, inv: any, seller: any, link: string): { subject: string; html: string } {
+// `applied` is optional: the note's active credit allocations as
+// [{ invoice_number, amount }], for one line per invoice. Without it, credit
+// already used shows as one line.
+export function creditNoteEmailHtml(note: any, inv: any, seller: any, link: string, applied: any[] = []): { subject: string; html: string } {
   const accent = seller.quote_accent || "#15C26A";
   const name = seller.business_name || "ServOS";
   // A credit note always carries its invoice's currency; the invoice is the
@@ -165,17 +239,34 @@ export function creditNoteEmailHtml(note: any, inv: any, seller: any, link: stri
   const invNo = `INV-${inv.invoice_number}`;
   const subject = `Credit note ${cn} for invoice ${invNo}`;
 
-  // One line saying where this leaves the customer. A refund owed or made
-  // matters more than the balance, which is 0 whenever money is owed back.
-  // A void invoice asks for nothing, so it gets no balance line at all.
+  // Where this leaves the customer. Money handed back (credit available,
+  // applied to another invoice, or refunded) matters more than the balance,
+  // which is 0 whenever there is any. A void invoice asks for nothing, so it
+  // gets no balance line at all.
   const box = (text: string, bg = "#f4f4f5", color = "#1a1a1a") =>
     `<div style="background:${bg};color:${color};border-radius:8px;padding:10px 14px;font-size:14px;margin-bottom:18px">${text}</div>`;
+  const lines: string[] = [];
+  if (note.status !== "cancelled" && ["owed", "allocated", "refunded"].includes(note.refund_status)) {
+    const use = creditUse(note);
+    const rows = (applied || []).filter((a: any) => a && !a.removed_at && Number(a.amount) > 0);
+    if (rows.length) {
+      for (const a of rows) lines.push(`Applied to invoice INV-${esc(a.invoice_number)}: <b>${fmt(a.amount)}</b>`);
+    } else if (use.used > 0) {
+      lines.push(`Applied to your other invoices: <b>${fmt(use.used)}</b>`);
+    }
+    if (use.refunded > 0) {
+      const on = note.refunded_at ? ` on ${fmtDate(String(note.refunded_at).slice(0, 10), locale)}` : "";
+      lines.push(`Refunded to you: <b>${fmt(use.refunded)}</b>${on}`);
+    }
+    if (use.left > 0) {
+      lines.push(use.used > 0 || use.refunded > 0
+        ? `Credit left: <b>${fmt(use.left)}</b>`
+        : `Credit available to you: <b>${fmt(use.left)}</b><br><span style="font-size:13px">It can be paid back to you or taken off another invoice.</span>`);
+    }
+  }
   let outcome = "";
-  if (note.refund_status === "refunded") {
-    const on = note.refunded_at ? ` on ${fmtDate(String(note.refunded_at).slice(0, 10), locale)}` : "";
-    outcome = box(`Refunded to you: <b>${fmt(note.refund_due)}</b>${on}`, "#d1fae5", "#065f46");
-  } else if (note.refund_status === "owed") {
-    outcome = box(`Refund due to you: <b>${fmt(note.refund_due)}</b>`, "#d1fae5", "#065f46");
+  if (lines.length) {
+    outcome = box(lines.join("<br>"), "#d1fae5", "#065f46");
   } else if (inv.status !== "void") {
     const due = balanceDue(inv);
     outcome = box(due > 0 ? `Left to pay on invoice ${invNo}: <b>${fmt(due)}</b>` : `Nothing left to pay on invoice ${invNo}.`);

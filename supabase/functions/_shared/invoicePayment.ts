@@ -2,22 +2,26 @@
 // both pay links: the invoice's own (/i/<token>) and a quote's, whose invoice
 // was raised at signing.
 //
-// record_invoice_payment (the credit notes migration, 115) does the work in the
-// database, under the same lock as issuing a credit note, so a payment and a
+// record_invoice_payment (the credit notes migration, 115, as replaced by the
+// credit allocations migration, 116) does the work in the database, under the
+// same lock as issuing a credit note or applying credit, so a payment and a
 // credit can never pass each other half way:
 //   - a Stripe session already recorded is a repeat delivery and changes nothing
 //   - an invoice already paid is left alone (a second tab, or paid by bank)
 //   - otherwise the payment is added to amount_paid, and the invoice is paid
-//     once nothing is left to pay
-//   - money beyond that (the pay page was open while a credit note was issued)
-//     becomes a refund owed on the invoice's newest credit notes, so staff see
-//     "Refund owed" instead of the money being kept without a word
+//     once the cash plus credit applied to it (amount_allocated) covers what
+//     it asks for. Credit applied is a settlement, never cash, so it is not
+//     added to amount_paid.
+//   - money beyond that (the pay page was open while a credit note was issued
+//     or credit was applied to the invoice) becomes credit available on the
+//     invoice's newest credit notes, so staff see it on the invoice instead of
+//     the money being kept without a word
 //
 // Until that migration is applied the function is not there, and the payment
 // is recorded the way it was before credit notes, so a webhook deployed first
 // still records every payment.
 
-import { addPennies, balanceDue } from "./invoiceEmail.ts";
+import { addPennies, amountAllocated, balanceDue } from "./invoiceEmail.ts";
 
 export type PaymentResult = {
   recorded: boolean;
@@ -25,6 +29,8 @@ export type PaymentResult = {
   invoice_number?: number;
   status?: string;
   amount_paid?: number;
+  // Credit applied to the invoice from other invoices' credit notes (116 on).
+  amount_allocated?: number;
   balance_due?: number;
   overpaid?: number;
   not_on_a_credit_note?: number;
@@ -39,8 +45,8 @@ export async function recordInvoicePayment(supabase: any, invoiceId: string, amo
   // Anything else is a real failure, thrown so Stripe sends the event again.
   if (error.code !== "PGRST202" && error.code !== "42883") throw new Error(`record_invoice_payment: ${error.message}`);
 
-  // Before the migration. select("*") so a missing amount_credited column reads
-  // as no credit instead of failing.
+  // Before the migration. select("*") so a missing amount_credited or
+  // amount_allocated column reads as no credit instead of failing.
   const { data: inv, error: readError } = await supabase.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
   if (readError) throw new Error(`invoice read: ${readError.message}`);
   if (!inv) return { recorded: false, reason: "not_found" };
@@ -55,7 +61,7 @@ export async function recordInvoicePayment(supabase: any, invoiceId: string, amo
   const overpaid = Math.max(0, addPennies(amountPaid, -asked));
   return {
     recorded: true, invoice_number: inv.invoice_number, status: due === 0 ? "paid" : inv.status,
-    amount_paid: amountPaid, balance_due: due, overpaid, not_on_a_credit_note: overpaid,
+    amount_paid: amountPaid, amount_allocated: amountAllocated(inv), balance_due: due, overpaid, not_on_a_credit_note: overpaid,
   };
 }
 
@@ -72,6 +78,6 @@ export function logPayment(r: PaymentResult, sessionId: string, amount: number, 
   if (Number(r.not_on_a_credit_note) > 0) {
     console.error(`stripe-webhook: ${inv} was paid ${Number(r.not_on_a_credit_note).toFixed(2)} ${currency} more than it asks for, and no credit note holds it as a refund owed. Refund it by hand.`);
   } else if (Number(r.overpaid) > 0) {
-    console.warn(`stripe-webhook: ${inv} was paid ${Number(r.overpaid).toFixed(2)} ${currency} more than it asks for (a credit note was issued while the customer paid); it is recorded as a refund owed on its credit notes.`);
+    console.warn(`stripe-webhook: ${inv} was paid ${Number(r.overpaid).toFixed(2)} ${currency} more than it asks for (a credit note was issued, or credit applied, while the customer paid); it is recorded as credit available on its credit notes.`);
   }
 }

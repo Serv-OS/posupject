@@ -1,6 +1,8 @@
 /* Credit notes: the sums and the rules, shared by the raise screen, the
  * invoice lists, the reports and the PDF. This file is identical in posupject
- * and posupcrm; currency never enters the maths, so nothing here differs.
+ * and posupcrm; currency never enters the maths, so nothing here differs (the
+ * apply screen's check that a credit note and an invoice share a currency
+ * only runs when both rows carry one, as posupject's do).
  *
  * THE ROUNDING RULE
  * An invoice never rounds a line. InvoiceBuilder and invoice-recurring add up
@@ -32,6 +34,21 @@
  * pass a credit the database refuses. So every sum below is done on exact
  * decimals held as BigInts, and only turned back into a Number at the end.
  *
+ * APPLYING CREDIT TO ANOTHER INVOICE
+ * When money already taken on an invoice is more than it asks for after a
+ * credit, the credit note has credit available (refund_due less what has been
+ * applied less what has been refunded). That can be refunded, or applied to
+ * another invoice of the customer's (allocate_credit in the credit allocations
+ * migration). Applied credit is a settlement, not revenue and not cash:
+ *   an invoice's balance due is total - amount_paid - amount_credited -
+ *   amount_allocated, never below 0, in pennies, and amount_paid stays the
+ *   cash actually received;
+ *   what has SETTLED an invoice is amount_paid + amount_allocated, and that is
+ *   what every refund sum compares with what the invoice asks for.
+ * The functions below make the same checks, in the same order and with the
+ * same words, as allocate_credit, remove_credit_allocation and the credit note
+ * functions, so a screen can show a problem before the database refuses it.
+ *
  * Pure on purpose: no React, no Supabase, so it can be tested against the
  * invoice maths.
  */
@@ -41,6 +58,10 @@ export const REFUND_METHODS = ['Bank transfer', 'Card refund', 'Other'];
 export const REASON_MIN = 3;
 export const REASON_MAX = 500;
 export const MAX_LINES = 100;
+/** The invoices credit can be applied to (with a balance due above 0). */
+export const ALLOCATABLE_STATUSES = ['sent', 'viewed'];
+/** The longest note on applied credit, in characters. */
+export const ALLOCATION_NOTE_MAX = 500;
 
 // ── Exact decimals ──────────────────────────────────────────────────────────
 // A decimal is { n, s }: the value n / 10^s, with n a BigInt. BigInt() calls
@@ -148,26 +169,49 @@ export function creditTotals(lines = []) {
 }
 
 // ── The invoice ─────────────────────────────────────────────────────────────
-// A paid invoice with no amount_paid was paid in full: the invoice screens
-// already show it that way (amount_paid ?? total), and without this a credit
-// on one of those would never see that a refund is owed.
+// Credit applied to this invoice from other invoices' credit notes.
+const allocatedDec = (invoice) => decOr0(invoice?.amount_allocated);
+
+// The CASH taken on the invoice. A paid invoice with no amount_paid was paid in
+// full: the invoice screens already show it that way (amount_paid ?? total),
+// and without this a credit on one of those would never see that a refund is
+// owed. In full means whatever credit applied to it did not settle; cash did.
+// The database reads it the same way: coalesce(amount_paid, case when status
+// = 'paid' then greatest(0, total - amount_allocated) else 0 end).
 function paidDec(invoice) {
   if (invoice?.amount_paid != null && invoice.amount_paid !== '') return decOr0(invoice.amount_paid);
-  return invoice?.status === 'paid' ? decOr0(invoice.total) : DZERO;
+  return invoice?.status === 'paid' ? max0(sub(decOr0(invoice.total), allocatedDec(invoice))) : DZERO;
 }
+// What has settled the invoice: cash plus credit applied to it, in pennies.
+const settledDec = (invoice) => add(toPennies(paidDec(invoice)), toPennies(allocatedDec(invoice)));
 const leftDec = (invoice) => toPennies(sub(decOr0(invoice?.total), decOr0(invoice?.amount_credited)));
+const balanceDec = (invoice) => max0(toPennies(sub(sub(sub(decOr0(invoice?.total), paidDec(invoice)),
+  decOr0(invoice?.amount_credited)), allocatedDec(invoice))));
 
-/** What has been paid, in pennies (a paid invoice with no amount_paid counts as paid in full). */
+/**
+ * The cash paid, in pennies (a paid invoice with no amount_paid counts as paid
+ * in full). Credit applied from another invoice is not cash and is not in here.
+ */
 export const amountPaid = (invoice) => toNumber(toPennies(paidDec(invoice)));
+
+/** What has settled the invoice: cash paid plus credit applied to it, in pennies. */
+export const settledAmount = (invoice) => toNumber(settledDec(invoice));
 
 /** What can still be credited: total less issued credit notes. Can be 0. */
 export const creditableLeft = (invoice) => toNumber(leftDec(invoice));
 
-/** What the customer still owes: total less payments less credit, never below 0. */
-export function balanceDue(invoice) {
-  const due = toPennies(sub(sub(decOr0(invoice?.total), paidDec(invoice)), decOr0(invoice?.amount_credited)));
-  return isPos(due) ? toNumber(due) : 0;
-}
+/**
+ * What the customer still owes: total less cash paid, less credit notes on it,
+ * less credit applied to it from other invoices, never below 0.
+ */
+export const balanceDue = (invoice) => toNumber(balanceDec(invoice));
+
+/**
+ * What Mark paid records as amount_paid: the cash already taken plus the
+ * balance due, so credit notes and applied credit are never counted as cash.
+ * An invoice of 1,000 with 224 of credit applied records 776.
+ */
+export const markPaidAmount = (invoice) => toNumber(add(toPennies(paidDec(invoice)), balanceDec(invoice)));
 
 /**
  * 'none' | 'part' | 'full'. Full exactly when nothing is left to credit, so it
@@ -382,13 +426,16 @@ export function validateCredit({ invoice, lines, reason, invoiceLines, creditedL
 // unrounded: a full credit of 682.63 on 682.625 left would otherwise leave half
 // a penny that rounds up into a refund of 0.01 on an invoice nobody paid.
 const askedAfter = (invoice, credited) => max0(toPennies(sub(decOr0(invoice?.total), credited)));
-// Paid beyond that, in pennies. Can be below 0.
-const paidBeyond = (invoice, credited) => sub(toPennies(paidDec(invoice)), askedAfter(invoice, credited));
+// Settled (cash plus credit applied to it) beyond that, in pennies. Can be
+// below 0.
+const paidBeyond = (invoice, credited) => sub(settledDec(invoice), askedAfter(invoice, credited));
 
 /**
  * Whether issuing this credit leaves money to hand back. After the credit the
- * invoice asks for total - amount_credited - creditTotal; anything already
- * paid beyond that is owed back, but never more than this credit itself.
+ * invoice asks for total - amount_credited - creditTotal; anything that has
+ * already settled it (cash, and credit applied from another invoice) beyond
+ * that is credit available on the new note, but never more than the credit
+ * itself.
  */
 export function refundFor({ invoice, creditTotal } = {}) {
   const credit = toPennies(decOr0(creditTotal));
@@ -397,7 +444,55 @@ export function refundFor({ invoice, creditTotal } = {}) {
   return { refund_status: 'owed', refund_due: toNumber(cmp(excess, credit) < 0 ? excess : credit) };
 }
 
-const refundOnNote = (c) => (c?.status === 'issued' && ['owed', 'refunded'].includes(c.refund_status) ? decOr0(c.refund_due) : DZERO);
+// What a note holds of the money beyond what its invoice asks for: owed back,
+// applied to another invoice, or refunded. All of it is in refund_due.
+const refundOnNote = (c) => (c?.status === 'issued' && ['owed', 'allocated', 'refunded'].includes(c.refund_status) ? decOr0(c.refund_due) : DZERO);
+
+// ── What a credit note's credit has been used for ───────────────────────────
+// refund_due is all the money the note hands back. Of that, amount_allocated
+// has been applied to other invoices and refunded_amount refunded; the rest is
+// credit available. A note refunded before refunded_amount existed had its
+// whole refund_due refunded (the migration copies it across).
+const noteAllocatedDec = (note) => decOr0(note?.amount_allocated);
+function refundedDec(note) {
+  if (note?.refunded_amount != null && note.refunded_amount !== '') return decOr0(note.refunded_amount);
+  return note?.refund_status === 'refunded' ? max0(sub(decOr0(note.refund_due), noteAllocatedDec(note))) : DZERO;
+}
+// Only an issued note with a refund owed has any; never below 0.
+function availableDec(note) {
+  if (note?.status !== 'issued' || note.refund_status !== 'owed') return DZERO;
+  return max0(toPennies(sub(sub(decOr0(note.refund_due), noteAllocatedDec(note)), refundedDec(note))));
+}
+// The refund_status a note has once its credit available is `left`.
+const statusWithLeft = (note, left) => (isPos(left) ? 'owed' : isPos(refundedDec(note)) ? 'refunded' : isPos(noteAllocatedDec(note)) ? 'allocated' : 'none');
+
+// When less of an invoice's settlement is beyond what it asks for (a credit
+// note cancelled, or credit applied to it removed), what its issued notes hand
+// back comes down to `allowed`. Refunds already paid and credit already applied
+// cannot come down: { problem: 'refunded' } when refunds alone are more than
+// allowed, { problem: 'used' } when refunds and applied credit are. Otherwise
+// the credit available on the notes shrinks, oldest keeping theirs first so
+// the newest lose theirs first, and refunds lists the notes that change as
+// [{ id, refund_status, refund_due }]. cancel_credit_note and
+// remove_credit_allocation do the same, in the same order.
+function fitRefunds(notes, allowed) {
+  const refunded = notes.reduce((s, c) => add(s, refundedDec(c)), DZERO);
+  if (cmp(refunded, allowed) > 0) return { problem: 'refunded' };
+  const fixed = notes.reduce((s, c) => add(s, noteAllocatedDec(c)), refunded);
+  if (cmp(fixed, allowed) > 0) return { problem: 'used' };
+  let budget = sub(allowed, fixed);
+  const refunds = [];
+  notes.filter((c) => c.refund_status === 'owed')
+    .sort((a, b) => (Number(a.credit_number) || 0) - (Number(b.credit_number) || 0))
+    .forEach((c) => {
+      const held = add(noteAllocatedDec(c), refundedDec(c));
+      const extra = sub(decOr0(c.refund_due), held);
+      const keep = minDec(extra, max0(budget));
+      budget = sub(budget, keep);
+      if (cmp(keep, extra) !== 0) refunds.push({ id: c.id, refund_status: statusWithLeft(c, keep), refund_due: toNumber(add(held, keep)) });
+    });
+  return { problem: null, refunds };
+}
 
 /**
  * What cancelling a credit note does, by the same rules and in the same order
@@ -411,18 +506,21 @@ const refundOnNote = (c) => (c?.status === 'issued' && ['owed', 'refunded'].incl
  *                    pay link charges it
  *   balance_due      what the customer owes afterwards
  *   refunds          [{ id, refund_status, refund_due }] for the other notes
- *                    whose refund owed shrinks, because with less credit less
- *                    of what was paid is owed back. The newest lose theirs
- *                    first. A refund already paid cannot shrink, so when those
- *                    alone come to more than is now owed back, the cancel is
- *                    refused.
- * Pass reason to check it as the database does.
+ *                    whose credit available shrinks, because with less credit
+ *                    less of what settled the invoice is owed back. The newest
+ *                    lose theirs first. A refund already paid, or credit
+ *                    already applied to another invoice, cannot shrink, so
+ *                    when those come to more than is now owed back, the
+ *                    cancel is refused.
+ * A note that has been refunded, or whose credit is applied to an invoice, is
+ * refused too. Pass reason to check it as the database does.
  */
 export function cancelCreditEffect({ invoice, notes = [], noteId, reason } = {}) {
   const note = (notes || []).find((c) => c?.id === noteId);
   if (!note) return { problem: 'Credit note not found.' };
   if (note.status === 'cancelled') return { problem: 'This credit note is already cancelled.' };
-  if (note.refund_status === 'refunded') return { problem: 'This credit has already been refunded.' };
+  if (note.refund_status === 'refunded' || isPos(refundedDec(note))) return { problem: 'This credit has already been refunded.' };
+  if (isPos(noteAllocatedDec(note))) return { problem: 'Remove the credit applied from this note first.' };
   if (reason !== undefined) {
     const length = [...trimmed(reason)].length;
     if (length < REASON_MIN || length > REASON_MAX) return { problem: `Give a reason of ${REASON_MIN} to ${REASON_MAX} characters.` };
@@ -430,23 +528,14 @@ export function cancelCreditEffect({ invoice, notes = [], noteId, reason } = {})
 
   const others = (notes || []).filter((c) => c?.status === 'issued' && c.id !== noteId);
   const credited = others.reduce((s, c) => add(s, decOr0(c.total)), DZERO);
-  const allowed = max0(paidBeyond(invoice, credited));
-  const refunded = others.filter((c) => c.refund_status === 'refunded').reduce((s, c) => add(s, decOr0(c.refund_due)), DZERO);
-  if (cmp(refunded, allowed) > 0) {
+  const fit = fitRefunds(others, max0(paidBeyond(invoice, credited)));
+  if (fit.problem === 'refunded') {
     return { problem: 'A refund has already been paid on this invoice. Without this credit it would be more than the customer overpaid, so this credit cannot be cancelled.' };
   }
-
-  // Oldest first keep what they can, so the newest lose theirs first.
-  let budget = sub(allowed, refunded);
-  const refunds = [];
-  others.filter((c) => c.refund_status === 'owed')
-    .sort((a, b) => (Number(a.credit_number) || 0) - (Number(b.credit_number) || 0))
-    .forEach((c) => {
-      const due = decOr0(c.refund_due);
-      const keep = minDec(due, max0(budget));
-      budget = sub(budget, keep);
-      if (cmp(keep, due) !== 0) refunds.push({ id: c.id, refund_status: isPos(keep) ? 'owed' : 'none', refund_due: toNumber(keep) });
-    });
+  if (fit.problem === 'used') {
+    return { problem: 'Credit from another credit note on this invoice has already been used on an invoice. Without this credit it would be more than the customer overpaid, so this credit cannot be cancelled.' };
+  }
+  const { refunds } = fit;
 
   const after = { ...invoice, amount_credited: toNumber(credited) };
   const balance = balanceDue(after);
@@ -473,14 +562,199 @@ export const creditNoteLabel = (n) => {
   return num == null || num === '' ? '' : `CN-${num}`;
 };
 
-/** The status chip: Issued, Refund owed, Refunded or Cancelled. */
+/**
+ * The status chip: Issued, Available (credit available, none of it used yet),
+ * Part used (some applied to an invoice, some left), Used (all applied),
+ * Refunded (what was left refunded, whether or not some was used first) or
+ * Cancelled.
+ */
 export const creditNoteStatusLabel = (note) => {
   if (note?.status === 'cancelled') return 'Cancelled';
-  if (note?.refund_status === 'owed') return 'Refund owed';
+  if (note?.refund_status === 'owed') return isPos(noteAllocatedDec(note)) ? 'Part used' : 'Available';
+  if (note?.refund_status === 'allocated') return 'Used';
   if (note?.refund_status === 'refunded') return 'Refunded';
   return 'Issued';
 };
 
+/**
+ * Why Mark refunded would be refused, by the same checks, in the same order
+ * and with the same words as mark_credit_note_refunded; null when it can be
+ * marked. Pass method to check it too (the form checks the date and note).
+ * A note holds one refund: its date, method and note are single fields that
+ * the reports read by date, so a note that already has a refund on it (it
+ * owes again only once credit applied from it is removed) is refused, and
+ * what it has left can be applied to an invoice instead.
+ */
+export function refundProblem({ note, method } = {}) {
+  if (!note) return 'Credit note not found.';
+  if (note.status !== 'issued') return 'This credit note is cancelled.';
+  if (note.refund_status === 'refunded') return 'This refund is already marked as refunded.';
+  if (note.refund_status === 'allocated') return 'All of this credit has been used on invoices, so there is nothing left to refund.';
+  if (isPos(refundedDec(note))) return 'A refund has already been marked on this credit note, and a second one cannot be recorded. Apply the credit left to an invoice instead.';
+  if (note.refund_status !== 'owed' || !isPos(availableDec(note))) return 'There is no refund owed on this credit note.';
+  if (method !== undefined && !REFUND_METHODS.includes(method)) return `Choose how it was refunded: ${REFUND_METHODS.slice(0, -1).join(', ')} or ${REFUND_METHODS[REFUND_METHODS.length - 1]}.`;
+  return null;
+}
+
 /** Sum of the totals of the issued notes in a list; cancelled notes count for nothing. */
 export const issuedTotal = (notes = []) =>
   toNumber((notes || []).filter((c) => c?.status === 'issued').reduce((s, c) => add(s, decOr0(c.total)), DZERO));
+
+// ── Applying credit to another invoice ──────────────────────────────────────
+/**
+ * Credit available on a credit note: refund_due less what has been applied to
+ * invoices less what has been refunded, in pennies, never below 0. Only an
+ * issued note with a refund owed has any; a cancelled note has none.
+ */
+export const creditAvailable = (note) => toNumber(availableDec(note));
+
+/**
+ * How a note's credit has been used, in pennies: { used } applied to invoices,
+ * { refunded } handed back, { left } still available. Enough for "£100 used,
+ * £124 left" and "Used £100, refunded £124".
+ */
+export const creditUse = (note) => ({
+  used: toNumber(toPennies(noteAllocatedDec(note))),
+  refunded: toNumber(toPennies(refundedDec(note))),
+  left: creditAvailable(note),
+});
+
+/**
+ * Credit available across a customer's credit notes. Pass currency (posupject)
+ * to add up only the notes in that currency; without it every note counts.
+ */
+export const companyCreditAvailable = (notes = [], currency) =>
+  toNumber((notes || [])
+    .filter((c) => currency == null || c?.currency === currency)
+    .reduce((s, c) => add(s, availableDec(c)), DZERO));
+
+/** What the apply screen starts the amount at: the credit available or the balance due, whichever is less. */
+export const allocationDefault = ({ note, invoice } = {}) => toNumber(minDec(availableDec(note), balanceDec(invoice)));
+
+/**
+ * Every problem with applying `amount` of a credit note's credit to an
+ * invoice, in plain words; [] when it can be applied. The same checks, in the
+ * same order and with the same wording, as allocate_credit, which raises the
+ * first one it finds. note is the credit note, invoice the invoice it goes to,
+ * allocationNote the optional note typed on the apply screen. The note's
+ * invoice_id and both currencies (posupject) are checked when present.
+ */
+export function allocationProblems({ note, invoice, amount, allocationNote } = {}) {
+  if (!note) return ['Credit note not found.'];
+  if (!invoice) return ['Invoice not found.'];
+  const problems = [];
+  if (note.status !== 'issued') problems.push('This credit note is cancelled.');
+  else if (!isPos(availableDec(note))) problems.push('There is no credit left to use on this credit note.');
+  const noteOk = !problems.length;
+
+  if (invoice.id != null && invoice.id === note.invoice_id) problems.push('Credit cannot be applied to the invoice it was raised on.');
+  else if (!ALLOCATABLE_STATUSES.includes(invoice.status)) problems.push('Credit can only be applied to a sent or viewed invoice.');
+  else if (note.currency != null && invoice.currency != null && note.currency !== invoice.currency) {
+    problems.push('This invoice is in a different currency from the credit note.');
+  } else if (!isPos(balanceDec(invoice))) problems.push('This invoice has nothing left to pay.');
+  const invoiceOk = problems.length === (noteOk ? 0 : 1);
+
+  // The amount is only held to a side that passed above, so the list never
+  // says "more than the credit left" under "no credit left".
+  const amt = toDec(amount);
+  if (!amt || !isPos(amt)) problems.push('The amount must be more than 0.');
+  // Whole pennies, after the same 6 place wash as the rounding rule.
+  else if (cmp(roundTo(amt, 6), toPennies(amt)) !== 0) problems.push('The amount can have at most 2 decimal places.');
+  else if (noteOk && cmp(toPennies(amt), availableDec(note)) > 0) problems.push('This is more than the credit left on this credit note.');
+  else if (invoiceOk && cmp(toPennies(amt), balanceDec(invoice)) > 0) problems.push('This is more than is left to pay on this invoice.');
+
+  // Counted in characters, not UTF-16 units, as the database counts them.
+  if ([...trimmed(allocationNote)].length > ALLOCATION_NOTE_MAX) problems.push(`Keep the note to ${ALLOCATION_NOTE_MAX} characters or fewer.`);
+  return problems;
+}
+
+/**
+ * What applying the credit does, by the same sums as allocate_credit. Returns
+ * { problem } when the database would refuse, otherwise:
+ *   amount   what is applied, in pennies
+ *   note     { amount_allocated, refund_status, credit_available } afterwards:
+ *            'allocated' (Used) once nothing is left, 'owed' while some is
+ *   invoice  { amount_allocated, balance_due, settles, status, amount_paid }:
+ *            when nothing is left to pay it settles, becomes paid, and
+ *            amount_paid is set to the cash actually received (0 if none)
+ */
+export function allocationEffect({ note, invoice, amount, allocationNote } = {}) {
+  const problems = allocationProblems({ note, invoice, amount, allocationNote });
+  if (problems.length) return { problem: problems[0] };
+  const amt = toPennies(toDec(amount));
+  const left = sub(availableDec(note), amt);
+  const noteAfter = { ...note, amount_allocated: toNumber(add(noteAllocatedDec(note), amt)) };
+  const after = { ...invoice, amount_allocated: toNumber(add(allocatedDec(invoice), amt)) };
+  const settles = !isPos(balanceDec(after));
+  return {
+    problem: null,
+    amount: toNumber(amt),
+    note: { amount_allocated: noteAfter.amount_allocated, refund_status: statusWithLeft(noteAfter, left), credit_available: toNumber(left) },
+    invoice: {
+      amount_allocated: after.amount_allocated,
+      balance_due: balanceDue(after),
+      settles,
+      status: settles ? 'paid' : invoice.status,
+      amount_paid: settles ? toNumber(paidDec(invoice)) : invoice.amount_paid ?? null,
+    },
+  };
+}
+
+/**
+ * What removing applied credit does, by the same rules and in the same order
+ * as remove_credit_allocation (owner only; the screen checks the role).
+ * allocation is the credit_allocations row, note its credit note, invoice the
+ * invoice it was applied to and invoiceNotes that invoice's own credit notes.
+ * Returns { problem } when the database would refuse, otherwise:
+ *   note     { amount_allocated, refund_status, credit_available }: the credit
+ *            is available again, so a Used or Refunded note goes back to owed
+ *   invoice  { amount_allocated, balance_due, reopen, status }: a PAID invoice
+ *            that now has a balance reopens as sent, with amount_paid kept as
+ *            the cash received and paid_at kept as the day it came in (as a
+ *            cancelled credit note leaves it), so that cash stays in Collected
+ *            for its own month
+ *   refunds  [{ id, refund_status, refund_due }] for the invoice's own credit
+ *            notes whose credit available shrinks because less has settled
+ *            the invoice (as cancelCreditEffect); the removal is refused when
+ *            refunds paid or credit used from those notes would be more than
+ *            the customer overpaid
+ * Pass reason to check it as the database does. A note that already has a
+ * refund on it gets its credit back to apply again, but refundProblem refuses
+ * a second refund on it.
+ */
+export function removeAllocationEffect({ allocation, note, invoice, invoiceNotes = [], reason } = {}) {
+  if (!allocation) return { problem: 'Applied credit not found.' };
+  if (allocation.removed_at) return { problem: 'This applied credit has already been removed.' };
+  if (reason !== undefined) {
+    const length = [...trimmed(reason)].length;
+    if (length < REASON_MIN || length > REASON_MAX) return { problem: `Give a reason of ${REASON_MIN} to ${REASON_MAX} characters.` };
+  }
+  const amt = decOr0(allocation.amount);
+  // The cash is read before the credit comes off, so a paid invoice with no
+  // amount_paid keeps the cash it was taken to have.
+  const cash = toNumber(paidDec(invoice));
+  const after = { ...invoice, amount_paid: cash, amount_allocated: toNumber(max0(sub(allocatedDec(invoice), amt))) };
+  const issued = (invoiceNotes || []).filter((c) => c?.status === 'issued');
+  const fit = fitRefunds(issued, max0(paidBeyond(after, decOr0(invoice?.amount_credited))));
+  if (fit.problem === 'refunded') {
+    return { problem: 'A refund has already been paid on a credit note of this invoice. Without the credit applied it would be more than the customer overpaid, so the credit cannot be removed.' };
+  }
+  if (fit.problem === 'used') {
+    return { problem: 'Credit from a credit note of this invoice has already been used on an invoice. Without the credit applied it would be more than the customer overpaid, so the credit cannot be removed.' };
+  }
+
+  const noteAfter = { ...note, amount_allocated: toNumber(max0(sub(noteAllocatedDec(note), amt))) };
+  const left = max0(toPennies(sub(sub(decOr0(note?.refund_due), noteAllocatedDec(noteAfter)), refundedDec(note))));
+  const balance = balanceDue(after);
+  const reopen = invoice?.status === 'paid' && balance > 0;
+  return {
+    problem: null,
+    note: {
+      amount_allocated: noteAfter.amount_allocated,
+      refund_status: isPos(left) ? 'owed' : note?.refund_status,
+      credit_available: toNumber(left),
+    },
+    invoice: { amount_allocated: after.amount_allocated, balance_due: balance, reopen, status: reopen ? 'sent' : invoice?.status },
+    refunds: fit.refunds,
+  };
+}

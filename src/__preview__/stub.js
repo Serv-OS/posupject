@@ -1,5 +1,8 @@
 // In-memory Supabase for the design harness. Any query chain works; rows come from TABLES.
-import { cancelCreditEffect, creditTotals, issuedTotal, refundFor, validateCredit, REFUND_METHODS } from '../lib/creditNotes.js';
+import {
+  allocationEffect, amountPaid, cancelCreditEffect, creditAvailable, creditTotals, creditUse, issuedTotal, refundFor,
+  refundProblem, removeAllocationEffect, validateCredit,
+} from '../lib/creditNotes.js';
 const d = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
 const ts = (n, h = 0) => { const x = new Date(); x.setDate(x.getDate() + n); x.setHours(x.getHours() - h); return x.toISOString(); };
 const ME = 'u-peter';
@@ -206,11 +209,11 @@ const INV_PARTIES = { company_id: 'c2', location_id: 'l1', contact_id: 'ct1', co
 const INVOICES = [
   { id: 'inv1045', invoice_number: 1045, status: 'sent', ...INV_PARTIES, currency: 'GBP', tax_rate: 20,
     issue_date: d(-20), due_date: d(-6), email_to: 'dan@verde.example', po_number: 'PO-7731', public_token: 'harness-inv-1045',
-    subtotal: 991.5, tax_amount: 159.125, total: 1150.625, amount_paid: null, amount_credited: 468,
+    subtotal: 991.5, tax_amount: 159.125, total: 1150.625, amount_paid: null, amount_credited: 468, amount_allocated: 0,
     terms: 'Payment within 14 days.', notes: null, sent_at: ts(-20), viewed_at: ts(-19), paid_at: null, created_by: ME, created_at: ts(-20), updated_at: ts(-3) },
   { id: 'inv1046', invoice_number: 1046, status: 'paid', ...INV_PARTIES, currency: 'GBP', tax_rate: 20,
     issue_date: d(-12), due_date: d(2), email_to: 'dan@verde.example', po_number: null, public_token: 'harness-inv-1046',
-    subtotal: 298, tax_amount: 59.6, total: 357.6, amount_paid: 357.6, amount_credited: 0,
+    subtotal: 298, tax_amount: 59.6, total: 357.6, amount_paid: 357.6, amount_credited: 0, amount_allocated: 0,
     terms: null, notes: null, sent_at: ts(-12), viewed_at: ts(-11), paid_at: ts(-10), created_by: ME, created_at: ts(-12), updated_at: ts(-10) },
 ];
 const INVOICE_LINES = [
@@ -219,7 +222,7 @@ const INVOICE_LINES = [
   { id: 'il3', invoice_id: 'inv1045', name: 'Card processing set up', description: 'Zero rated', qty: 1, unit_price: 149, tax_rate: 0, sort: 2 },
   { id: 'il4', invoice_id: 'inv1046', name: 'Card reader', description: null, qty: 2, unit_price: 149, tax_rate: 20, sort: 0 },
 ];
-const CN_COMMON = { refunded_at: null, refund_method: null, refund_note: null, sent_at: null, cancelled_at: null, cancelled_by: null, cancel_reason: null, created_by: ME };
+const CN_COMMON = { amount_allocated: 0, refunded_amount: 0, refunded_at: null, refund_method: null, refund_note: null, sent_at: null, cancelled_at: null, cancelled_by: null, cancel_reason: null, created_by: ME };
 const CREDIT_NOTES = [
   { id: 'cn1001', credit_number: 1001, invoice_id: 'inv1045', ...INV_PARTIES, invoice: { invoice_number: 1045 }, status: 'issued', issue_date: d(-3),
     reason: 'One terminal came back unused.', subtotal: 390, tax_amount: 78, total: 468, currency: 'GBP', refund_status: 'none', refund_due: 0,
@@ -232,6 +235,53 @@ const CREDIT_NOTES = [
 const CREDIT_NOTE_LINES = [
   { id: 'cnl1', credit_note_id: 'cn1001', invoice_line_id: 'il1', name: 'Lightspeed terminal', description: 'Countertop, with stand', qty: 1, unit_price: 390, tax_rate: 20, sort: 0 },
   { id: 'cnl2', credit_note_id: 'cn1002', invoice_line_id: null, name: 'Goodwill credit', description: null, qty: 1, unit_price: 50, tax_rate: 20, sort: 0 },
+];
+// Harness only (#allocate, #invoice-allocated): credit applied to another
+// invoice, with Peter's own figures. Coffee Boy (c1) paid INV-1047's £1,000 in
+// full, then CN-1003 took £224 off it, so CN-1003 has £224 of credit
+// available. INV-1050 is Coffee Boy's next £1,000 invoice, not paid yet:
+// #allocate opens the apply screen on CN-1003, where INV-1050 is that
+// customer's one unpaid invoice and the amount starts at £224. Container
+// Coffee Shops (c4) is the same story already done, so #invoice-allocated
+// opens INV-1049 on its "Credit applied CN-1004" row and £776.00 balance
+// without applying anything first; CN-1004 on INV-1048 reads Used.
+const partiesOf = (companyId, email) => ({
+  company_id: companyId, location_id: null, contact_id: null, email_to: email,
+  company: { name: COMPANIES.find((c) => c.id === companyId).name }, location: null,
+});
+const COFFEE_BOY = partiesOf('c1', 'accounts@coffeeboy.example');
+const CONTAINER = partiesOf('c4', 'finance@containercoffee.example');
+// Two self order kiosks at 20% and a zero rated set up: 840 + 160 = 1,000.
+const THOUSAND = { currency: 'GBP', tax_rate: 20, subtotal: 840, tax_amount: 160, total: 1000, po_number: null, terms: null, notes: null, created_by: ME };
+INVOICES.push(
+  { id: 'inv1047', invoice_number: 1047, status: 'paid', ...COFFEE_BOY, ...THOUSAND, amount_paid: 1000, amount_credited: 224, amount_allocated: 0,
+    issue_date: d(-30), due_date: d(-16), public_token: 'harness-inv-1047', sent_at: ts(-30), viewed_at: ts(-29), paid_at: ts(-25), created_at: ts(-30), updated_at: ts(-4) },
+  { id: 'inv1048', invoice_number: 1048, status: 'paid', ...CONTAINER, ...THOUSAND, amount_paid: 1000, amount_credited: 224, amount_allocated: 0,
+    issue_date: d(-28), due_date: d(-14), public_token: 'harness-inv-1048', sent_at: ts(-28), viewed_at: ts(-27), paid_at: ts(-24), created_at: ts(-28), updated_at: ts(-3) },
+  { id: 'inv1049', invoice_number: 1049, status: 'viewed', ...CONTAINER, ...THOUSAND, amount_paid: null, amount_credited: 0, amount_allocated: 224,
+    issue_date: d(-6), due_date: d(8), public_token: 'harness-inv-1049', sent_at: ts(-6), viewed_at: ts(-5), paid_at: null, created_at: ts(-6), updated_at: ts(-1) },
+  { id: 'inv1050', invoice_number: 1050, status: 'sent', ...COFFEE_BOY, ...THOUSAND, amount_paid: null, amount_credited: 0, amount_allocated: 0,
+    issue_date: d(-2), due_date: d(12), public_token: 'harness-inv-1050', sent_at: ts(-2), viewed_at: null, paid_at: null, created_at: ts(-2), updated_at: ts(-2) },
+);
+['inv1047', 'inv1048', 'inv1049', 'inv1050'].forEach((id) => INVOICE_LINES.push(
+  { id: `${id}-l1`, invoice_id: id, name: 'Self order kiosk', description: 'Screen, stand and card reader', qty: 2, unit_price: 400, tax_rate: 20, sort: 0 },
+  { id: `${id}-l2`, invoice_id: id, name: 'Card processing set up', description: 'Zero rated', qty: 1, unit_price: 40, tax_rate: 0, sort: 1 },
+));
+// £192 off the kiosks (£160 plus £32 VAT) and a £32 goodwill credit: £224.
+const KIOSK_CREDIT = { status: 'issued', currency: 'GBP', reason: 'A kiosk stand came back unused, and goodwill for the late install.', subtotal: 192, tax_amount: 32, total: 224, refund_due: 224, ...CN_COMMON };
+CREDIT_NOTES.push(
+  { id: 'cn1003', credit_number: 1003, invoice_id: 'inv1047', ...COFFEE_BOY, invoice: { invoice_number: 1047 }, ...KIOSK_CREDIT, issue_date: d(-4),
+    refund_status: 'owed', public_token: 'harness-cn-1003', sent_at: ts(-4), created_at: ts(-4), updated_at: ts(-4) },
+  { id: 'cn1004', credit_number: 1004, invoice_id: 'inv1048', ...CONTAINER, invoice: { invoice_number: 1048 }, ...KIOSK_CREDIT, issue_date: d(-3),
+    refund_status: 'allocated', amount_allocated: 224, public_token: 'harness-cn-1004', sent_at: ts(-3), created_at: ts(-3), updated_at: ts(-1) },
+);
+[['cn1003', 'inv1047'], ['cn1004', 'inv1048']].forEach(([id, invId]) => CREDIT_NOTE_LINES.push(
+  { id: `${id}-l1`, credit_note_id: id, invoice_line_id: `${invId}-l1`, name: 'Self order kiosk', description: 'Stand returned', qty: 1, unit_price: 160, tax_rate: 20, sort: 0 },
+  { id: `${id}-l2`, credit_note_id: id, invoice_line_id: null, name: 'Goodwill credit', description: 'Late install', qty: 1, unit_price: 32, tax_rate: 0, sort: 1 },
+));
+const CREDIT_ALLOCATIONS = [
+  { id: 'alloc1', credit_note_id: 'cn1004', invoice_id: 'inv1049', amount: 224, allocated_on: d(-1), note: 'They paid £224 less against this invoice.',
+    created_by: ME, created_at: ts(-1), removed_at: null, removed_by: null, remove_reason: null },
 ];
 const SUPPORT_SETTINGS = [{ id: 1, business_name: 'ServOS', business_address: '1 Harness Street, Manchester M1 1AA', business_email: 'accounts@serv-os.app', business_phone: '0161 000 0000', logo_url: null, quote_accent: '#15C26A', invoice_terms: 'Payment within 14 days of the invoice date.' }];
 
@@ -247,7 +297,8 @@ export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' 
     { id: 'ex2', expense_date: d(-5), description: 'Train to Macclesfield', merchant: 'Northern', amount: 32.5, net: 32.5, vat_amount: 0, total: 32.5, currency: 'GBP', status: 'submitted', company_id: 'c2', location_id: 'l1', created_by: ME, created_at: ts(-5) },
   ], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY,
   onboarding_form_requests: PACK_REQUESTS, onboarding_form_secure: PACK_SECURE,
-  invoices: INVOICES, invoice_line_items: INVOICE_LINES, credit_notes: CREDIT_NOTES, credit_note_lines: CREDIT_NOTE_LINES, support_settings: SUPPORT_SETTINGS };
+  invoices: INVOICES, invoice_line_items: INVOICE_LINES, credit_notes: CREDIT_NOTES, credit_note_lines: CREDIT_NOTE_LINES, support_settings: SUPPORT_SETTINGS,
+  credit_allocations: CREDIT_ALLOCATIONS };
 export const MEMBERS_LIST = MEMBERS;
 
 // Harness only: delete() really removes rows from these tables, so saving an
@@ -324,10 +375,11 @@ const bucketApi = (bucket) => {
   };
 };
 
-// Harness only: the three credit note database functions, in memory. They run
-// the rules from src/lib/creditNotes.js, which carries the SQL's sums and its
-// messages word for word, so the raise screen, Mark refunded and Cancel behave
-// as they will live. Every other rpc answers as it always did.
+// Harness only: the credit note and applied credit database functions, in
+// memory. They run the rules from src/lib/creditNotes.js, which carries the
+// SQL's sums and its messages word for word, so the raise screen, Mark
+// refunded, Cancel, the apply screen and Remove behave as they will live.
+// Every other rpc answers as it always did.
 const creditFail = (message) => ({ data: null, error: { message } });
 const syncCredited = (invoiceId) => {
   const inv = TABLES.invoices.find((i) => i.id === invoiceId);
@@ -366,6 +418,43 @@ function creditRpc(name, args = {}) {
     syncCredited(inv.id);
     return { data: { ...note }, error: null };
   }
+  if (name === 'allocate_credit') {
+    // The same checks, sums and settling as allocate_credit (allocationEffect).
+    const cn = TABLES.credit_notes.find((c) => c.id === args.p_credit_note_id);
+    const inv = TABLES.invoices.find((i) => i.id === args.p_invoice_id);
+    const effect = allocationEffect({ note: cn, invoice: inv, amount: args.p_amount, allocationNote: args.p_note });
+    if (effect.problem) return creditFail(effect.problem);
+    const text = String(args.p_note ?? '').trim();
+    const row = {
+      id: `alloc${TABLES.credit_allocations.length + 1}-${Math.random().toString(36).slice(2, 7)}`, credit_note_id: cn.id, invoice_id: inv.id, amount: effect.amount, allocated_on: now.slice(0, 10),
+      note: text || null, created_by: ME, created_at: now, removed_at: null, removed_by: null, remove_reason: null,
+    };
+    TABLES.credit_allocations.push(row);
+    Object.assign(cn, { amount_allocated: effect.note.amount_allocated, refund_status: effect.note.refund_status, updated_at: now });
+    // Settled once nothing is left to pay, with amount_paid written out as the cash.
+    Object.assign(inv, { amount_allocated: effect.invoice.amount_allocated, updated_at: now,
+      ...(effect.invoice.settles ? { status: 'paid', paid_at: now, amount_paid: effect.invoice.amount_paid } : {}) });
+    return { data: { ...row }, error: null };
+  }
+  if (name === 'remove_credit_allocation') {
+    // The same refusals, restored credit and reopening as remove_credit_allocation.
+    const row = TABLES.credit_allocations.find((a) => a.id === args.p_allocation_id);
+    if (!row) return creditFail('Applied credit not found.');
+    const cn = TABLES.credit_notes.find((c) => c.id === row.credit_note_id);
+    const inv = TABLES.invoices.find((i) => i.id === row.invoice_id);
+    const invoiceNotes = TABLES.credit_notes.filter((c) => c.invoice_id === row.invoice_id);
+    const effect = removeAllocationEffect({ allocation: row, note: cn, invoice: inv, invoiceNotes, reason: args.p_reason ?? '' });
+    if (effect.problem) return creditFail(effect.problem);
+    // The cash, read while the credit is still on the invoice, as the database
+    // reads it. A reopened invoice keeps its paid_at, the day that cash came in.
+    const cash = amountPaid(inv);
+    Object.assign(row, { removed_at: now, removed_by: ME, remove_reason: String(args.p_reason).trim() });
+    Object.assign(cn, { amount_allocated: effect.note.amount_allocated, refund_status: effect.note.refund_status, updated_at: now });
+    effect.refunds.forEach((r) => Object.assign(invoiceNotes.find((c) => c.id === r.id), { refund_status: r.refund_status, refund_due: r.refund_due, updated_at: now }));
+    Object.assign(inv, { amount_allocated: effect.invoice.amount_allocated, updated_at: now,
+      ...(effect.invoice.reopen ? { status: 'sent', amount_paid: cash } : {}) });
+    return { data: { ...row }, error: null };
+  }
   const note = TABLES.credit_notes.find((c) => c.id === args.p_id);
   if (name === 'cancel_credit_note') {
     if (!note) return creditFail('Credit note not found.');
@@ -382,15 +471,17 @@ function creditRpc(name, args = {}) {
     return { data: { ...note }, error: null };
   }
   if (name === 'mark_credit_note_refunded') {
-    if (!note) return creditFail('Credit note not found.');
-    if (note.status !== 'issued') return creditFail('This credit note is cancelled.');
-    if (note.refund_status === 'refunded') return creditFail('This refund is already marked as refunded.');
-    if (note.refund_status !== 'owed') return creditFail('There is no refund owed on this credit note.');
-    if (!REFUND_METHODS.includes(args.p_method)) return creditFail('Choose how it was refunded: Bank transfer, Card refund or Other.');
+    // The same refusals, in the same order, as mark_credit_note_refunded: one
+    // refund per note, and only the credit still available is refunded (what
+    // was applied stays applied).
+    const problem = refundProblem({ note, method: args.p_method ?? null });
+    if (problem) return creditFail(problem);
+    const left = creditAvailable(note);
     const text = String(args.p_note || '').trim();
     if ([...text].length > 500) return creditFail('Keep the refund note to 500 characters or fewer.');
     // Noon UTC on the chosen day, as the database stores it.
-    Object.assign(note, { refund_status: 'refunded', refunded_at: `${args.p_refunded_on || now.slice(0, 10)}T12:00:00.000Z`, refund_method: args.p_method, refund_note: text || null, updated_at: now });
+    const refunded = Math.round((creditUse(note).refunded + left) * 100) / 100;
+    Object.assign(note, { refund_status: 'refunded', refunded_amount: refunded, refunded_at: `${args.p_refunded_on || now.slice(0, 10)}T12:00:00.000Z`, refund_method: args.p_method, refund_note: text || null, updated_at: now });
     return { data: { ...note }, error: null };
   }
   return { data: null, error: null };

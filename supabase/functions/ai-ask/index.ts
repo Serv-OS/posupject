@@ -17,7 +17,7 @@
 //    else. Never assume RLS is protecting you inside an edge function.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { balanceDue } from "../_shared/invoiceEmail.ts";
+import { amountAllocated, balanceDue, creditUse } from "../_shared/invoiceEmail.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -82,13 +82,14 @@ async function supportContext(): Promise<string[]> {
   return lines;
 }
 
-// Invoices that still ask for money. Payments and issued credit notes both come
-// off (balanceDue, the rule the invoice screens and invoice-checkout use), so a
-// credited invoice is never offered up as one to chase. select("*") rather than
-// named columns: amount_credited only exists once the credit notes migration is
-// applied, and posupcrm's invoices have no currency column, and naming a column
-// that is not there fails the whole query (it read as no unpaid invoices).
-// Only the fields below reach the prompt.
+// Invoices that still ask for money. Payments, issued credit notes and credit
+// applied from other invoices' credit notes all come off (balanceDue, the rule
+// the invoice screens and invoice-checkout use), so a credited invoice is never
+// offered up as one to chase. select("*") rather than named columns:
+// amount_credited and amount_allocated only exist once the credit notes and
+// credit allocations migrations are applied, and posupcrm's invoices have no
+// currency column, and naming a column that is not there fails the whole query
+// (it read as no unpaid invoices). Only the fields below reach the prompt.
 async function unpaidInvoices() {
   const { data } = await admin.from("invoices").select("*").in("status", ["sent", "viewed"]).limit(50);
   return { data: (data || []).filter((i: any) => balanceDue(i) > 0) };
@@ -113,7 +114,7 @@ async function overviewContext(isOwner: boolean): Promise<string[]> {
     `DEALS: ${(deals || []).length} open.` + (deals || []).slice(0, 10).map((d) =>
       `\n  - ${clip(d.name, 60)} | ${d.stage} | ${d.currency || "GBP"} ${d.value ?? "?"}${d.expected_close_date ? ` | expected ${d.expected_close_date}` : ""}`).join(""),
     `UNPAID INVOICES: ${(invoices || []).length}.` + (invoices || []).slice(0, 10).map((i) =>
-      `\n  - INV-${i.invoice_number} | ${i.currency || "GBP"} ${balanceDue(i)} due${balanceDue(i) !== Number(i.total) ? ` of ${i.total}` : ""} | ${i.status}${i.due_date ? ` | due ${i.due_date}${i.due_date < today ? " (OVERDUE)" : ""}` : ""}`).join(""),
+      `\n  - INV-${i.invoice_number} | ${i.currency || "GBP"} ${balanceDue(i)} due${balanceDue(i) !== Number(i.total) ? ` of ${i.total}` : ""}${amountAllocated(i) > 0 ? ` (${amountAllocated(i)} credit applied)` : ""} | ${i.status}${i.due_date ? ` | due ${i.due_date}${i.due_date < today ? " (OVERDUE)" : ""}` : ""}`).join(""),
     `ONBOARDINGS IN FLIGHT: ${(onboardings || []).length}.` + (onboardings || []).slice(0, 10).map((o) =>
       `\n  - stage ${o.stage}${o.go_live_date ? ` | go live ${o.go_live_date}` : ""}`).join(""),
     `OPEN TASKS: ${(tasks || []).length}.` + (tasks || []).slice(0, 10).map((t) =>
@@ -154,22 +155,45 @@ async function ticketContext(id: string): Promise<string[]> {
   return lines;
 }
 
+// Credit notes with credit available: money already taken on an invoice beyond
+// what it asks for, which can be refunded or applied to another invoice. Read
+// with select("*") so a database without the credit notes or credit allocations
+// migration reads as none rather than failing. A cancelled note has none.
+async function creditAvailableNotes(companyId: string) {
+  const { data, error } = await admin.from("credit_notes").select("*")
+    .eq("company_id", companyId).eq("status", "issued").eq("refund_status", "owed").limit(50);
+  if (error) return [];
+  return (data || []).map((c: any) => ({ note: c, use: creditUse(c) })).filter((x) => x.use.left > 0);
+}
+
 async function companyContext(id: string): Promise<string[]> {
-  const [{ data: c }, { data: tickets }, { data: deals }, { data: invoices }, { data: sites }] = await Promise.all([
+  const [{ data: c }, { data: tickets }, { data: deals }, { data: invoices }, { data: sites }, credit] = await Promise.all([
     admin.from("companies").select("*").eq("id", id).maybeSingle(),
     admin.from("tickets").select("ticket_number, subject, stage, created_at").eq("company_id", id).order("created_at", { ascending: false }).limit(25),
     admin.from("deals").select("name, stage, value, currency").eq("company_id", id).limit(20),
-    admin.from("invoices").select("invoice_number, total, status, due_date, currency").eq("company_id", id).order("issue_date", { ascending: false }).limit(20),
+    // select("*"): see unpaidInvoices. Only the fields below reach the prompt.
+    admin.from("invoices").select("*").eq("company_id", id).order("issue_date", { ascending: false }).limit(20),
     admin.from("locations").select("name, city").eq("company_id", id).limit(40),
+    creditAvailableNotes(id),
   ]);
   if (!c) return ["Company not found."];
+  // The balance for sent and viewed invoices: what is actually still owed after
+  // payments, credit notes and credit applied.
+  const owes = (i: any) => ["sent", "viewed"].includes(i.status);
   return [
     `CUSTOMER: ${c.name}`,
     `SITES (${(sites || []).length}): ${(sites || []).map((s) => s.name).join(", ") || "none"}`,
     `TICKETS (most recent ${(tickets || []).length}):`,
     ...(tickets || []).map((t) => `- #${t.ticket_number} "${clip(t.subject, 80)}" | ${t.stage} | ${ago(t.created_at)}`),
     `DEALS:`, ...(deals || []).map((d) => `- ${clip(d.name, 60)} | ${d.stage} | ${d.currency || "GBP"} ${d.value ?? "?"}`),
-    `INVOICES:`, ...(invoices || []).map((i) => `- INV-${i.invoice_number} | ${i.currency || "GBP"} ${i.total} | ${i.status}${i.due_date ? ` | due ${i.due_date}` : ""}`),
+    `INVOICES:`, ...(invoices || []).map((i: any) =>
+      `- INV-${i.invoice_number} | ${i.currency || "GBP"} ${i.total} | ${i.status}` +
+      `${owes(i) ? ` | ${balanceDue(i)} still to pay` : ""}` +
+      `${amountAllocated(i) > 0 ? ` | ${amountAllocated(i)} credit applied from other invoices` : ""}` +
+      `${i.due_date ? ` | due ${i.due_date}` : ""}`),
+    `CREDIT AVAILABLE (can be refunded or applied to another invoice):${credit.length ? "" : " none"}`,
+    ...credit.map(({ note, use }) =>
+      `- CN-${note.credit_number} | ${note.currency || "GBP"} ${use.left} available${use.used > 0 ? ` | ${use.used} already applied` : ""}${use.refunded > 0 ? ` | ${use.refunded} refunded` : ""}`),
   ];
 }
 

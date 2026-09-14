@@ -3,13 +3,16 @@ import { supabase } from '../../lib/supabase';
 import { currencyForCountry } from '../../lib/region';
 import { Receipt, Repeat } from 'lucide-react';
 import { money, invStatus, INV_BADGE, creditMarker, CN_BADGE } from './InvoicesPanel.jsx';
-import { balanceDue, creditNoteLabel, creditNoteStatusLabel } from '../../lib/creditNotes';
+import { balanceDue, creditNoteLabel, creditNoteStatusLabel, companyCreditAvailable } from '../../lib/creditNotes';
 
 // Invoices associated with a record. Pass exactly one of companyId /
 // locationId / contactId. "+ New" raises a draft pre-associated to the record.
 export default function InvoicesCard({ companyId, locationId, contactId, profile, onNavigate }) {
   const [invoices, setInvoices] = useState([]);
   const [credits, setCredits] = useState([]);
+  // Every credit note of this record with credit still to apply or refund,
+  // not only those under the invoices shown: "Credit available £224".
+  const [available, setAvailable] = useState([]);
   const [recurringCount, setRecurringCount] = useState(0);
   const canWrite = profile?.role === 'owner' || profile?.role === 'editor';
 
@@ -29,13 +32,18 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
         // not applied yet) just shows none.
         const ids = rows.filter(i => i.status !== 'draft').map(i => i.id);
         if (!ids.length) { setCredits([]); return; }
-        const c = await supabase.from('credit_notes')
-          .select('id, invoice_id, credit_number, status, total, currency, issue_date, refund_status')
+        // All columns: which ones there are depends on the migrations applied,
+        // and the status chip reads amount_allocated when it is there.
+        const c = await supabase.from('credit_notes').select('*')
           .in('invoice_id', ids).order('credit_number');
         if (live) setCredits(c.error ? [] : (c.data || []));
       });
     supabase.from('recurring_invoices').select('id', { count: 'exact', head: true }).eq(field, value).eq('active', true)
       .then(r => setRecurringCount(r.count || 0));
+    // A credit note carries its invoice's company, site and contact, so the
+    // same field finds them. An error (a migration not applied yet) is none.
+    supabase.from('credit_notes').select('*').eq(field, value).eq('status', 'issued').eq('refund_status', 'owed').order('credit_number')
+      .then(r => { if (live) setAvailable(r.error ? [] : (r.data || []).filter(c => c[field] === value)); });
     return () => { live = false; };
   }, [field, value]);
 
@@ -63,6 +71,9 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
   const outstanding = invoices.filter(i => !['paid', 'void', 'draft'].includes(i.status))
     .reduce((acc, i) => { const c = i.currency || 'GBP'; acc[c] = (acc[c] || 0) + balanceDue(i); return acc; }, {});
   const outstandingTotal = Object.values(outstanding).reduce((s, v) => s + v, 0);
+  // Pounds and dollars kept apart, as everywhere else.
+  const creditByCur = ['GBP', 'USD'].map(c => [c, companyCreditAvailable(available, c)]).filter(([, v]) => v > 0);
+  const creditFrom = available.filter(c => companyCreditAvailable([c]) > 0).map(creditNoteLabel);
 
   return (
     <div className="glass-card rounded-2xl overflow-hidden">
@@ -74,6 +85,13 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
         {canWrite && <button onClick={newInvoice} className="ml-auto text-xs text-ember hover:text-ember-deep font-medium">+ New</button>}
       </div>
       <div className="divide-y divide-bdr">
+        {creditByCur.length > 0 && (
+          <div className="px-4 py-2 text-[11px] flex items-center gap-2 bg-amber/10" title={creditFrom.length ? `From ${creditFrom.join(', ')}` : undefined}>
+            <span className="text-amber-deep font-semibold">Credit available</span>
+            <span className="text-muted truncate">{creditFrom.length === 1 ? creditFrom[0] : `${creditFrom.length} credit notes`}</span>
+            <span className="ml-auto font-semibold text-amber-deep tabular-nums shrink-0">{creditByCur.map(([c, v]) => money(v, c)).join(' + ')}</span>
+          </div>
+        )}
         {invoices.length === 0 ? (
           <div className="px-4 py-4 text-xs text-dim italic text-center">No invoices yet</div>
         ) : invoices.map(inv => {

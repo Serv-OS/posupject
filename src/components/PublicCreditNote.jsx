@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { currencyLocale, fmtMoney, taxLabelFor } from '../lib/money';
-import { creditNoteLabel, creditNoteStatusLabel, creditTotals } from '../lib/creditNotes';
+import { creditNoteLabel, creditNoteStatusLabel, creditTotals, creditUse } from '../lib/creditNotes';
 import { creditNotePdf } from '../lib/invoicePdf';
 import { Badge, Page } from './PublicInvoice.jsx';
 
@@ -8,6 +8,11 @@ import { Badge, Page } from './PublicInvoice.jsx';
 // email and from the invoice page. Same look as the invoice page; the customer
 // can read it and download it as a PDF. credit-note-public answers 404 for a
 // cancelled note, so an old link never promises a credit that was taken back.
+//
+// When the customer had already paid for what the note credits, the note hands
+// money back. That credit can be refunded or applied to another invoice, so
+// the page lists "Applied to invoice INV-1050: £224.00" for each invoice it
+// went to, any refund, and what is left.
 //
 // jsPDF comes in with a normal import, not import() on click: the catch-all
 // rewrite in vercel.json serves index.html for a chunk that went stale after a
@@ -22,9 +27,12 @@ const fmtDate = (d, locale = 'en-GB') => {
   return isNaN(date) ? String(d) : date.toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric' });
 };
 
+// Keyed on creditNoteStatusLabel.
 const STATUS_BADGE = {
   Issued: { bg: '#e0e7ff', color: '#3730a3' },
-  'Refund owed': { bg: '#fef3c7', color: '#92400e' },
+  Available: { bg: '#fef3c7', color: '#92400e' },
+  'Part used': { bg: '#fef3c7', color: '#92400e' },
+  Used: { bg: '#d1fae5', color: '#065f46' },
   Refunded: { bg: '#d1fae5', color: '#065f46' },
   Cancelled: { bg: '#fee2e2', color: '#991b1b' },
 };
@@ -70,6 +78,15 @@ export default function PublicCreditNote({ token }) {
   const taxAmount = note.tax_amount ?? sums.tax_amount;
   const total = note.total ?? sums.total;
   const invBalance = inv.balance_due == null ? null : Math.max(0, Number(inv.balance_due) || 0);
+  // Where the credit went. A credit-note-public from before applied credit
+  // sends none of these, and creditUse then reads the note as it did.
+  const handsBack = !cancelled && ['owed', 'allocated', 'refunded'].includes(note.refund_status);
+  const use = creditUse(note);
+  const applied = handsBack ? (data.applied_to || []).filter((a) => Number(a?.amount) > 0) : [];
+  // " on 6 September 2026 by bank transfer" to end a sentence, and the same
+  // as a line of its own ("On 6 September 2026 by bank transfer").
+  const refundedOn = `${note.refunded_at ? ` on ${fmtDate(note.refunded_at, locale)}` : ''}${REFUND_HOW[note.refund_method] || ''}`;
+  const refundedLine = refundedOn.trim().replace(/^./, (c) => c.toUpperCase());
 
   const downloadPdf = async () => {
     setPdfBusy(true); setError('');
@@ -77,6 +94,7 @@ export default function PublicCreditNote({ token }) {
       await creditNotePdf({
         note: { ...note, credit_number: number, subtotal, tax_amount: taxAmount, total },
         lines: items,
+        allocations: applied,
         invoice: { invoice_number: inv.number, issue_date: inv.issue_date },
         seller,
         billTo: {
@@ -109,7 +127,7 @@ export default function PublicCreditNote({ token }) {
             <div className="text-xs text-slate-500 mt-1">Issued {fmtDate(note.issue_date, locale)}</div>
             {invLabel && <div className="text-xs text-slate-500">For invoice {invLabel}</div>}
             <div className="mt-2">
-              <Badge {...(STATUS_BADGE[status] || STATUS_BADGE.Issued)}>{status}</Badge>
+              <Badge {...(STATUS_BADGE[status] || STATUS_BADGE.Issued)}>{status === 'Available' ? 'Credit available' : status}</Badge>
             </div>
           </div>
         </div>
@@ -181,14 +199,35 @@ export default function PublicCreditNote({ token }) {
             <div className="rounded-xl p-4 text-center font-semibold" style={{ background: '#fef2f2', color: '#991b1b' }}>
               This credit note was cancelled. It no longer reduces the invoice.
             </div>
-          ) : note.refund_status === 'owed' ? (
+          ) : handsBack && !applied.length && !use.used && !use.refunded && use.left > 0 ? (
             <div className="rounded-xl p-4 text-center" style={{ background: '#fffbeb', color: '#92400e' }}>
-              <div className="font-semibold">Refund owed to you: {money(note.refund_due, currency)}</div>
-              <div className="text-xs mt-1">You had already paid for what this note credits, so this will be paid back to you.</div>
+              <div className="font-semibold">Credit available to you: {money(use.left, currency)}</div>
+              <div className="text-xs mt-1">You had already paid for what this note credits. It can be paid back to you or taken off another invoice.</div>
             </div>
-          ) : note.refund_status === 'refunded' ? (
+          ) : handsBack && !applied.length && !use.used && use.refunded > 0 && !use.left ? (
             <div className="rounded-xl p-4 text-center font-semibold" style={{ background: '#ecfdf5', color: '#065f46' }}>
-              ✓ Refunded {money(note.refund_due, currency)}{note.refunded_at ? ` on ${fmtDate(note.refunded_at, locale)}` : ''}{REFUND_HOW[note.refund_method] || ''}
+              ✓ Refunded {money(use.refunded, currency)}{refundedOn}
+            </div>
+          ) : handsBack && (applied.length || use.used || use.refunded || use.left) ? (
+            <div className="rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-400">Your credit</div>
+              <div className="divide-y divide-slate-100">
+                {applied.length ? applied.map((a, i) => (
+                  <CreditRow key={`${a.invoice_number}-${i}`} currency={currency}
+                    label={a.invoice_number != null
+                      ? <>Applied to invoice <span className="whitespace-nowrap">INV-{a.invoice_number}</span></>
+                      : 'Applied to another invoice'}
+                    sub={a.allocated_on ? `On ${fmtDate(a.allocated_on, locale)}` : ''}
+                    amount={a.amount}
+                    link={a.public_token ? <a href={`/i/${encodeURIComponent(a.public_token)}`} className="text-xs font-semibold" style={{ color: accent }}>View</a> : null} />
+                )) : use.used > 0 && (
+                  <CreditRow currency={currency} label="Applied to your other invoices" amount={use.used} />
+                )}
+                {use.refunded > 0 && (
+                  <CreditRow currency={currency} label="Refunded to you" sub={refundedLine} amount={use.refunded} />
+                )}
+                <CreditRow currency={currency} strong label="Credit left" amount={use.left} />
+              </div>
             </div>
           ) : null}
 
@@ -217,5 +256,21 @@ export default function PublicCreditNote({ token }) {
       </div>
       <div className="text-center text-[10px] text-slate-300 pt-3">Powered by ServOS</div>
     </Page>
+  );
+}
+
+// One line of "Your credit": what it was, a small line under it, the amount.
+function CreditRow({ label, sub, amount, currency, link = null, strong = false }) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+      <div className="min-w-0">
+        <div className={`text-sm break-words ${strong ? 'font-bold text-slate-900' : 'font-semibold text-slate-800'}`}>{label}</div>
+        {sub && <div className="text-xs text-slate-500">{sub}</div>}
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className={`text-sm tabular-nums ${strong ? 'font-bold text-slate-900' : 'font-semibold text-slate-800'}`}>{fmtMoney(amount, currency)}</span>
+        {link}
+      </div>
+    </div>
   );
 }

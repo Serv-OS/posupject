@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { fmtMoney, taxLabelFor } from '../lib/money';
-import { amountPaid, balanceDue, creditableLeft, creditNoteLabel, creditState } from '../lib/creditNotes';
+import { amountPaid, balanceDue, creditableLeft, creditNoteLabel, creditState, markPaidAmount, settledAmount } from '../lib/creditNotes';
 
 // Public hosted invoice page (/i/<token>). Branded from support_settings,
 // customer pays by card via Stripe Checkout. Credit notes against the invoice
-// are listed under the totals and the Pay button asks only for what is left.
+// are listed under the totals, credit applied from another invoice's credit
+// note shows as "Credit applied CN-1001" above the balance due, and the Pay
+// button asks only for what is left.
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 const money = (v, currency = 'GBP') => fmtMoney(v, currency);
@@ -60,11 +62,12 @@ export default function PublicInvoice({ token }) {
   const taxLabel = taxLabelFor(currency);
 
   // The app and the edge functions deploy separately, so an invoice-public
-  // without amount_credited or balance_due can still answer for a while. The
-  // same rules from creditNotes.js fill balance_due in (as no credit) rather
-  // than break the page.
+  // without amount_credited, amount_allocated or balance_due can still answer
+  // for a while. The same rules from creditNotes.js fill balance_due in (as no
+  // credit) rather than break the page.
   const credited = Number(inv.amount_credited) || 0;
-  const sums = { ...inv, amount_credited: credited };
+  const allocated = Number(inv.amount_allocated) || 0;
+  const sums = { ...inv, amount_credited: credited, amount_allocated: allocated };
   const balance = inv.balance_due != null ? Math.max(0, Number(inv.balance_due) || 0) : balanceDue(sums);
   const paid = amountPaid(sums);
   const credit = creditState(sums);
@@ -72,7 +75,21 @@ export default function PublicInvoice({ token }) {
   // it is not overdue and there is no Pay button.
   const settled = !isPaid && balance <= 0;
   const overdue = !isPaid && !settled && !!inv.overdue;
-  const showBalance = credited > 0 || (paid > 0 && !isPaid);
+  const showBalance = credited > 0 || allocated > 0 || (paid > 0 && !isPaid);
+
+  // Credit applied from other invoices' credit notes: one row each. Without
+  // the rows (an older invoice-public) the total still shows as one row.
+  const applied = (data.credit_applied || []).filter((a) => Number(a?.amount) > 0);
+  const appliedRows = applied.length ? applied : allocated > 0 ? [{ amount: allocated }] : [];
+  // Back from Stripe before the payment has been recorded: the card paid the
+  // balance, so the rows show it paid rather than a balance still owing.
+  const pendingPaid = justPaid && inv.status !== 'paid';
+  const cashRow = pendingPaid ? markPaidAmount(sums) : paid;
+  const balanceRow = pendingPaid ? 0 : balance;
+  // Settled beyond what the invoice now asks for (paid, then credited): that
+  // money is on the invoice's credit notes, so the rows say so rather than
+  // print sums that do not add up.
+  const overpaid = inv.status === 'paid' ? Math.max(0, Math.round((settledAmount(sums) - creditableLeft(sums)) * 100) / 100) : 0;
 
   return (
     <Page>
@@ -154,12 +171,30 @@ export default function PublicInvoice({ token }) {
                 {credited > 0 && <div className="flex justify-between text-slate-500"><span>Credit notes</span><span className="tabular-nums">-{money(credited, currency)}</span></div>}
                 {/* A paid invoice that was credited afterwards was paid more than
                     it now asks for. That refund lives on the credit note, so
-                    here the rows stop at what the invoice now comes to. */}
-                {isPaid ? (
+                    here the rows stop at what the invoice now comes to. With
+                    credit applied from another invoice, the rows go on down to
+                    the balance, since the credit is part of how it was settled. */}
+                {isPaid && !appliedRows.length ? (
                   <div className="flex justify-between text-base font-bold text-slate-900 pt-1.5 border-t border-slate-200"><span>Total after credit</span><span className="tabular-nums">{money(creditableLeft(sums), currency)}</span></div>
                 ) : <>
-                  {paid > 0 && <div className="flex justify-between text-slate-500"><span>Paid</span><span className="tabular-nums">-{money(paid, currency)}</span></div>}
-                  <div className="flex justify-between text-base font-bold text-slate-900 pt-1.5 border-t border-slate-200"><span>Balance due</span><span className="tabular-nums">{money(balance, currency)}</span></div>
+                  {appliedRows.map((a, i) => {
+                    const label = creditNoteLabel(a.number);
+                    return (
+                      <div key={`${label}-${i}`} className="flex justify-between gap-3 text-slate-500">
+                        {/* CN-1003 kept whole, so a narrow phone never breaks it at the hyphen. */}
+                        <span className="min-w-0">
+                          Credit applied{label ? ' ' : ''}
+                          {label && (a.public_token
+                            ? <a href={`/c/${encodeURIComponent(a.public_token)}`} className="font-semibold whitespace-nowrap" style={{ color: accent }}>{label}</a>
+                            : <span className="whitespace-nowrap">{label}</span>)}
+                        </span>
+                        <span className="tabular-nums shrink-0">-{money(a.amount, currency)}</span>
+                      </div>
+                    );
+                  })}
+                  {cashRow > 0 && <div className="flex justify-between text-slate-500"><span>Paid</span><span className="tabular-nums">-{money(cashRow, currency)}</span></div>}
+                  <div className="flex justify-between text-base font-bold text-slate-900 pt-1.5 border-t border-slate-200"><span>Balance due</span><span className="tabular-nums">{money(balanceRow, currency)}</span></div>
+                  {overpaid > 0 && <div className="text-xs text-slate-500 text-right">{money(overpaid, currency)} more was paid than is now owed.{creditNotes.length ? ' It is on the credit notes below.' : ''}</div>}
                 </>}
               </> : (
                 <div className="flex justify-between text-base font-bold text-slate-900 pt-1.5 border-t border-slate-200"><span>Total due</span><span className="tabular-nums">{money(inv.total, currency)}</span></div>

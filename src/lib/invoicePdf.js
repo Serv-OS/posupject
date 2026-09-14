@@ -9,7 +9,7 @@
 // and the credit note stay matched.
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { amountPaid, balanceDue, creditNoteLabel, creditState, creditTotals } from './creditNotes.js'
+import { amountPaid, balanceDue, creditableLeft, creditNoteLabel, creditNoteStatusLabel, creditState, creditTotals, creditUse, settledAmount } from './creditNotes.js'
 
 const hexToRgb = (hex) => {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '')
@@ -97,8 +97,12 @@ async function drawHeader(ctx, { seller = {}, title, fallbackName, meta = [], pi
 
   if (pill) {
     ry += 4
-    doc.setFillColor(...pill.bg).roundedRect(W - M - 78, ry - 11, 78, 18, 4, 4, 'F')
-    doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(...pill.fg).text(pill.t, W - M - 39, ry + 1, { align: 'center' })
+    // 78pt wide, or wider for a longer word (CREDIT AVAILABLE), so the text
+    // never runs out of its pill.
+    doc.setFont('helvetica', 'bold').setFontSize(9)
+    const pw = Math.max(78, Math.ceil(doc.getTextWidth(pill.t)) + 16)
+    doc.setFillColor(...pill.bg).roundedRect(W - M - pw, ry - 11, pw, 18, 4, 4, 'F')
+    doc.setTextColor(...pill.fg).text(pill.t, W - M - pw / 2, ry + 1, { align: 'center' })
     ry += 16
   }
 
@@ -211,7 +215,13 @@ function drawFooter(ctx, seller = {}, label) {
 }
 
 // ── Invoice ──────────────────────────────────────────────────────────────────
-export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, seller = {}, billTo = {}, fmt, taxLabel = 'Tax', dateLocale = 'en-US' }) {
+// allocations (optional): the credit applied to this invoice from other
+// invoices' credit notes, as credit_allocations rows or the public page's rows,
+// each { credit_number or number or credit_note: { credit_number }, amount,
+// removed_at }. Removed ones are left out. Each prints as "Credit applied
+// CN-1001" above the balance due. Without them, inv.amount_allocated (or
+// totals.allocated) still prints as one "Credit applied" row.
+export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, seller = {}, billTo = {}, allocations = [], fmt, taxLabel = 'Tax', dateLocale = 'en-US' }) {
   const money = moneyFn(fmt)
   const ctx = startDoc(seller)
   const number = inv.invoice_number ?? inv.number ?? ''
@@ -219,18 +229,23 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
   const status = (inv.status || '').toLowerCase()
   const total = totals.total ?? inv.total ?? 0
 
-  // Credit notes (src/lib/creditNotes.js). With none, everything below reads
-  // exactly as it did before credit notes existed.
+  // Credit notes and credit applied from other invoices (src/lib/creditNotes.js).
+  // With neither, everything below reads exactly as it did before credit notes
+  // existed. Credit applied is a settlement, not a payment: it has rows of its
+  // own and never adds to Paid.
   const credited = Number(totals.credited ?? inv.amount_credited) || 0
-  const hasCredit = credited > 0
-  const state = { status, total, amount_paid: totals.paid ?? inv.amount_paid, amount_credited: credited }
+  const allocated = Number(totals.allocated ?? inv.amount_allocated) || 0
+  const hasCredit = credited > 0 || allocated > 0
+  const state = { status, total, amount_paid: totals.paid ?? inv.amount_paid, amount_credited: credited, amount_allocated: allocated }
   const balance = balanceDue(state)
   const paid = amountPaid(state)
+  const applied = (allocations || []).filter((a) => a && !a.removed_at && Number(a.amount) > 0)
+  const appliedRows = applied.length ? applied : allocated > 0 ? [{ amount: allocated }] : []
 
   // Fully credited with nothing paid is not overdue: nothing is owed.
   const pill = status === 'paid'
     ? { t: 'PAID', bg: [209, 250, 229], fg: [6, 95, 70] }
-    : (hasCredit && creditState(state) === 'full' && paid === 0) ? { t: 'CREDITED', bg: [224, 231, 255], fg: [55, 48, 163] }
+    : (credited > 0 && creditState(state) === 'full' && paid === 0) ? { t: 'CREDITED', bg: [224, 231, 255], fg: [55, 48, 163] }
       : ((inv.overdue || status === 'overdue') && !(hasCredit && balance === 0)) ? { t: 'OVERDUE', bg: [254, 226, 226], fg: [153, 27, 27] }
         : null
   await drawHeader(ctx, {
@@ -253,12 +268,17 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
   ]
   if (hasCredit) {
     // The customer pays the balance, so every step down to it is shown.
-    rows.push(['Credited', credited, { minus: true }])
+    if (credited > 0) rows.push(['Credited', credited, { minus: true }])
+    for (const a of appliedRows) {
+      const label = creditNoteLabel(a.credit_number ?? a.number ?? a.credit_note?.credit_number)
+      rows.push([label ? `Credit applied ${label}` : 'Credit applied', a.amount, { minus: true }])
+    }
     if (paid > 0) rows.push(['Paid', paid, { color: [6, 120, 70], minus: true }])
     // Paid in full and then credited: the balance stops at 0, so say where the
     // rest went rather than print sums that do not add up. The credit note
-    // itself says whether it has been refunded.
-    const over = paid - (Number(total) - credited)
+    // itself says whether it has been refunded. Settled is cash plus credit
+    // applied, both in pennies.
+    const over = settledAmount(state) - creditableLeft(state)
     rows.push(['Balance due', balance, { bold: true, note: over > 0.005 ? `${money(over)} more was paid than is now owed` : null }])
   } else if (status === 'paid') {
     const paid = totals.paid ?? inv.amount_paid ?? totals.total ?? inv.total ?? 0
@@ -282,11 +302,17 @@ export async function downloadInvoicePdf(data) {
 
 // ── Credit note ──────────────────────────────────────────────────────────────
 // note: a credit_notes row (credit_number or number, issue_date, reason, status,
-// subtotal, tax_amount, total, refund_status, refund_due, refunded_at,
-// refund_method, cancelled_at). lines: its credit_note_lines. invoice: the
-// invoice it credits (invoice_number or number, issue_date). The rest is the
-// same as buildInvoiceDoc, and fmt should format in the note's currency.
-export async function buildCreditNoteDoc({ note = {}, lines = [], invoice = {}, seller = {}, billTo = {}, fmt, taxLabel = 'Tax', dateLocale = 'en-US' } = {}) {
+// subtotal, tax_amount, total, refund_status, refund_due, amount_allocated,
+// refunded_amount, refunded_at, refund_method, cancelled_at). lines: its
+// credit_note_lines. invoice: the invoice it credits (invoice_number or number,
+// issue_date). allocations (optional): where its credit was applied, as
+// credit_allocations rows or the public page's rows, each { invoice_number or
+// number or invoice: { invoice_number }, amount, allocated_on, removed_at };
+// removed ones are left out. Each prints as "Applied to invoice INV-1050", then
+// any refund and the credit left. Without them, amount_allocated still prints
+// as one row. The rest is the same as buildInvoiceDoc, and fmt should format
+// in the note's currency.
+export async function buildCreditNoteDoc({ note = {}, lines = [], invoice = {}, seller = {}, billTo = {}, allocations = [], fmt, taxLabel = 'Tax', dateLocale = 'en-US' } = {}) {
   const money = moneyFn(fmt)
   const ctx = startDoc(seller)
   const { doc, M } = ctx
@@ -295,9 +321,13 @@ export async function buildCreditNoteDoc({ note = {}, lines = [], invoice = {}, 
   const invLabel = invNumber == null || invNumber === '' ? '' : `INV-${invNumber}`
   const cancelled = note.status === 'cancelled'
 
+  // The chip the screens show (creditNoteStatusLabel): Available (as CREDIT
+  // AVAILABLE, the customer's words) and Part used in amber, Used and Refunded
+  // in green. A plain issued note has none.
+  const status = creditNoteStatusLabel(note)
   const pill = cancelled ? { t: 'CANCELLED', bg: [254, 226, 226], fg: [153, 27, 27] }
-    : note.refund_status === 'owed' ? { t: 'REFUND OWED', bg: [254, 243, 199], fg: [146, 64, 14] }
-      : note.refund_status === 'refunded' ? { t: 'REFUNDED', bg: [209, 250, 229], fg: [6, 95, 70] }
+    : ['Available', 'Part used'].includes(status) ? { t: status === 'Available' ? 'CREDIT AVAILABLE' : 'PART USED', bg: [254, 243, 199], fg: [146, 64, 14] }
+      : ['Used', 'Refunded'].includes(status) ? { t: status.toUpperCase(), bg: [209, 250, 229], fg: [6, 95, 70] }
         : null
   await drawHeader(ctx, {
     seller, title: 'CREDIT NOTE', fallbackName: 'Credit note', pill,
@@ -328,11 +358,28 @@ export async function buildCreditNoteDoc({ note = {}, lines = [], invoice = {}, 
     [taxLabel, note.tax_amount ?? sums.tax_amount],
     ['Total credited', note.total ?? sums.total, { bold: true, color: [ar, ag, ab], rule: true }],
   ]
-  if (!cancelled && note.refund_status === 'owed') {
-    rows.push(['Refund owed', note.refund_due, { color: [146, 64, 14], note: 'Paid on the invoice, to be refunded' }])
-  } else if (!cancelled && note.refund_status === 'refunded') {
-    const how = [note.refund_method, fmtDate(note.refunded_at, dateLocale)].filter(Boolean).join(', ')
-    rows.push(['Refunded', note.refund_due, { color: [6, 120, 70], note: how || null }])
+  // Money the note hands back: applied to invoices, refunded, and what is left.
+  if (!cancelled && ['owed', 'allocated', 'refunded'].includes(note.refund_status)) {
+    const use = creditUse(note)
+    const applied = (allocations || []).filter((a) => a && !a.removed_at && Number(a.amount) > 0)
+    if (applied.length) {
+      for (const a of applied) {
+        const n = a.invoice_number ?? a.number ?? a.invoice?.invoice_number
+        rows.push([n == null || n === '' ? 'Applied to another invoice' : `Applied to invoice INV-${n}`, a.amount,
+          { note: a.allocated_on ? `On ${fmtDate(a.allocated_on, dateLocale)}` : null }])
+      }
+    } else if (use.used > 0) {
+      rows.push(['Applied to other invoices', use.used])
+    }
+    if (use.refunded > 0) {
+      const how = [note.refund_method, fmtDate(note.refunded_at, dateLocale)].filter(Boolean).join(', ')
+      rows.push(['Refunded', use.refunded, { color: [6, 120, 70], note: how || null }])
+    }
+    if (use.left > 0 && !use.used && !use.refunded) {
+      rows.push(['Credit available', use.left, { color: [146, 64, 14], note: 'Can be refunded or used on another invoice' }])
+    } else if (use.left > 0 || use.used > 0) {
+      rows.push(['Credit left', use.left, { bold: use.left > 0, color: use.left > 0 ? [146, 64, 14] : undefined }])
+    }
   }
   drawTotals(ctx, rows, money)
 

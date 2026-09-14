@@ -20,6 +20,23 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 // line break or a second address must never get through.
 const looksLikeEmail = (s: string) => /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(s);
 
+// The invoices this note's credit has been applied to, oldest first, as
+// [{ invoice_number, amount }], so the email names each one ("Applied to
+// invoice INV-1050"). Read as plain rows rather than a join. Before the credit
+// allocations migration the table is not there, and an invoice that cannot be
+// read leaves no number to name, so both read as none: the email then gives
+// the credit used as one line.
+async function appliedInvoices(supabase: any, noteId: string): Promise<{ invoice_number: number; amount: number }[]> {
+  const { data: rows, error } = await supabase.from("credit_allocations")
+    .select("invoice_id, amount, created_at").eq("credit_note_id", noteId).is("removed_at", null).order("created_at");
+  if (error || !rows?.length) return [];
+  const ids = [...new Set(rows.map((r: any) => r.invoice_id))];
+  const { data: invoices } = await supabase.from("invoices").select("id, invoice_number").in("id", ids);
+  const numberOf = new Map((invoices || []).map((i: any) => [i.id, i.invoice_number]));
+  const named = rows.map((r: any) => ({ invoice_number: numberOf.get(r.invoice_id), amount: Number(r.amount) || 0 }));
+  return named.every((a: any) => a.invoice_number != null) ? named : [];
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -59,7 +76,8 @@ serve(async (req) => {
 
     const appUrl = Deno.env.get("APP_URL") || "https://posupject.vercel.app";
     const link = `${appUrl}/c/${note.public_token}`;
-    const { subject, html } = creditNoteEmailHtml(note, inv, seller || {}, link);
+    const applied = await appliedInvoices(supabase, note.id);
+    const { subject, html } = creditNoteEmailHtml(note, inv, seller || {}, link, applied);
     await sendInvoiceEmail(supabase, recipient, subject, html);
 
     // The email has gone either way. A failed stamp only loses the "sent"

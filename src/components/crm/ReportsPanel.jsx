@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { BarChart3, ArrowUpDown } from 'lucide-react';
 import { invStatus } from './InvoicesPanel.jsx';
 import { fmtMoney, CURRENCIES } from '../../lib/money';
-import { balanceDue } from '../../lib/creditNotes';
+import { balanceDue, amountPaid, creditUse } from '../../lib/creditNotes';
 
 // ── date helpers ────────────────────────────────────────────────────────────
 const iso = (d) => d.toISOString().slice(0, 10);
@@ -14,15 +14,22 @@ const addMonths = (d, n) => { const x = new Date(d); x.setMonth(x.getMonth() + n
 const inRange = (dstr, from, to) => { const d = (dstr || '').slice(0, 10); return !!d && d >= from && d <= to; };
 const acctDate = (i) => (i.issue_date || i.created_at || '').slice(0, 10);   // when invoiced
 const billed = (i) => Number(i.total || 0);
-// Still outstanding: total less payments less issued credit notes, never below 0.
+// Still outstanding: total less payments less issued credit notes less credit
+// applied from other invoices, never below 0.
 const owed = (i) => balanceDue(i);
 const creditAmt = (c) => Number(c.total || 0);
-const collectedAmt = (i) => Number(i.amount_paid ?? i.total ?? 0);
+// Cash only. Credit applied from another invoice's credit note is neither
+// revenue nor cash: Invoiced keeps the invoice's full total (the credit note
+// that gave the credit already came off Invoiced where it was issued), and
+// Collected counts what was actually paid, so a 1,000 invoice settled by 224
+// of credit and 776 in cash collects 776.
+const collectedAmt = (i) => amountPaid(i);
 // Money handed back on a credit note, taken off Collected in the period it was
 // refunded: a March payment refunded in April still counts in March, and April
-// shows the money going back out.
-const isRefunded = (c) => c.refund_status === 'refunded' && !!c.refunded_at;
-const refundAmt = (c) => Number(c.refund_due || 0);
+// shows the money going back out. Only what was refunded: credit used on
+// another invoice never left the business.
+const refundAmt = (c) => creditUse(c).refunded;
+const isRefunded = (c) => !!c.refunded_at && refundAmt(c) > 0;
 
 // ── tiny UI atoms (match the codebase idiom) ────────────────────────────────
 function Stat({ label, value, tone, sub }) {
@@ -64,17 +71,21 @@ export default function ReportsPanel({ profile, onNavigate }) {
   useEffect(() => { (async () => {
     setLoading(true);
     const INV_COLS = 'id, invoice_number, total, amount_paid, currency, status, paid_at, due_date, issue_date, created_at, company_id, location_id, company:companies(name), location:locations(name)';
-    const [invC, co, cn] = await Promise.all([
-      supabase.from('invoices').select(`${INV_COLS}, amount_credited`).order('issue_date', { ascending: false }),
+    const CN_COLS = 'id, invoice_id, total, currency, status, issue_date, refund_status, refund_due, refunded_at';
+    const [invA, co, cnA] = await Promise.all([
+      supabase.from('invoices').select(`${INV_COLS}, amount_credited, amount_allocated`).order('issue_date', { ascending: false }),
       supabase.from('companies').select('id, name').order('name'),
-      supabase.from('credit_notes').select('id, invoice_id, total, currency, status, issue_date, refund_status, refund_due, refunded_at').eq('status', 'issued'),
+      supabase.from('credit_notes').select(`${CN_COLS}, amount_allocated, refunded_amount`).eq('status', 'issued'),
     ]);
-    // Guarded like money-out below: until the credit notes migration is
-    // applied, amount_credited does not exist and the whole select would fail.
-    // Fall back to the old columns so the report still loads, with no credit.
-    const inv = invC.error
-      ? await supabase.from('invoices').select(INV_COLS).order('issue_date', { ascending: false })
-      : invC;
+    // Guarded like money-out below: until the credit allocations migration is
+    // applied amount_allocated and refunded_amount do not exist, and until the
+    // credit notes one amount_credited does not either, and the whole select
+    // would fail. Each step falls back to the columns before it, so the report
+    // still loads with what the database has.
+    let inv = invA;
+    if (inv.error) inv = await supabase.from('invoices').select(`${INV_COLS}, amount_credited`).order('issue_date', { ascending: false });
+    if (inv.error) inv = await supabase.from('invoices').select(INV_COLS).order('issue_date', { ascending: false });
+    const cn = cnA.error ? await supabase.from('credit_notes').select(CN_COLS).eq('status', 'issued') : cnA;
     setInvoices(inv.data || []);
     setCompanies(co.data || []);
     setCredits(cn.error ? [] : (cn.data || []));
@@ -246,7 +257,7 @@ export default function ReportsPanel({ profile, onNavigate }) {
             sub={creditedPeriod > 0 ? `${from} → ${to}, less ${fmtMoney(creditedPeriod, cur)} credit notes` : `${from} → ${to}`} />
           <Stat label="Collected (period)" value={fmtMoney(collectedPeriod, cur)} tone="good"
             sub={refundedPeriod > 0 ? `Payments received, less ${fmtMoney(refundedPeriod, cur)} refunded` : 'Payments received'} />
-          <Stat label="Outstanding (now)" value={fmtMoney(outstandingNow, cur)} sub="Sent, not yet paid" />
+          <Stat label="Outstanding (now)" value={fmtMoney(outstandingNow, cur)} sub="Sent, not yet paid, less credit" />
           <Stat label="Overdue (now)" value={fmtMoney(overdueNow, cur)} tone="bad" sub="Past due date" />
         </div>
         {hasOut && (

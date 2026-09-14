@@ -30,8 +30,10 @@ serve(async (req) => {
     const stripe = new Stripe(conn.secret_key, { apiVersion: "2023-10-16" });
 
     // Charge what is still owed, not the invoice total: a deposit already
-    // taken or a credit note already issued must not be charged again. The
-    // same rule as the balance the public page shows, to the penny.
+    // taken, a credit note already issued or credit applied from another
+    // invoice's credit note must not be charged again. The same rule as the
+    // balance the public page shows, to the penny. An invoice that credit
+    // settled in full is paid, and was turned away above.
     const amount = balanceDue(inv);
     if (amount <= 0) return json({ error: "Nothing left to pay on this invoice." }, 400);
 
@@ -46,8 +48,10 @@ serve(async (req) => {
       cancel_url: `${base}/i/${token}`,
       metadata: { invoice_id: inv.id },
       // An hour, not Stripe's default of a day: a page left open charges the
-      // balance as it was when opened, and a credit note issued since would
-      // make that more than is owed. Stripe allows 30 minutes at the least.
+      // balance as it was when opened, and a credit note issued or credit
+      // applied since would make that more than is owed (record_invoice_payment
+      // then holds the extra as credit available on the invoice's credit
+      // notes). Stripe allows 30 minutes at the least.
       expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
     });
 

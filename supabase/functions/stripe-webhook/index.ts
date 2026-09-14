@@ -21,9 +21,10 @@ async function createPaidInvoiceForQuote(supabase: any, quoteId: string, paidAmo
 
   if (inv) {
     // Recorded exactly as a payment on the invoice's own pay link: added to
-    // what was paid, once per Stripe session, paid once nothing is left, and
-    // anything beyond the balance (credit notes issued on the invoice since
-    // the quote pay page opened) owed back on its credit notes. Recording the
+    // what was paid, once per Stripe session, paid once nothing is left (cash
+    // plus any credit applied to it), and anything beyond the balance (credit
+    // notes issued, or credit applied, on the invoice since the quote pay page
+    // opened) held as credit available on its credit notes. Recording the
     // quote total as paid hid that refund.
     const r = await recordInvoicePayment(supabase, inv.id, paidAmount, sessionId);
     logPayment(r, sessionId, paidAmount, sessionCurrency);
@@ -142,11 +143,13 @@ serve(async (req) => {
     // Invoice payments (one-off + recurring)
     const invoiceId = session.metadata?.invoice_id;
     if (invoiceId && await currencyMatches("invoices", invoiceId)) {
-      // invoice-checkout charges the BALANCE DUE (total less what was paid and
-      // less issued credit notes), so this payment adds to amount_paid rather
-      // than replacing it; see _shared/invoicePayment.ts for the rest. A
-      // failure to record is answered with a 500 so Stripe sends the event
-      // again, which is safe: a session is only ever counted once.
+      // invoice-checkout charges the BALANCE DUE (total less what was paid,
+      // less issued credit notes and less credit applied from other invoices'
+      // credit notes), so this payment adds to amount_paid rather than
+      // replacing it. Credit applied counts towards settling the invoice but
+      // is never added to amount_paid; see _shared/invoicePayment.ts for the
+      // rest. A failure to record is answered with a 500 so Stripe sends the
+      // event again, which is safe: a session is only ever counted once.
       const paidNow = (session.amount_total || 0) / 100;
       try {
         logPayment(await recordInvoicePayment(supabase, invoiceId, paidNow, session.id), session.id, paidNow, sessionCurrency);

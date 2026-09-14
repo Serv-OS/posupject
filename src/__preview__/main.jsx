@@ -26,6 +26,8 @@ import QuotesPanel from '../components/crm/QuotesPanel.jsx';
 import InvoicesPanel from '../components/crm/InvoicesPanel.jsx';
 import InvoiceBuilder from '../components/crm/InvoiceBuilder.jsx';
 import CreditNoteModal from '../components/crm/CreditNoteModal.jsx';
+import ApplyCreditModal from '../components/crm/ApplyCreditModal.jsx';
+import { balanceDue, creditAvailable } from '../lib/creditNotes.js';
 import SalesPerformance from '../components/crm/SalesPerformance.jsx';
 import MobileNav from '../components/MobileNav.jsx';
 import QuickAddCommand from '../components/crm/QuickAddCommand.jsx';
@@ -295,8 +297,50 @@ function CreditNoteView() {
   );
 }
 
+// #allocate: the apply screen on CN-1003 (Coffee Boy's £224 of credit
+// available, seeded in stub.js), on its own so it can be screenshotted at
+// phone width. INV-1050 is that customer's one unpaid invoice, so it is picked
+// already and the amount starts at £224. Applying runs the in-memory
+// allocate_credit; afterwards the invoice it went to opens on its Credit
+// applied row, or the screen opens again with the credit as it now stands.
+function AllocateView() {
+  const [open, setOpen] = useState(true);
+  const [round, setRound] = useState(0);
+  const [said, setSaid] = useState('');
+  const [appliedTo, setAppliedTo] = useState(null);
+  const [showing, setShowing] = useState(null);
+  const note = TABLES.credit_notes.find((c) => c.id === 'cn1003');
+  const target = TABLES.invoices.find((i) => i.id === appliedTo);
+  if (showing) return <InvoiceView id={showing} />;
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--scene-bg)', padding: 16 }}>
+      <div style={{ maxWidth: 420, margin: '0 auto', fontSize: 13 }} className="space-y-3 text-paper">
+        <div>CN-{note.credit_number}: {creditAvailable(note)} credit available of {note.refund_due}.</div>
+        {said && <div data-harness-said>{said}</div>}
+        {!open && (
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-glass px-4 py-2 rounded-xl text-sm" onClick={() => { setRound((r) => r + 1); setOpen(true); }}>Apply credit again</button>
+            {target && <button type="button" className="btn-glass px-4 py-2 rounded-xl text-sm" onClick={() => setShowing(target.id)}>Open INV-{target.invoice_number}</button>}
+          </div>
+        )}
+      </div>
+      {open && (
+        <ApplyCreditModal key={round} note={{ ...note }}
+          onClose={() => setOpen(false)}
+          onApplied={(row) => {
+            const inv = TABLES.invoices.find((i) => i.id === row.invoice_id);
+            setOpen(false);
+            setAppliedTo(row.invoice_id);
+            setSaid(`${row.amount} applied from CN-${note.credit_number} to INV-${inv?.invoice_number}, which now has ${balanceDue(inv)} to pay.`);
+          }} />
+      )}
+    </div>
+  );
+}
+
 // #invoice-credits (INV-1045, with its issued and cancelled credit notes) and
-// #invoice-paid (INV-1046, paid, so a credit on it owes a refund). Mounted as
+// #invoice-paid (INV-1046, paid, so a credit on it owes a refund), and
+// #invoice-allocated (INV-1049, with CN-1004's £224 applied to it). Mounted as
 // the Shell mounts an invoice: invoice screens are not work views, so no
 // .work class, which would stop the header from wrapping on a phone.
 function InvoiceView({ id }) {
@@ -317,6 +361,8 @@ function App() {
   if (v === 'packcard' || v === 'packcard-editor') return <PackCardView key={v} role={v === 'packcard' ? 'owner' : 'editor'} />;
   if (v === 'creditnote') return <CreditNoteView />;
   if (v === 'invoice-credits' || v === 'invoice-paid') return <InvoiceView id={v === 'invoice-paid' ? 'inv1046' : 'inv1045'} />;
+  if (v === 'allocate') return <AllocateView />;
+  if (v === 'invoice-allocated') return <InvoiceView id="inv1049" />;
   return (
     <div className="work" style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--scene-bg)' }}>
       <main className="work flex-1 min-w-0 overflow-hidden lg:flex lg:flex-col">

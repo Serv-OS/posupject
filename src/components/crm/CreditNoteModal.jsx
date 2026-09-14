@@ -317,7 +317,7 @@ export default function CreditNoteModal({ invoice: invoiceProp, invoiceLines: li
             {over
               ? <div className="text-xs text-red-600">That is more than the {m(left)} left to credit.</div>
               : refund.refund_status === 'owed'
-                ? <div className="text-xs text-amber-deep">Money has already been taken on this invoice, so a refund of {m(refund.refund_due)} will be owed. Mark it refunded once the money has gone back.</div>
+                ? <div className="text-xs text-amber-deep">Money has already been taken on this invoice, so {m(refund.refund_due)} will be credit available on this note. Apply it to another invoice, or mark it refunded once the money has gone back.</div>
                 : totals.total > 0 && <div className="text-xs text-muted">Balance due after this credit: <span className="font-semibold text-paper">{m(newBalance)}</span></div>}
           </div>
           {tried && problems.length > 0 && (

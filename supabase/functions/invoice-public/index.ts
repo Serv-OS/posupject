@@ -1,10 +1,11 @@
 // Public invoice endpoint (no auth). GET ?token=... -> invoice + lines +
 // seller branding + customer details for the hosted invoice page (/i/<token>),
-// plus the invoice's issued credit notes and what is left to pay after them.
+// plus the invoice's issued credit notes, the credit applied to it from other
+// invoices' credit notes, and what is left to pay after both.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { balanceDue } from "../_shared/invoiceEmail.ts";
+import { amountAllocated, balanceDue, sameCustomer } from "../_shared/invoiceEmail.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -12,6 +13,34 @@ const cors = {
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
+
+// Credit applied to this invoice, one row per active allocation, oldest first,
+// as "Credit applied CN-1001 -£224.00" on the page. The staff note on the
+// allocation stays out, as refund_note does on a credit note. The credit note
+// is only linked when it is the same customer's: credit can be applied across
+// customers (a group trading as several companies), and this page must never
+// open another customer's credit note, with their name and address on it.
+// Before the credit allocations migration the table is not there, which reads
+// as none.
+async function creditApplied(supabase: any, inv: any) {
+  const { data: rows, error } = await supabase.from("credit_allocations")
+    .select("id, credit_note_id, amount, allocated_on, created_at, removed_at")
+    .eq("invoice_id", inv.id).is("removed_at", null).order("created_at");
+  if (error || !rows?.length) return [];
+  const ids = [...new Set(rows.map((r: any) => r.credit_note_id))];
+  const { data: notes } = await supabase.from("credit_notes")
+    .select("id, credit_number, status, public_token, company_id, contact_id").in("id", ids);
+  const byId = new Map((notes || []).map((n: any) => [n.id, n]));
+  return rows.map((r: any) => {
+    const n: any = byId.get(r.credit_note_id);
+    return {
+      number: n?.credit_number ?? null,
+      allocated_on: r.allocated_on,
+      amount: Number(r.amount),
+      public_token: n && n.status === "issued" && sameCustomer(n, inv) ? n.public_token : null,
+    };
+  });
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -24,7 +53,7 @@ serve(async (req) => {
     const { data: inv } = await supabase.from("invoices").select("*").eq("public_token", token).maybeSingle();
     if (!inv || inv.status === "void") return json({ error: "Invoice not found" }, 404);
 
-    const [{ data: items }, { data: company }, { data: contact }, { data: location }, { data: settings }, { data: credits }] = await Promise.all([
+    const [{ data: items }, { data: company }, { data: contact }, { data: location }, { data: settings }, { data: credits }, credit_applied] = await Promise.all([
       supabase.from("invoice_line_items").select("*").eq("invoice_id", inv.id).order("sort"),
       inv.company_id ? supabase.from("companies").select("name, address, city, postcode").eq("id", inv.company_id).maybeSingle() : Promise.resolve({ data: null }),
       inv.contact_id ? supabase.from("contacts").select("first_name, last_name, email").eq("id", inv.contact_id).maybeSingle() : Promise.resolve({ data: null }),
@@ -34,6 +63,7 @@ serve(async (req) => {
       // the customer is not shown it. Each keeps its own token for /c/<token>.
       supabase.from("credit_notes").select("credit_number, issue_date, total, public_token")
         .eq("invoice_id", inv.id).eq("status", "issued").order("credit_number"),
+      creditApplied(supabase, inv),
     ]);
 
     if (inv.status === "sent") await supabase.from("invoices").update({ status: "viewed" }).eq("id", inv.id);
@@ -54,7 +84,11 @@ serve(async (req) => {
         // The page formats every figure in this. It was never sent, so a USD
         // invoice showed in pounds on its public page.
         currency: inv.currency || "GBP",
-        amount_credited: Number(inv.amount_credited || 0), balance_due,
+        amount_credited: Number(inv.amount_credited || 0),
+        // Credit applied from other invoices' credit notes. Not a payment: the
+        // page shows it as its own rows above the balance due.
+        amount_allocated: amountAllocated(inv),
+        balance_due,
       },
       seller: {
         name: s.business_name || "ServOS", address: s.business_address || "",
@@ -68,6 +102,7 @@ serve(async (req) => {
       credit_notes: (credits || []).map((c: any) => ({
         number: c.credit_number, issue_date: c.issue_date, total: c.total, public_token: c.public_token,
       })),
+      credit_applied,
     });
   } catch (e) {
     return json({ error: (e as Error).message }, 500);

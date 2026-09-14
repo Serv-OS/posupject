@@ -1,11 +1,12 @@
 // Public credit note endpoint (no auth). GET ?token=... -> credit note + lines
 // + the invoice it credits + seller branding + customer details for the hosted
-// credit note page (/c/<token>). The unguessable token is the auth, as it is
-// for invoice-public.
+// credit note page (/c/<token>), plus where its credit went: applied to other
+// invoices ("Applied to invoice INV-1050: £224.00"), refunded, and what is
+// left. The unguessable token is the auth, as it is for invoice-public.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { balanceDue } from "../_shared/invoiceEmail.ts";
+import { balanceDue, creditUse, sameCustomer } from "../_shared/invoiceEmail.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -13,6 +14,33 @@ const cors = {
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
+
+// The invoices this note's credit has been applied to, one row per active
+// allocation, oldest first. The staff note on the allocation stays out, as
+// refund_note does. An invoice is only linked when it is the same customer's
+// and its page still opens: credit can be applied across customers (a group
+// trading as several companies), and this page must never open another
+// customer's invoice, with their name and address on it. Before the credit
+// allocations migration the table is not there, which reads as none.
+async function appliedTo(supabase: any, note: any) {
+  const { data: rows, error } = await supabase.from("credit_allocations")
+    .select("id, invoice_id, amount, allocated_on, created_at, removed_at")
+    .eq("credit_note_id", note.id).is("removed_at", null).order("created_at");
+  if (error || !rows?.length) return [];
+  const ids = [...new Set(rows.map((r: any) => r.invoice_id))];
+  const { data: invoices } = await supabase.from("invoices")
+    .select("id, invoice_number, status, public_token, company_id, contact_id").in("id", ids);
+  const byId = new Map((invoices || []).map((i: any) => [i.id, i]));
+  return rows.map((r: any) => {
+    const i: any = byId.get(r.invoice_id);
+    return {
+      invoice_number: i?.invoice_number ?? null,
+      allocated_on: r.allocated_on,
+      amount: Number(r.amount),
+      public_token: i && !["void", "draft"].includes(i.status) && sameCustomer(i, note) ? i.public_token : null,
+    };
+  });
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -35,17 +63,21 @@ serve(async (req) => {
     const companyId = note.company_id || inv.company_id;
     const contactId = note.contact_id || inv.contact_id;
     const locationId = note.location_id || inv.location_id;
-    const [{ data: items }, { data: company }, { data: contact }, { data: location }, { data: settings }] = await Promise.all([
+    const [{ data: items }, { data: company }, { data: contact }, { data: location }, { data: settings }, applied_to] = await Promise.all([
       supabase.from("credit_note_lines").select("id, name, description, qty, unit_price, tax_rate, sort").eq("credit_note_id", note.id).order("sort"),
       companyId ? supabase.from("companies").select("name, address, city, postcode").eq("id", companyId).maybeSingle() : Promise.resolve({ data: null }),
       contactId ? supabase.from("contacts").select("first_name, last_name, email").eq("id", contactId).maybeSingle() : Promise.resolve({ data: null }),
       locationId ? supabase.from("locations").select("name, address, city, postcode").eq("id", locationId).maybeSingle() : Promise.resolve({ data: null }),
       supabase.from("support_settings").select("business_name, business_address, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle(),
+      appliedTo(supabase, note),
     ]);
 
     const s = settings || {};
     const currency = note.currency || inv.currency || "GBP";
     const voided = inv.status === "void";
+    // refund_due is all the money the note hands back; of it, used has been
+    // applied to invoices, refunded refunded, and left is credit available.
+    const use = creditUse(note);
     return json({
       credit_note: {
         number: note.credit_number, status: note.status, issue_date: note.issue_date, reason: note.reason,
@@ -53,6 +85,7 @@ serve(async (req) => {
         // refund_note stays out: it is the staff's own record of the refund.
         refund_status: note.refund_status, refund_due: note.refund_due,
         refunded_at: note.refunded_at, refund_method: note.refund_method,
+        amount_allocated: use.used, refunded_amount: use.refunded, credit_available: use.left,
       },
       invoice: {
         number: inv.invoice_number, issue_date: inv.issue_date, due_date: inv.due_date,
@@ -74,6 +107,7 @@ serve(async (req) => {
       contact: contact ? { name: [contact.first_name, contact.last_name].filter(Boolean).join(" "), email: contact.email } : null,
       location: location ? { name: location.name, address: [location.address, location.city, location.postcode].filter(Boolean).join(", ") } : null,
       items: items || [],
+      applied_to,
     });
   } catch (e) {
     return json({ error: (e as Error).message }, 500);
