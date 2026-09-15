@@ -357,13 +357,21 @@ function StatementImport({ sym, minor, m2, defaultDebitShare, onApply }) {
   );
 }
 
-export function AccountModal({ account, companies, locations, onClose, onSaved }) {
+export function AccountModal({ account, copyFrom, companies, locations, onClose, onSaved }) {
   const a = account || {};
+  // Copying starts a NEW card from another one's rates, volumes and region, so
+  // a group like Coffee Boy is priced once and reused. The site, name and
+  // merchant reference belong to the original venue, so they start blank,
+  // and a copy is always a prospect until someone says otherwise.
+  const copy = !a.id && copyFrom ? copyFrom : null;
+  const src = a.id ? a : (copy || {});
+  const ratesFrom = a.id || copy?.id;   // whose saved rates fill the form
   const [f, setF] = useState({
-    company_id: a.company_id || '', location_id: a.location_id || '', label: a.label || '', status: a.status || 'prospect',
-    cp_volume: a.cp_volume ?? '', cnp_volume: a.cnp_volume ?? '', avg_txn_size: a.avg_txn_size ?? '',
-    partner: a.partner || '', merchant_ref: a.merchant_ref || '',
-    region_code: a.region_code || '',
+    company_id: src.company_id || '', location_id: copy ? '' : (src.location_id || ''), label: copy ? '' : (src.label || ''),
+    status: copy ? 'prospect' : (src.status || 'prospect'),
+    cp_volume: src.cp_volume ?? '', cnp_volume: src.cnp_volume ?? '', avg_txn_size: src.avg_txn_size ?? '',
+    partner: src.partner || '', merchant_ref: copy ? '' : (src.merchant_ref || ''),
+    region_code: src.region_code || '',
   });
   const [rates, setRates] = useState(emptyRates());
   const [template, setTemplate] = useState(null);
@@ -397,7 +405,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
       // read as a zero buy cost, so margin looked bigger than it was. Only
       // blank cells are filled, so a saved rate always wins, and this is safe
       // whichever of the two loads lands first.
-      if (!a.id) { setRates(emptyRates(t)); return; }
+      if (!ratesFrom) { setRates(emptyRates(t)); return; }
       setRates(prev => Object.fromEntries(RATE_CATEGORIES.map(c => {
         const cost = costFor(t, c.key);
         const r = prev[c.key] || {};
@@ -409,7 +417,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
       })));
     });
     return () => { live = false; };
-  }, [region, a.id]);
+  }, [region, ratesFrom]);
 
   const applyTemplate = () => setRates(prev => Object.fromEntries(RATE_CATEGORIES.map(c => {
     const cost = costFor(template, c.key, c);
@@ -420,8 +428,8 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
   })));
 
   useEffect(() => {
-    if (!a.id) return;
-    supabase.from('processing_rates').select('*').eq('account_id', a.id).then(({ data }) => {
+    if (!ratesFrom) return;
+    supabase.from('processing_rates').select('*').eq('account_id', ratesFrom).then(({ data }) => {
       if (!data?.length) return;
       setRates(prev => {
         const next = { ...prev };
@@ -439,12 +447,14 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
         return next;
       });
     });
-  }, [a.id]);
+  }, [ratesFrom]);
 
   const channelTotal = (ch) => ch === 'cp' ? f.cp_volume : f.cnp_volume;
 
   const save = async () => {
     if (!f.company_id) { alert('Pick a customer (company)'); return; }
+    if (copy && f.company_id === copy.company_id && (f.location_id || null) === (copy.location_id || null)
+      && !confirm('This copy is for the same customer and site as the card you copied. Save it anyway?')) return;
     const row = {
       company_id: f.company_id, location_id: f.location_id || null, label: f.label.trim() || null, status: f.status,
       cp_volume: num(f.cp_volume), cnp_volume: num(f.cnp_volume), avg_txn_size: num(f.avg_txn_size),
@@ -452,8 +462,15 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
       region_code: region, updated_at: new Date().toISOString(),
     };
     let accId = a.id;
-    if (a.id) await supabase.from('processing_accounts').update(row).eq('id', a.id);
-    else { const { data } = await supabase.from('processing_accounts').insert(row).select('id').single(); accId = data?.id; }
+    if (a.id) {
+      const { error } = await supabase.from('processing_accounts').update(row).eq('id', a.id);
+      if (error) { alert('Could not save: ' + error.message); return; }
+    } else {
+      // A failed insert used to close the form as if it had saved.
+      const { data, error } = await supabase.from('processing_accounts').insert(row).select('id').single();
+      if (error || !data?.id) { alert('Could not save: ' + (error?.message || 'no card was created')); return; }
+      accId = data.id;
+    }
     if (accId) {
       for (const c of RATE_CATEGORIES) {
         const r = rates[c.key];
@@ -506,7 +523,10 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="glass-card rounded-2xl w-full max-w-5xl max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-bdr flex items-center justify-between sticky top-0 glass-card z-10">
-          <div className="text-base font-bold text-paper">{a.id ? 'Edit card-processing quote' : 'New card-processing quote'}</div>
+          <div className="min-w-0">
+            <div className="text-base font-bold text-paper">{a.id ? 'Edit card-processing quote' : copy ? 'Copy card-processing quote' : 'New card-processing quote'}</div>
+            {copy && <div className="text-xs text-muted mt-0.5">Starts with the rates, volumes and region of {copy.label || copy.location?.name || copy.company?.name || 'the card you copied'}. Pick the customer and site this copy is for.</div>}
+          </div>
           <button onClick={onClose} className="text-muted hover:text-paper"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
@@ -568,7 +588,7 @@ export function AccountModal({ account, companies, locations, onClose, onSaved }
             <b>Cost</b> is what the transaction costs us all in, not a markup on its own. In US merchant services a "buy rate" means only the part above interchange; this is the whole thing. “We earn” is Cost subtracted from what we charge. Both are internal and never reach the customer's copy. Volumes auto-split by card mix; adjust Split % per row if you have their real breakdown.
           </div>
 
-          <div className="flex gap-2 pt-1"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Save quote</button>
+          <div className="flex gap-2 pt-1"><button onClick={save} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">{copy ? 'Save copy' : 'Save quote'}</button>
             <button onClick={onClose} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button></div>
         </div>
       </div>

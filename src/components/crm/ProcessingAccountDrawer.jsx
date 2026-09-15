@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { X, Pencil, Plus, Trash2, Building2, PiggyBank, AlertTriangle } from 'lucide-react';
+import { X, Pencil, Plus, Trash2, Building2, PiggyBank, AlertTriangle, Copy } from 'lucide-react';
 import { AccountModal, ccyOf, moneyFor, isPriced, pct2, marginPct, marginTxn, revenueOf, RATE_CATEGORIES, CHANNELS, catsForChannel, rowCalc, accountSavings } from './PaymentsPanel.jsx';
 import { currencySymbol } from '../../lib/money';
 
@@ -12,6 +12,7 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
   const [volumes, setVolumes] = useState([]);
   const [adding, setAdding] = useState(false);
   const [editingAcc, setEditingAcc] = useState(false);
+  const [copying, setCopying] = useState(false);   // a new card for another site, from this one's rates
   const [vform, setVform] = useState({ month: thisMonth(), amount_processed: '', transactions: '', our_revenue: '' });
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
   // Every figure in this drawer belongs to ONE card, so it is all in that
@@ -109,6 +110,7 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
             </div>
           </div>
           {canWrite && <button onClick={() => setEditingAcc(true)} className="btn-ghost px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"><Pencil size={13} /> Edit</button>}
+          {canWrite && <button onClick={() => setCopying(true)} title="Start a new card for another site with these rates" className="btn-ghost px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"><Copy size={13} /> Copy</button>}
           {canWrite && (
             <button onClick={removeAccount} disabled={deleting}
               className="btn-ghost px-3 py-1.5 rounded-xl text-xs flex items-center gap-1 text-red-600 hover:bg-red-50 disabled:opacity-40">
@@ -260,6 +262,10 @@ export default function ProcessingAccountDrawer({ account, profile, onClose, onC
 
       {editingAcc && <AccountModal account={acc} companies={companies} locations={locations}
         onClose={() => setEditingAcc(false)} onSaved={() => { setEditingAcc(false); reloadAcc(); onChanged?.(); }} />}
+      {/* The copy is a different card, so once it is saved this drawer closes and
+          the list, newest first, shows it at the top. */}
+      {copying && <AccountModal copyFrom={accCalc} companies={companies} locations={locations}
+        onClose={() => setCopying(false)} onSaved={() => { setCopying(false); onChanged?.(); onClose(); }} />}
     </div>
   );
 }
