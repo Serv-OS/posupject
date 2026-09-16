@@ -1,11 +1,12 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import { AccountModal, accountSavings, ccyOf, moneyFor, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
 import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
-import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
+import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor, round2, lineNet } from '../../lib/money';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
-import { sortQuoteLines, saasStartText } from '../../lib/quoteLines';
+import { sortQuoteLines, saasStartText, customerRecurring } from '../../lib/quoteLines';
+import { deleteQuote, QUOTE_DELETABLE, QUOTE_ACCEPTED_MSG, NOT_ON_DEAL_MSG } from './QuotesPanel.jsx';
 import { Card, Mono, MobileSheet, SheetRow, EditSheet, PrimaryBtn, GhostBtn } from './ui.jsx';
 
 // Build the customer-safe card-processing breakdown frozen onto the quote.
@@ -48,7 +49,20 @@ const STATUS_STYLES = {
   void: 'bg-slate-100 text-slate-500 border border-slate-200',
 };
 
-const lineTotal = (it) => (Number(it.qty) || 0) * (Number(it.unit_price) || 0) * (1 - (Number(it.discount) || 0) / 100);
+// qty x unit price less the discount, rounded to pennies like every other
+// money figure. The unrounded product was stored as line_total and summed, so
+// the database held 175.39999999999998 and the customer's page printed it.
+const lineTotal = (it) => lineNet(it);
+
+// Two lines that are the same product at the same price and quantity are a
+// double click or a save that ran twice, never a real quote: Q-1020 carried
+// two software licences and its deal read twice the ARR. Blank custom lines
+// are left alone until they are named.
+const dupKey = (it) => [it.product_id || '', String(it.name || '').trim().toLowerCase(), it.billing_type, Number(it.unit_price) || 0, Number(it.qty) || 0].join('|');
+const DUP_MSG = 'This quote has the same line twice. Remove one before sending.';
+// Statuses a quote with a duplicate line may not be saved in: anything the
+// customer sees or has accepted. A draft may still be saved and tidied up.
+const DUP_BLOCKED = ['sent', 'viewed', 'signed', 'paid', 'won'];
 
 export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) {
   const [quote, setQuote] = useState(null);
@@ -61,6 +75,13 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const [newProc, setNewProc] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // The deal this quote is on, so the link is visible and the site's deal can
+  // be seen to arrive after a save.
+  const [deal, setDeal] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  // Set for the whole of a save. State alone is not enough: a second click
+  // between the click and the re-render would start a second save.
+  const savingRef = useRef(false);
   // Phone builder (21): which sheet is open — 'settings' | 'add' | 'terms' | 'savings' | 'link' | { item: idx }
   const [sheet, setSheet] = useState(null);
   const [itemQ, setItemQ] = useState('');
@@ -101,6 +122,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     setQuote(q.data);
     setItems(sortQuoteLines((li.data || []).map(x => ({ ...x }))));
     setProducts(pr.data || []);
+    if (q.data?.deal_id) supabase.from('deals').select('id, name, stage').eq('id', q.data.deal_id).maybeSingle().then(r => setDeal(r.data || null));
+    else setDeal(null);
     if (q.data?.company_id) {
       supabase.from('companies').select('id, name, country').eq('id', q.data.company_id).single().then(r => setCompany(r.data));
       supabase.from('locations').select('id, name, company_id').eq('company_id', q.data.company_id).order('name').then(r => setLocations(r.data || []));
@@ -109,6 +132,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
       supabase.from('locations').select('id, name, company_id').order('name').limit(200).then(r => setLocations(r.data || []));
     }
     if (q.data?.contact_id) supabase.from('contacts').select('id, first_name, last_name, email').eq('id', q.data.contact_id).single().then(r => setContact(r.data));
+    // The row as the database now holds it, for callers whose closure is stale.
+    return q.data;
   };
 
   // Card-processing proposals for the attach picker + savings preview.
@@ -147,23 +172,38 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     billing_type: p.billing_type, qty: 1, unit_price: unitPriceFor(p, cur), discount: 0, tax_rate: defaultTaxRateFor(cur),
   }]);
 
+  // Which lines are one of a pair, by index, for the warning and the red ring.
+  const duplicateIdx = useMemo(() => {
+    const seen = new Map(); const dup = new Set();
+    items.forEach((it, i) => {
+      if (!it.product_id && !String(it.name || '').trim()) return;
+      const k = dupKey(it);
+      if (seen.has(k)) { dup.add(i); dup.add(seen.get(k)); } else seen.set(k, i);
+    });
+    return dup;
+  }, [items]);
+  const hasDuplicates = duplicateIdx.size > 0;
+
   const totals = useMemo(() => {
     // Every price on a quote is EX VAT and tax goes on top — including the
     // recurring lines, which used to carry no tax at all, so the subscription
     // price we quoted was really the inc-VAT price.
     // Card processing is a financial service and is VAT exempt, so a payments
     // line is zero-rated unless someone deliberately puts a rate on it.
-    let oneOff = 0, tax = 0, saasArr = 0, paymentsArr = 0, recurringTax = 0;
+    let oneOff = 0, tax = 0, saasArr = 0, paymentsArr = 0;
     items.forEach(it => {
       const lt = lineTotal(it);
       const rate = Number(it.tax_rate) || 0;
       if (it.category === 'saas') {
-        const yearly = it.billing_type === 'monthly' ? lt * 12 : lt;
-        saasArr += yearly; recurringTax += yearly * rate / 100;
+        saasArr += it.billing_type === 'monthly' ? lt * 12 : lt;
       } else if (it.category === 'payments') {
-        paymentsArr += lt; recurringTax += lt * (it.tax_rate == null ? 0 : rate) / 100;
+        paymentsArr += lt;
       } else if (it.billing_type === 'one_off') { oneOff += lt; tax += lt * rate / 100; }
     });
+    // What the customer is shown for software: the monthly lines as a monthly
+    // price, the yearly ones as a yearly price. The same function the public
+    // page uses, so the two screens cannot disagree.
+    const cr = customerRecurring(items.map(it => ({ ...it, line_total: lineTotal(it) })));
     // Payments ARR from the ATTACHED RATE CARD. A quote that names a card is
     // selling that card, so its margin is the payments ARR — the same figure
     // the deal shows. Before this, the line read zero unless someone typed a
@@ -181,47 +221,95 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     const paymentsFromCard = paymentsArr === 0 && cardUsable;
     if (paymentsFromCard) paymentsArr = cardArr;
 
-    const recurringArr = saasArr + paymentsArr;
+    // Rounded to pennies here, once, so the screen and the saved row hold the
+    // same figures: sums are rounded, then the totals of those sums, the way
+    // money.js computeTotals does it.
+    oneOff = round2(oneOff); tax = round2(tax); saasArr = round2(saasArr); paymentsArr = round2(paymentsArr);
+    const recurringArr = round2(saasArr + paymentsArr);
     return {
-      oneOff, tax, oneOffTotal: oneOff + tax, saasArr, paymentsArr, recurringArr, recurringTax,
-      recurringGross: recurringArr + recurringTax,
+      oneOff, tax, oneOffTotal: round2(oneOff + tax), saasArr, paymentsArr, recurringArr,
+      softwareMonthly: cr.monthlyEx, hasMonthly: cr.hasMonthly, hasAnnual: cr.hasAnnual,
       paymentsFromCard,
+      cardLabel: paymentsFromCard ? (acc.label || acc.location?.name || 'Proposal') : null,
       cardIgnoredForCurrency: cardArr > 0 && cardCcy !== cur ? cardCcy : null,
     };
   }, [items, procAccounts, quote?.processing_account_id, cur]);
 
+  /** Save the quote and its lines. Resolves with the quote row as the database
+   *  now holds it (the save may have just put it on its site's deal), or false
+   *  when nothing was written. */
   const save = async () => {
+    // One save at a time. The lines are replaced by delete then insert, so two
+    // saves running together (a double click, or Mark Won while a save is in
+    // flight) could both insert and leave every line on the quote twice.
+    if (savingRef.current) return false;
+    if (hasDuplicates && DUP_BLOCKED.includes(quote.status)) { alert(DUP_MSG); return false; }
+    savingRef.current = true;
     setSaving(true); setSaved(false);
-    // Persist quote fields + totals
-    await supabase.from('quotes').update({
-      valid_until: quote.valid_until || null, go_live_date: quote.go_live_date || null,
-      payment_terms: quote.payment_terms, deposit_percent: Number(quote.deposit_percent) || 0,
-      tax_rate: Number(quote.tax_rate) || 0, terms: quote.terms || null, notes: quote.notes || null,
-      status: quote.status, location_id: quote.location_id || null,
-      currency: cur,
-      // Days after go-live before software billing starts; shown to the customer and used by the go-live trigger.
-      saas_start_days: Math.max(0, Math.min(365, Number(quote.saas_start_days) || 0)),
-      processing_account_id: quote.processing_account_id || null,
-      card_processing: cardSnapshot(procAccounts.find(a => a.id === quote.processing_account_id)),
-      one_off_subtotal: totals.oneOff, tax_amount: totals.tax, one_off_total: totals.oneOffTotal,
-      recurring_arr: totals.recurringArr,
-    }).eq('id', quoteId);
-    // Replace line items
-    await supabase.from('quote_line_items').delete().eq('quote_id', quoteId);
-    if (items.length) {
-      await supabase.from('quote_line_items').insert(sortQuoteLines(items).map((it, i) => ({
-        quote_id: quoteId, product_id: it.product_id || null, name: it.name || 'Item',
-        description: it.description || null, category: it.category, billing_type: it.billing_type,
-        qty: Number(it.qty) || 0, unit_price: Number(it.unit_price) || 0, discount: Number(it.discount) || 0,
-        tax_rate: Number(it.tax_rate) || 0, line_total: lineTotal(it), sort: i,
-      })));
+    try {
+      // Persist quote fields + totals. Every money figure is already rounded
+      // to pennies in `totals`; recurring_arr stays software ARR plus card
+      // margin because the pipeline and the quote lists read it.
+      const { error: qErr } = await supabase.from('quotes').update({
+        valid_until: quote.valid_until || null, go_live_date: quote.go_live_date || null,
+        payment_terms: quote.payment_terms, deposit_percent: Number(quote.deposit_percent) || 0,
+        tax_rate: Number(quote.tax_rate) || 0, terms: quote.terms || null, notes: quote.notes || null,
+        status: quote.status, location_id: quote.location_id || null,
+        currency: cur,
+        // Days after go-live before software billing starts; shown to the customer and used by the go-live trigger.
+        saas_start_days: Math.max(0, Math.min(365, Number(quote.saas_start_days) || 0)),
+        processing_account_id: quote.processing_account_id || null,
+        card_processing: cardSnapshot(procAccounts.find(a => a.id === quote.processing_account_id)),
+        one_off_subtotal: round2(totals.oneOff), tax_amount: round2(totals.tax), one_off_total: round2(totals.oneOffTotal),
+        recurring_arr: round2(totals.recurringArr),
+      }).eq('id', quoteId);
+      if (qErr) throw qErr;
+      // Replace line items
+      const { error: dErr } = await supabase.from('quote_line_items').delete().eq('quote_id', quoteId);
+      if (dErr) throw dErr;
+      if (items.length) {
+        const { error: iErr } = await supabase.from('quote_line_items').insert(sortQuoteLines(items).map((it, i) => ({
+          quote_id: quoteId, product_id: it.product_id || null, name: it.name || 'Item',
+          description: it.description || null, category: it.category, billing_type: it.billing_type,
+          qty: Number(it.qty) || 0, unit_price: Number(it.unit_price) || 0, discount: Number(it.discount) || 0,
+          tax_rate: Number(it.tax_rate) || 0, line_total: lineTotal(it), sort: i,
+        })));
+        if (iErr) throw iErr;
+      }
+      setSaved(true); setTimeout(() => setSaved(false), 2500);
+      // Read the row back: the database may have just put the quote on its
+      // site's deal (and filled the company), and the screen should show it.
+      // The caller gets that row too: the `quote` in its closure is stale now.
+      const fresh = await load();
+      return fresh || false;
+    } catch (e) {
+      alert('Could not save the quote: ' + (e?.message || e));
+      return false;
+    } finally {
+      savingRef.current = false; setSaving(false);
     }
-    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
-    load();
   };
+
+  // Delete this quote. The rule and the wording live with the quotes list so
+  // the two screens cannot drift. Afterwards go where the quote came from:
+  // its deal when it had one, else the list.
+  const removeQuote = async () => {
+    if (deleting || saving) return;
+    setDeleting(true);
+    try {
+      const r = await deleteQuote(quote);
+      if (!r.ok) return;
+      if (r.deal_id) onNavigate?.('deal', r.deal_id); else onClose?.();
+    } finally { setDeleting(false); }
+  };
+  const canDelete = QUOTE_DELETABLE.includes(quote?.status);
 
   // Mark the quote won -> close the deal -> auto onboarding (interim manual path until Stripe phase)
   const markWon = async () => {
+    if (saving) return;
+    // A won quote drives the deal's figures straight from its lines, so a
+    // doubled line would double the ARR on the pipeline.
+    if (hasDuplicates) { alert(DUP_MSG); return; }
     // Winning is the moment the rate card becomes real money, so the deal takes
     // its payments ARR from the attached account rather than waiting for someone
     // to type it. Without this the pipeline reports payments ARR as zero forever.
@@ -260,20 +348,34 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
           ? `\n\nThe attached rate card is already earning on "${claimedBy.name}", so its payments ARR stays there. This deal closes without it, otherwise the same card would be counted twice.`
           : `\n\nPayments ARR of ${moneyFor(ccyOf(acc)).m0(our.arr)} will be set on the deal from the attached rate card.`;
     if (!confirm(`Mark this quote as Won? This closes the deal and starts onboarding.${arrNote}`)) return;
-    await save();
+    const fresh = await save();
+    if (!fresh) return;
+    // The deal to close comes from the row the save returned, not from the
+    // state this click started with: a quote made with a site and no deal is
+    // put on the site's deal by that save (migration 118), and the old
+    // `quote.deal_id` here would still read null, leaving the deal open with
+    // a won quote on it.
+    const dealId = fresh.deal_id;
     await supabase.from('quotes').update({ status: 'won' }).eq('id', quoteId);
-    if (quote.deal_id) {
+    if (dealId) {
       const patch = { stage: 'closed_won', closed_at: new Date().toISOString() };
       if (our?.priced && !claimedBy && !ccyClash) patch.payments_arr = Math.round(our.arr * 100) / 100;
-      await supabase.from('deals').update(patch).eq('id', quote.deal_id);
-      await supabase.from('stage_history').insert({ object_type: 'deal', object_id: quote.deal_id, to_stage: 'closed_won', changed_by: profile.id });
-      try { await handleClosedWon(quote.deal_id, profile.id); } catch (e) { console.error(e); }
+      await supabase.from('deals').update(patch).eq('id', dealId);
+      await supabase.from('stage_history').insert({ object_type: 'deal', object_id: dealId, to_stage: 'closed_won', changed_by: profile.id });
+      try { await handleClosedWon(dealId, profile.id); } catch (e) { console.error(e); }
     }
     load();
   };
 
   const publicUrl = quote ? `${window.location.origin}/q/${quote.public_token}` : '';
-  const copyLink = () => { navigator.clipboard.writeText(publicUrl); alert('Quote link copied'); };
+  // There is no quote email: a quote is sent by copying this link. So a draft
+  // with a doubled line must not be copied either, or the customer opens it
+  // and sees the line twice and a doubled monthly price. Preview stays open,
+  // that is Peter looking at the page, not the customer.
+  const copyLink = () => {
+    if (hasDuplicates) { alert(DUP_MSG); return; }
+    navigator.clipboard.writeText(publicUrl); alert('Quote link copied');
+  };
 
   if (!quote) return <div className="h-full flex items-center justify-center text-dim text-sm">Loading...</div>;
 
@@ -301,12 +403,13 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
             <div className="px-[15px] py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--hair)' }}>
               <span className="text-[14px] font-bold text-paper">Items</span><Mono>{items.length}</Mono>
             </div>
+            {hasDuplicates && <div className="px-[15px] py-2.5 text-[12px] font-semibold border-b" style={{ color: 'rgb(var(--c-coral-deep))', background: 'rgb(var(--c-coral) / .08)', borderColor: 'var(--hair)' }}>{DUP_MSG}</div>}
             {items.length === 0 && <div className="px-[15px] py-4 text-[13px] text-dim">No items yet.</div>}
             {items.map((it, idx) => (
-              <button key={idx} onClick={() => canWrite && setSheet({ item: idx })} className="w-full text-left px-[15px] py-3 border-b" style={{ borderColor: 'var(--hair)' }}>
+              <button key={idx} onClick={() => canWrite && setSheet({ item: idx })} className="w-full text-left px-[15px] py-3 border-b" style={{ borderColor: 'var(--hair)', ...(duplicateIdx.has(idx) ? { boxShadow: 'inset 3px 0 0 rgb(var(--c-coral))' } : null) }}>
                 <div className="flex items-baseline gap-2.5">
                   <span className="text-[14px] font-medium text-paper flex-1 min-w-0 truncate">{it.name || 'Item'}</span>
-                  <span className="font-mono text-[14px] font-semibold text-paper">{money(lineTotal(it))}{it.billing_type === 'monthly' ? '/mo' : ''}</span>
+                  <span className="font-mono text-[14px] font-semibold text-paper">{money(lineTotal(it))}{it.billing_type === 'monthly' ? '/mo' : it.billing_type === 'annual' ? '/yr' : ''}</span>
                 </div>
                 <div className="text-[12px] text-muted">{it.qty} × {money(it.unit_price)}{Number(it.discount) ? ` · discount ${it.discount}%` : ''}{it.category === 'saas' || it.category === 'payments' ? ` · ${CAT_LABEL[it.category]}` : ` · ${taxLabelFor(cur)} ${it.tax_rate ?? defaultTaxRateFor(cur)}%`}</div>
               </button>
@@ -319,22 +422,38 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
           </Card>
           <Card>
             <div className="px-[15px] py-2.5 border-b font-mono text-[9px] font-bold tracking-[.18em] uppercase text-dim" style={{ borderColor: 'var(--hair)' }}>Also on this quote</div>
-            {[['terms', 'Terms & notes', quote.terms ? 'set' : 'none'], ['savings', 'Card-processing savings', quote.processing_account_id ? 'attached' : 'none'], ['link', 'Customer link', 'copy']].map(([k, l, v], i, arr) => (
-              <button key={k} onClick={() => setSheet(k)} className={`w-full px-[15px] py-3 flex items-center text-left ${i < arr.length - 1 ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
+            {[['terms', 'Terms & notes', quote.terms ? 'set' : 'none'], ['savings', 'Card-processing savings', quote.processing_account_id ? 'attached' : 'none'], ['link', 'Customer link', hasDuplicates ? 'blocked' : 'copy']].map(([k, l, v]) => (
+              <button key={k} onClick={() => setSheet(k)} className="w-full px-[15px] py-3 flex items-center text-left border-b" style={{ borderColor: 'var(--hair)' }}>
                 <span className="text-[15px] text-paper">{l}</span><span className="ml-auto text-[12px] text-dim">{v}</span>
               </button>
             ))}
+            {/* The deal this quote counts towards. A site with no deal is said plainly, so it cannot hide. */}
+            {quote.deal_id ? (
+              <button onClick={() => onNavigate?.('deal', quote.deal_id)} className={`w-full px-[15px] py-3 flex items-center text-left ${canWrite ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
+                <span className="text-[15px] text-paper">Deal</span><span className="ml-auto text-[12px] truncate max-w-[60%]" style={{ color: 'rgb(var(--c-primary-deep))' }}>{deal?.name || 'open'}</span>
+              </button>
+            ) : (
+              <div className={`w-full px-[15px] py-3 flex items-center ${canWrite ? 'border-b' : ''}`} style={{ borderColor: 'var(--hair)' }}>
+                <span className="text-[15px] text-paper">Deal</span>
+                <span className="ml-auto text-[12px] text-right" style={{ color: quote.location_id ? 'rgb(var(--c-amber-deep))' : undefined }}>{quote.location_id ? `${NOT_ON_DEAL_MSG}, then save` : 'none. Pick a site to join its deal'}</span>
+              </div>
+            )}
+            {canWrite && (canDelete
+              ? <button onClick={removeQuote} disabled={deleting || saving} className="w-full px-[15px] py-3 flex items-center text-left disabled:opacity-50">
+                  <span className="text-[15px] font-semibold" style={{ color: 'rgb(var(--c-coral-deep))' }}>{deleting ? 'Deleting…' : 'Delete quote'}</span>
+                </button>
+              : <div className="px-[15px] py-3 text-[12px] text-dim">{QUOTE_ACCEPTED_MSG}</div>)}
           </Card>
         </div>
         {/* Docked total */}
         <div className="fixed inset-x-0 z-30 px-[14px] pt-2.5 pb-2.5 border-t" style={{ bottom: 'calc(56px + env(safe-area-inset-bottom))', background: 'var(--panel-bg)', backdropFilter: 'blur(12px)', borderColor: 'var(--hair)' }}>
           <div className="flex items-baseline gap-2">
-            <span className="text-[12px] text-muted flex-1">Net {money(totals.oneOff)} · {taxLabelFor(cur)} {money(totals.tax)}{totals.recurringArr ? ` · ARR ${money(totals.recurringArr)} ex ${taxLabelFor(cur)}` : ''}</span>
+            <span className="text-[12px] text-muted flex-1">Net {money(totals.oneOff)} · {taxLabelFor(cur)} {money(totals.tax)}{totals.hasMonthly ? ` · Software ${money(totals.softwareMonthly)}/mo` : ''}{totals.recurringArr ? ` · ARR ${money(totals.recurringArr)} internal` : ''}</span>
             <span className="font-display text-[20px] font-extrabold text-paper">{money(totals.oneOffTotal)}</span>
           </div>
           <div className="flex gap-2 mt-2">
             <GhostBtn className="flex-1 justify-center !py-[11px]" onClick={() => window.open(publicUrl, '_blank')}>Preview</GhostBtn>
-            {canWrite && quote.status !== 'won' && <GhostBtn className="flex-1 justify-center !py-[11px]" onClick={markWon}>Mark won</GhostBtn>}
+            {canWrite && quote.status !== 'won' && <GhostBtn className="flex-1 justify-center !py-[11px]" onClick={markWon} disabled={saving}>Mark won</GhostBtn>}
             {canWrite && <PrimaryBtn className="flex-1 justify-center !py-[11px]" onClick={save} disabled={saving}>{saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}</PrimaryBtn>}
           </div>
         </div>
@@ -415,8 +534,9 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
           </MobileSheet>
         )}
         {sheet === 'link' && (
-          <MobileSheet title="Customer link" onClose={() => setSheet(null)} footer={<PrimaryBtn className="flex-1 justify-center" onClick={() => { copyLink(); setSheet(null); }}>Copy link</PrimaryBtn>}>
+          <MobileSheet title="Customer link" onClose={() => setSheet(null)} footer={<PrimaryBtn className="flex-1 justify-center" disabled={hasDuplicates} onClick={() => { copyLink(); setSheet(null); }}>Copy link</PrimaryBtn>}>
             <div className="font-mono text-[12px] text-paper break-all px-1">{publicUrl}</div>
+            {hasDuplicates && <div className="mt-3 px-1 text-[12px] font-semibold" style={{ color: 'rgb(var(--c-coral-deep))' }}>{DUP_MSG}</div>}
           </MobileSheet>
         )}
       </div>
@@ -437,7 +557,10 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
           <div className="flex items-center gap-2">
             {saved && <span className="text-sm text-emerald-600 font-medium">✓ Saved</span>}
             <button onClick={save} disabled={saving} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>
-            {quote.status !== 'won' && <button onClick={markWon} className="px-4 py-2 text-sm font-semibold rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200">Mark Won</button>}
+            {quote.status !== 'won' && <button onClick={markWon} disabled={saving} className="px-4 py-2 text-sm font-semibold rounded-xl bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200 disabled:opacity-50">Mark Won</button>}
+            {canDelete
+              ? <button onClick={removeQuote} disabled={deleting || saving} className="px-3 py-2 text-xs text-red-600 border border-red-200 rounded-xl hover:bg-red-50 transition disabled:opacity-50">{deleting ? 'Deleting…' : 'Delete'}</button>
+              : <span className="text-[11px] text-dim leading-tight max-w-[200px]">{QUOTE_ACCEPTED_MSG}</span>}
           </div>
         )}
       </div>
@@ -463,9 +586,10 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                 {canWrite && unpriced.length > 0 && (
                   <div className="text-[11px] text-dim italic">{unpriced.length} product{unpriced.length === 1 ? ' has' : 's have'} no {currencySymbol(cur)} price yet: {unpriced.map(p => p.name).join(', ')}. They land at 0 to type. Set the {currencySymbol(cur)} price under Products.</div>
                 )}
+                {hasDuplicates && <div className="rounded-xl px-3 py-2 border border-red-300 bg-red-50/60 text-[11px] text-red-700 font-semibold">{DUP_MSG}</div>}
                 {items.length === 0 && <div className="text-xs text-dim italic py-4 text-center">No line items yet. Add products from your catalogue.</div>}
                 {items.map((it, idx) => (
-                  <div key={idx} className="glass-inner rounded-xl p-3 space-y-2">
+                  <div key={idx} className={`glass-inner rounded-xl p-3 space-y-2${duplicateIdx.has(idx) ? ' ring-1 ring-red-300' : ''}`}>
                     <div className="flex items-center gap-2">
                       <input className={cell + ' flex-1'} value={it.name} onChange={e => updateItem(idx, { name: e.target.value })} placeholder="Item name" />
                       <button onClick={() => removeItem(idx)} className="text-red-500 hover:text-red-600 text-sm shrink-0">×</button>
@@ -483,7 +607,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                       <div><span className="text-[9px] text-dim block">Disc %</span><input type="number" className={cell + ' w-full'} value={it.discount} onChange={e => updateItem(idx, { discount: e.target.value })} /></div>
                       <div><span className="text-[9px] text-dim block">{taxLabelFor(cur)} %</span><input type="number" className={cell + ' w-full'} value={it.tax_rate ?? defaultTaxRateFor(cur)} onChange={e => updateItem(idx, { tax_rate: e.target.value })} /></div>
                     </div>
-                    <div className="text-right text-xs text-muted">Line total: <span className="text-paper font-mono font-semibold">{money(lineTotal(it))}</span>{it.billing_type === 'monthly' ? '/mo' : it.category === 'payments' ? '/yr' : ''}</div>
+                    <div className="text-right text-xs text-muted">Line total: <span className="text-paper font-mono font-semibold">{money(lineTotal(it))}</span>{it.billing_type === 'monthly' ? '/mo' : it.billing_type === 'annual' ? '/yr' : it.category === 'payments' ? '/yr (internal margin)' : ''}</div>
                   </div>
                 ))}
               </div>
@@ -504,14 +628,22 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               <Row k={`${taxLabelFor(cur)} (per line)`} v={money(totals.tax)} />
               <Row k="One-off total" v={money(totals.oneOffTotal)} bold />
               <div className="border-t border-bdr my-2" />
-              <Row k="SaaS (ARR)" v={money(totals.saasArr)} sub />
-              <Row k="Payments (ARR)" v={money(totals.paymentsArr)} sub />
-              {totals.paymentsFromCard && <div className="text-[10px] text-dim -mt-1 mb-1">From the attached rate card: what we charge minus what the cards cost us, times twelve.</div>}
+              {/* What the customer pays for software, then what we make, kept
+                  apart. One "Recurring ARR" row used to add our card margin to
+                  the software and the same figure went out on the customer's
+                  page as their yearly total, which is why two sites on the same
+                  software showed different years. */}
+              <Row k={`Software per month (ex ${taxLabelFor(cur)})`} v={money(totals.softwareMonthly)} />
+              <Row k={`Software per year (ex ${taxLabelFor(cur)})`} v={money(totals.saasArr)} />
+              {totals.hasAnnual && <div className="text-[10px] text-dim -mt-1 mb-1">Includes lines billed yearly. The customer sees those as a yearly price, not spread into the month.</div>}
+              {totals.paymentsArr > 0 && (
+                <Row k={totals.paymentsFromCard ? `Card processing margin per year (internal, from card ${totals.cardLabel})` : 'Payments lines per year (internal)'} v={money(totals.paymentsArr)} sub />
+              )}
+              {totals.paymentsFromCard && <div className="text-[10px] text-dim -mt-1 mb-1">What we charge minus what the cards cost us, times twelve.</div>}
               {totals.cardIgnoredForCurrency && <div className="text-[10px] text-red-600 -mt-1 mb-1">The attached rate card is priced in {totals.cardIgnoredForCurrency} and this quote is in {cur}, so its margin is not counted here.</div>}
-              <Row k={`Recurring ARR (ex ${taxLabelFor(cur)})`} v={money(totals.recurringArr)} bold />
-              {totals.recurringTax > 0 && <><Row k={`${taxLabelFor(cur)} on recurring`} v={money(totals.recurringTax)} sub />
-              <Row k={`Recurring inc ${taxLabelFor(cur)}`} v={money(totals.recurringGross)} bold /></>}
-              <div className="text-[10px] text-dim mt-2 leading-relaxed">{`Software is not charged here: a monthly schedule is created automatically when the site goes live, ${saasStartText(quote.saas_start_days)}. Payments is our margin, forecast on the deal. One-off total is what checkout captures.`}</div>
+              <Row k="Recurring ARR (internal)" v={money(totals.recurringArr)} bold />
+              <div className="text-[10px] text-dim mt-1">The customer sees the monthly software price and their card rates. Card margin and ARR are internal.</div>
+              <div className="text-[10px] text-dim mt-2 leading-relaxed">{`Software is not charged here: a monthly schedule is created automatically when the site goes live, ${saasStartText(quote.saas_start_days)}. One-off total is what checkout captures.`}</div>
             </div>
 
             <div className="glass-card rounded-2xl p-4 space-y-3">
@@ -525,7 +657,17 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                   <select className={input} value={quote.location_id || ''} onChange={e => setQ('location_id', e.target.value || null)}>
                     <option value="">— None —</option>
                     {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </select></div>
+                  </select>
+                  {/* The deal this quote counts towards. The database puts a
+                      quote on its site's deal when it is saved, so a site
+                      with no deal is said plainly rather than left blank. */}
+                  <div className="text-[11px] mt-1.5">
+                    {quote.deal_id
+                      ? <span className="text-muted">On deal: <button onClick={() => onNavigate?.('deal', quote.deal_id)} className="text-ember hover:text-ember-deep font-medium">{deal?.name || 'open deal'}</button></span>
+                      : quote.location_id
+                        ? <span className="text-amber-600 font-medium">{NOT_ON_DEAL_MSG}, then save.</span>
+                        : <span className="text-dim">Not on a deal. Pick the install site and the quote joins that site's deal when saved.</span>}
+                  </div></div>
                 <div><label className={label}>Valid until</label><input type="date" className={input} value={quote.valid_until || ''} onChange={e => setQ('valid_until', e.target.value)} /></div>
                 <div><label className={label}>Go-live date</label><input type="date" className={input} value={quote.go_live_date || ''} onChange={e => setQ('go_live_date', e.target.value)} /></div>
                 <div><label className={label}>Software billing starts</label>
@@ -610,8 +752,9 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
               <div className="text-sm font-bold text-paper mb-2">Customer link</div>
               <div className="flex gap-2">
                 <input readOnly value={publicUrl} className={input + ' font-mono text-[10px]'} onFocus={e => e.target.select()} />
-                <button onClick={copyLink} className="px-2 py-1 text-xs btn-ghost rounded-xl shrink-0">Copy</button>
+                <button onClick={copyLink} disabled={hasDuplicates} title={hasDuplicates ? DUP_MSG : undefined} className="px-2 py-1 text-xs btn-ghost rounded-xl shrink-0 disabled:opacity-50">Copy</button>
               </div>
+              {hasDuplicates && <div className="text-[10px] text-red-700 font-semibold mt-1">{DUP_MSG}</div>}
               <div className="text-[10px] text-dim mt-1">The sign &amp; pay page activates with the Stripe phase.</div>
             </div>
           </div>

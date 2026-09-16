@@ -11,6 +11,7 @@ import { handleClosedWon } from '../../lib/dealHelpers';
 import TimerButton from './TimerButton.jsx';
 import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
+import { NOT_ON_DEAL_MSG } from './QuotesPanel.jsx';
 
 const STAGES = [
   'new_lead','contacted','qualified','demo_booked','demo_done',
@@ -31,6 +32,8 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
   const [history, setHistory] = useState([]);
   const [projects, setProjects] = useState([]);
   const [quotes, setQuotes] = useState([]);
+  // This company's quotes that carry a site but sit on no deal (see load).
+  const [offDealQuotes, setOffDealQuotes] = useState([]);
   const [procAccounts, setProcAccounts] = useState([]);
   const [sharedDeals, setSharedDeals] = useState(0);
   const [editing, setEditing] = useState(false);
@@ -78,6 +81,17 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
       setSharedDeals(new Set((sib || []).map(q => q.deal_id)).size);
     } else { setProcAccounts([]); setSharedDeals(0); }
     if (d.data?.company_id) setCompany(c.data?.find(co => co.id === d.data.company_id) || null);
+    // Quotes for this company with a site and no deal. The database puts a
+    // quote on its site's deal when the site is linked or the quote is saved,
+    // so one still like this has a site with no deal yet (Mozz Milk Block on
+    // 16 Sep) or a company that does not match. Listed here so a deal reading
+    // value 0 cannot hide the quote that should be on it.
+    if (d.data?.company_id) {
+      const { data: off } = await supabase.from('quotes').select('id, quote_number, status, location:locations(name)')
+        .eq('company_id', d.data.company_id).is('deal_id', null).not('location_id', 'is', null).neq('status', 'void')
+        .order('created_at', { ascending: false });
+      setOffDealQuotes(off || []);
+    } else setOffDealQuotes([]);
   };
 
   const createQuote = async () => {
@@ -166,7 +180,11 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
 
   const deleteRecord = async () => {
     if (!confirm(`Delete deal "${deal?.name}"?\n\nThis cannot be undone.`)) return;
-    await supabase.from('deals').delete().eq('id', dealId);
+    // Deleting a deal takes its quotes with it, and the database refuses when
+    // one of them is signed, paid or won (migration 118). Say so and stay on
+    // the deal instead of closing a screen for a row that is still there.
+    const { error } = await supabase.from('deals').delete().eq('id', dealId);
+    if (error) { alert('Could not delete the deal: ' + error.message); return; }
     onClose();
   };
 
@@ -420,6 +438,21 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                     ))}
                   </div>
                 ) : <div className="text-xs text-dim italic py-3 text-center">No quotes yet</div>}
+                {offDealQuotes.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-bdr space-y-2">
+                    <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim">Same company, on no deal</div>
+                    {offDealQuotes.map(q => (
+                      <div key={q.id} onClick={() => onNavigate?.('quote', q.id)}
+                        className="p-3 glass-inner rounded-xl cursor-pointer flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-paper">Quote #{q.quote_number}{q.location?.name ? <span className="text-xs text-muted font-normal"> · {q.location.name}</span> : null}</div>
+                          <div className="text-[10px] text-amber-600 font-medium">{NOT_ON_DEAL_MSG}</div>
+                        </div>
+                        <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-slate-100 text-slate-600 border border-slate-200">{q.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Card>
 
               <Card title="Projects" count={projects.length}

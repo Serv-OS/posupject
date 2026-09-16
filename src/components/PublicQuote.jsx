@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { groupQuoteLines, lineCaption, saasStartText, softwareMonthly } from '../lib/quoteLines';
+import { customerLines, customerRecurring, groupQuoteLines, lineCaption, saasStartText } from '../lib/quoteLines';
 import { LogoLockup } from './ServOSLogo.jsx';
 import { fmtMoney, fmtMoney0, taxLabelFor } from '../lib/money';
 
@@ -74,6 +74,28 @@ export default function PublicQuote({ token }) {
   const seller = data.seller || {};
   const accent = seller.accent || '#E8743C';
   const accepted = paid || done || ['signed', 'paid', 'won'].includes(q.status);
+  // What the customer pays for software, from the software lines alone.
+  // quotes.recurring_arr is never used here: it includes our card margin
+  // estimate, which made two quotes for the same software show different
+  // yearly totals. The customer sees a monthly price (and a yearly one only
+  // for lines billed yearly) plus their card rates, nothing else.
+  // The lines with a payments line's figures already dropped: the price typed
+  // on one is our yearly margin estimate, and the customer must never see it
+  // in any column. The server drops the same fields; this is the second lock.
+  const items = customerLines(data.items || []);
+  const rec = customerRecurring(items);
+  const tax = taxLabelFor(cur);
+  const hasRates = !!(q.card_processing && (q.card_processing.rows || []).length);
+  const billedHow = rec.hasMonthly && rec.hasAnnual ? 'monthly, or yearly where a line says so' : rec.hasAnnual ? 'annually' : 'monthly';
+  // A payments line has no qty, unit price, discount or total to show: it is
+  // charged per transaction at the rates below, so those cells read as blank.
+  const isPay = (it) => it.category === 'payments';
+  // Amount column: software says how often, card processing has no yearly
+  // figure at all because it is charged per transaction at the rates below.
+  const amountFor = (it) => {
+    if (it.category === 'payments') return <span className="font-sans text-xs text-slate-500">{hasRates ? 'per transaction, see rates below' : 'per transaction'}</span>;
+    return <>{money(it.line_total, cur)}{it.billing_type === 'monthly' ? '/mo' : it.billing_type === 'annual' ? '/yr' : ''}</>;
+  };
 
   return wrap(
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -130,12 +152,12 @@ export default function PublicQuote({ token }) {
             {/* Hardware and setup first, then software, then card processing.
                 Each section says when it is paid, and every software line says
                 when its billing starts, because that is the promise being signed. */}
-            {groupQuoteLines(data.items || []).map(g => (
+            {groupQuoteLines(items).map(g => (
               <Fragment key={g.category}>
                 <tr className="bg-slate-50">
                   <td colSpan={5} className="pt-3 pb-1 pr-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     {g.title}
-                    <span className="normal-case tracking-normal font-normal text-slate-400"> · {g.category === 'saas' ? `billed monthly, ${saasStartText(q.saas_start_days)}` : g.note}</span>
+                    <span className="normal-case tracking-normal font-normal text-slate-400"> · {g.category === 'saas' ? `billed ${billedHow}, ${saasStartText(q.saas_start_days)}` : g.note}</span>
                   </td>
                 </tr>
                 {g.items.map(it => (
@@ -143,12 +165,15 @@ export default function PublicQuote({ token }) {
                     <td className="py-2.5 pr-2">
                       <div className="font-medium text-slate-800">{it.name}</div>
                       {it.description && <div className="text-xs text-slate-500 mt-0.5 whitespace-pre-line">{it.description}</div>}
-                      {lineCaption(it, q.saas_start_days) && <div className="text-[10px] text-slate-400 mt-0.5">{lineCaption(it, q.saas_start_days)}</div>}
+                      {/* Card processing has no billing schedule of its own (its
+                          section already says per transaction), so a payments
+                          line typed as monthly must not read "billed monthly". */}
+                      {it.category !== 'payments' && lineCaption(it, q.saas_start_days) && <div className="text-[10px] text-slate-400 mt-0.5">{lineCaption(it, q.saas_start_days)}</div>}
                     </td>
-                    <td className="py-2.5 text-center text-slate-600">{it.qty}</td>
-                    <td className="py-2.5 text-right text-slate-600">{money(it.unit_price, cur)}</td>
-                    <td className="py-2.5 text-right text-slate-500">{it.discount > 0 ? `${it.discount}%` : '—'}</td>
-                    <td className="py-2.5 text-right font-mono text-slate-800">{money(it.line_total, cur)}{it.billing_type === 'monthly' ? '/mo' : it.billing_type === 'annual' ? '/yr' : it.category === 'payments' ? '/yr' : ''}</td>
+                    <td className="py-2.5 text-center text-slate-600">{isPay(it) ? '—' : it.qty}</td>
+                    <td className="py-2.5 text-right text-slate-600">{isPay(it) ? '—' : money(it.unit_price, cur)}</td>
+                    <td className="py-2.5 text-right text-slate-500">{!isPay(it) && it.discount > 0 ? `${it.discount}%` : '—'}</td>
+                    <td className="py-2.5 text-right font-mono text-slate-800">{amountFor(it)}</td>
                   </tr>
                 ))}
               </Fragment>
@@ -160,32 +185,34 @@ export default function PublicQuote({ token }) {
       {/* Totals */}
       <div className="px-6 sm:px-8 py-4 bg-slate-50 border-y border-slate-200">
         <div className="ml-auto max-w-xs space-y-1">
-          <Row k={`One-off subtotal (ex ${taxLabelFor(cur)})`} v={money(q.one_off_subtotal, cur)} />
-          <Row k={taxLabelFor(cur)} v={money(q.tax_amount, cur)} />
+          <Row k={`One-off subtotal (ex ${tax})`} v={money(q.one_off_subtotal, cur)} />
+          <Row k={tax} v={money(q.tax_amount, cur)} />
           <Row k="Due on acceptance" v={money(q.one_off_total, cur)} bold accent={accent} />
-          {q.recurring_arr > 0 && (() => {
-            // Recurring is quoted ex VAT like everything else; the tax is shown on top.
-            const rec = (data.items || []).filter(i => i.category === 'saas' || i.category === 'payments');
-            const vat = rec.reduce((s2, i) => {
-              const yearly = i.category === 'saas' && i.billing_type === 'monthly' ? Number(i.line_total || 0) * 12 : Number(i.line_total || 0);
-              const rate = i.category === 'payments' && i.tax_rate == null ? 0 : Number(i.tax_rate) || 0;
-              return s2 + yearly * rate / 100;
-            }, 0);
-            const perMonth = softwareMonthly(data.items || []);
-            return (<>
-              {perMonth > 0 && <Row k={`Software per month (ex ${taxLabelFor(cur)})`} v={money(perMonth, cur)} sub />}
-              <Row k={`Ongoing per year (ex ${taxLabelFor(cur)})`} v={money(q.recurring_arr, cur)} sub />
-              {vat > 0 && <Row k={`${taxLabelFor(cur)} on ongoing`} v={money(vat, cur)} sub />}
-              {vat > 0 && <Row k={`Ongoing per year (inc ${taxLabelFor(cur)})`} v={money(q.recurring_arr + vat, cur)} sub />}
-            </>);
-          })()}
+          {/* Software is quoted ex tax like everything else, with the tax on
+              top. Monthly lines and yearly lines are never added together: a
+              figure that says "per month" is exactly what leaves the account
+              each month. The tax row is left out when there is none to pay. */}
+          {rec.hasMonthly && (
+            <div className="pt-2 mt-2 border-t border-slate-200 space-y-1">
+              <Row k={`Software per month (ex ${tax})`} v={money(rec.monthlyEx, cur)} sub />
+              {rec.monthlyTax > 0 && <Row k={`${tax} per month`} v={money(rec.monthlyTax, cur)} sub />}
+              <Row k={`Software per month (inc ${tax})`} v={money(rec.monthlyInc, cur)} />
+            </div>
+          )}
+          {rec.hasAnnual && (
+            <div className="pt-2 mt-2 border-t border-slate-200 space-y-1">
+              <Row k={`Software per year (ex ${tax})`} v={money(rec.annualEx, cur)} sub />
+              {rec.annualTax > 0 && <Row k={`${tax} per year`} v={money(rec.annualTax, cur)} sub />}
+              <Row k={`Software per year (inc ${tax})`} v={money(rec.annualInc, cur)} />
+            </div>
+          )}
         </div>
         {q.go_live_date && <div className="text-xs text-slate-500 mt-3">Planned go-live: <strong>{fmtDate(q.go_live_date)}</strong></div>}
-        {q.recurring_arr > 0 && <div className="text-xs text-slate-600 mt-1">Software is billed monthly, <strong>{saasStartText(q.saas_start_days)}</strong>. Nothing for software is charged today.</div>}
+        {(rec.hasMonthly || rec.hasAnnual) && <div className="text-xs text-slate-600 mt-1">Software is billed {billedHow}, <strong>{saasStartText(q.saas_start_days)}</strong>. Nothing for software is charged today.</div>}
       </div>
 
       {/* Card-processing rates */}
-      {q.card_processing && (q.card_processing.rows || []).length > 0 && (
+      {hasRates && (
         <div className="px-6 sm:px-8 py-5 border-b border-slate-200">
           <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-3">Your card processing rates</div>
           <table className="w-full text-sm">

@@ -45,7 +45,10 @@ serve(async (req) => {
           saas_start_days: quote.saas_start_days ?? 0,
           payment_terms: quote.payment_terms, deposit_percent: quote.deposit_percent, currency: quote.currency || "GBP",
           one_off_subtotal: quote.one_off_subtotal, tax_amount: quote.tax_amount, one_off_total: quote.one_off_total,
-          recurring_arr: quote.recurring_arr, terms: quote.terms || s.quote_terms || "",
+          // recurring_arr is deliberately NOT sent: it is our internal figure
+          // (software ARR plus the card margin we expect to earn) and the page
+          // works out the customer's software price from the lines instead.
+          terms: quote.terms || s.quote_terms || "",
           signed: !!quote.signed_at, signed_by_name: quote.signed_by_name, created_at: quote.created_at, expired,
           card_processing: quote.card_processing || null,
         },
@@ -57,7 +60,13 @@ serve(async (req) => {
         company: company ? { name: company.name, address: [company.address, company.city, company.postcode].filter(Boolean).join(", ") } : null,
         contact: contact ? { name: [contact.first_name, contact.last_name].filter(Boolean).join(" "), email: contact.email, phone: contact.phone } : null,
         location: location ? { name: location.name, address: [location.address, location.city, location.postcode].filter(Boolean).join(", ") } : null,
-        items: items || [],
+        // A payments line is charged per transaction at the rate card. The
+        // price typed on it in the builder is our own yearly margin estimate,
+        // so its figures never leave the server (customerLines in
+        // src/lib/quoteLines.js drops the same fields on the page).
+        items: (items || []).map((it) => it.category === "payments"
+          ? { ...it, qty: null, unit_price: null, discount: null, line_total: null }
+          : it),
       });
     }
 

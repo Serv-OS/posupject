@@ -109,7 +109,12 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
 
   const deleteRecord = async () => {
     if (!confirm(`Delete "${company?.name}" and all its locations, deals, onboardings, and tickets?\n\nThis cannot be undone.`)) return;
-    await supabase.from('companies').delete().eq('id', companyId);
+    // Deleting a company takes its deals and their quotes with it, and the
+    // database refuses when one of those quotes is signed, paid or won
+    // (migration 118). Say so and stay here instead of closing a screen for
+    // a company that is still there.
+    const { error } = await supabase.from('companies').delete().eq('id', companyId);
+    if (error) { alert('Could not delete the company: ' + error.message); return; }
     onClose();
   };
 

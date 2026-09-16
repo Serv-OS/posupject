@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { FileSignature, Plus, X, FileDown } from 'lucide-react';
+import { FileSignature, Plus, X, FileDown, Trash2 } from 'lucide-react';
 import { money, curOf } from './InvoicesPanel.jsx';
 import { sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { useStickyState } from '../../lib/stickyState';
@@ -24,6 +24,37 @@ export const QUOTE_BADGE = {
 
 const STATUSES = ['draft', 'sent', 'viewed', 'signed', 'paid', 'won', 'declined', 'expired', 'void'];
 
+// Which quotes may be deleted. A signed, paid or won quote is a contract the
+// customer accepted and invoices point at it, so it is set to void and kept,
+// never deleted. Everything else is ours to remove.
+export const QUOTE_DELETABLE = ['draft', 'sent', 'viewed', 'declined', 'expired', 'void'];
+export const QUOTE_ACCEPTED_MSG = 'Accepted quotes cannot be deleted. Set it to void instead.';
+
+// A quote with a site and no deal is invisible to the pipeline. The database
+// links it when the site is linked to a deal or the quote is saved, so one
+// still like this has a site with no deal, or a company that does not match.
+export const NOT_ON_DEAL_MSG = 'Not on a deal yet: link the site to a deal';
+export const isOffDeal = (q) => !!q.location_id && !q.deal_id && q.status !== 'void';
+
+/** Delete one quote, after asking. Resolves { ok, deal_id }.
+ *
+ * The SAVED status decides, not what a status box on screen may hold unsaved,
+ * so the row is read first. Lines cascade in the database; invoices and
+ * recurring invoices keep their rows with the quote link cleared; the deal is
+ * recalculated by the quote_recalc trigger. A refusal from the database is
+ * shown as it comes. */
+export async function deleteQuote(quote) {
+  const { data: fresh, error: readErr } = await supabase.from('quotes').select('status, deal_id, quote_number').eq('id', quote.id).single();
+  if (readErr) { alert(readErr.message); return { ok: false }; }
+  if (!QUOTE_DELETABLE.includes(fresh.status)) { alert(QUOTE_ACCEPTED_MSG); return { ok: false }; }
+  if (!confirm(`Delete quote Q-${fresh.quote_number}? Its lines go with it and its deal is recalculated. This cannot be undone.`)) return { ok: false };
+  const { error, count } = await supabase.from('quotes').delete({ count: 'exact' }).eq('id', quote.id);
+  if (error) { alert(error.message); return { ok: false }; }
+  // Row level security filters silently: no error, nothing deleted.
+  if (!count) { alert('The quote was not deleted. You may not have permission, or it was already removed.'); return { ok: false }; }
+  return { ok: true, deal_id: fresh.deal_id };
+}
+
 export default function QuotesPanel({ profile, onNavigate }) {
   const [quotes, setQuotes] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -37,6 +68,7 @@ export default function QuotesPanel({ profile, onNavigate }) {
   const [newCompany, setNewCompany] = useState('');
   const [newContact, setNewContact] = useState('');
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
   const [loading, setLoading] = useState(true);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -69,6 +101,14 @@ export default function QuotesPanel({ profile, onNavigate }) {
     if (error) { alert(error.message); return; }
     setCreating(false); setNewCompany(''); setNewContact('');
     onNavigate?.('quote', data.id);
+  };
+
+  // One delete at a time; the list reloads so the row and the stats agree.
+  const removeQuote = async (q) => {
+    if (deletingId) return;
+    setDeletingId(q.id);
+    try { const r = await deleteQuote(q); if (r.ok) await load(); }
+    finally { setDeletingId(null); }
   };
 
   const openQuotes = quotes.filter(q => ['sent', 'viewed'].includes(quoteStatus(q)));
@@ -200,6 +240,7 @@ export default function QuotesPanel({ profile, onNavigate }) {
                   <th className="text-right px-4 py-2.5">One-off total</th>
                   <th className="text-right px-4 py-2.5 hidden lg:table-cell">ARR</th>
                   <th className="text-left px-4 py-2.5">Status</th>
+                  {canWrite && <th className="px-2 py-2.5"><span className="sr-only">Delete</span></th>}
                 </tr>
               </thead>
               <tbody>
@@ -212,6 +253,7 @@ export default function QuotesPanel({ profile, onNavigate }) {
                       <td className="px-4 py-3">
                         <div className="text-paper">{q.company?.name || contactName(q) || '—'}</div>
                         <div className="text-xs text-dim">{q.location?.name || (q.company?.name ? contactName(q) : '')}</div>
+                        {isOffDeal(q) && <div className="text-[10px] text-amber-600 font-medium">{NOT_ON_DEAL_MSG}</div>}
                       </td>
                       <td className="px-4 py-3 text-muted hidden md:table-cell">{fmtD(q.created_at)}</td>
                       <td className="px-4 py-3 text-muted hidden md:table-cell">{fmtD(q.valid_until)}</td>
@@ -220,11 +262,19 @@ export default function QuotesPanel({ profile, onNavigate }) {
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded ${QUOTE_BADGE[st] || 'bg-slate-100 text-slate-500'}`}>{st}</span>
                       </td>
+                      {canWrite && (
+                        <td className="px-2 py-3 text-right" onClick={e => e.stopPropagation()}>
+                          {QUOTE_DELETABLE.includes(q.status)
+                            ? <button onClick={() => removeQuote(q)} disabled={!!deletingId} title="Delete this quote"
+                                className="p-1.5 rounded-lg text-dim hover:text-red-600 hover:bg-red-50 transition disabled:opacity-50"><Trash2 size={14} /></button>
+                            : <span title={QUOTE_ACCEPTED_MSG} className="inline-block p-1.5 text-dim/40 cursor-help"><Trash2 size={14} /></span>}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
                 {!filtered.length && (
-                  <tr><td colSpan={7} className="px-4 py-10 text-center text-dim text-xs italic">
+                  <tr><td colSpan={canWrite ? 8 : 7} className="px-4 py-10 text-center text-dim text-xs italic">
                     {loading ? 'Loading…' : statusFilter === 'all' ? 'No quotes yet — create one or raise one from a deal.' : `No ${statusFilter} quotes.`}
                   </td></tr>
                 )}
