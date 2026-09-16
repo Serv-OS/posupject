@@ -4,6 +4,7 @@
 // Returns the PDF as bytes for MIME attachment.
 import { jsPDF } from "https://esm.sh/jspdf@4.2.1";
 import autoTable from "https://esm.sh/jspdf-autotable@5.0.8";
+import { amountPaidOn, balanceDue } from "./invoiceEmail.ts";
 
 const hexToRgb = (hex: string) => {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
@@ -141,7 +142,8 @@ export async function buildInvoicePdfBytes({ inv = {} as any, lines = [] as any[
   const row = (label: string, val: number, opts: any = {}) => {
     doc.setFont("helvetica", opts.bold ? "bold" : "normal").setFontSize(opts.bold ? 11 : 10);
     doc.setTextColor(...(opts.color || [90, 90, 90])).text(label, tx, y);
-    doc.setTextColor(...(opts.color || [40, 40, 40])).text(money(val), W - M, y, { align: "right" });
+    // A plain hyphen for a step down to the balance: the built-in font has no minus sign.
+    doc.setTextColor(...(opts.color || [40, 40, 40])).text(`${opts.minus ? "-" : ""}${money(val)}`, W - M, y, { align: "right" });
     y += opts.bold ? 20 : 16;
   };
   row("Subtotal", totals.subtotal ?? inv.subtotal ?? 0);
@@ -153,6 +155,17 @@ export async function buildInvoicePdfBytes({ inv = {} as any, lines = [] as any[
     row("Paid", paid, { color: [6, 120, 70] });
     const bal = (Number(totals.total ?? inv.total ?? 0) - Number(paid));
     if (Math.abs(bal) > 0.005) row("Balance due", bal, { bold: true });
+  } else if (status !== "draft" && status !== "void") {
+    // Part paid (a payment recorded, or a deposit): what came in and what is
+    // left, as the public invoice page and the email show it. Only with no
+    // credit on the invoice, since this layout has no credit rows to explain
+    // the rest of the balance.
+    const state = { ...inv, total: totals.total ?? inv.total, amount_paid: totals.paid ?? inv.amount_paid };
+    const paid = amountPaidOn(state);
+    if (paid > 0 && !(Number(inv.amount_credited) > 0) && !(Number(inv.amount_allocated) > 0)) {
+      row("Paid", paid, { color: [6, 120, 70], minus: true });
+      row("Balance due", balanceDue(state), { bold: true });
+    }
   }
   y += 8;
 

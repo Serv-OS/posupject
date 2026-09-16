@@ -27,7 +27,8 @@ import InvoicesPanel from '../components/crm/InvoicesPanel.jsx';
 import InvoiceBuilder from '../components/crm/InvoiceBuilder.jsx';
 import CreditNoteModal from '../components/crm/CreditNoteModal.jsx';
 import ApplyCreditModal from '../components/crm/ApplyCreditModal.jsx';
-import { balanceDue, creditAvailable } from '../lib/creditNotes.js';
+import AmountReceivedModal from '../components/crm/AmountReceivedModal.jsx';
+import { amountPaid, balanceDue, creditAvailable } from '../lib/creditNotes.js';
 import SalesPerformance from '../components/crm/SalesPerformance.jsx';
 import MobileNav from '../components/MobileNav.jsx';
 import QuickAddCommand from '../components/crm/QuickAddCommand.jsx';
@@ -338,6 +339,57 @@ function AllocateView() {
   );
 }
 
+// #received: Change amount received open on INV-1036 (seeded in stub.js): paid,
+// £1,344 total, £1,120 recorded as received, CN-1005 £224 with no credit to
+// use. Saving runs the in-memory set_invoice_amount_received. Afterwards the
+// sheet opens again with the figures as they now stand, or INV-1036 opens on
+// its Payment history and CN-1005 with its Apply button.
+function ReceivedView() {
+  const [open, setOpen] = useState(true);
+  const [round, setRound] = useState(0);
+  const [said, setSaid] = useState('');
+  const [showing, setShowing] = useState(false);
+  const inv = TABLES.invoices.find((i) => i.id === 'inv1036');
+  if (showing) return <InvoiceView id={inv.id} />;
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--scene-bg)', padding: 16 }}>
+      <div style={{ maxWidth: 420, margin: '0 auto', fontSize: 13 }} className="space-y-3 text-paper">
+        <div>INV-{inv.invoice_number}: {amountPaid(inv)} received of {inv.total}, {inv.status}.</div>
+        {said && <div data-harness-said>{said}</div>}
+        {!open && (
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-glass px-4 py-2 rounded-xl text-sm" onClick={() => { setRound((r) => r + 1); setOpen(true); }}>Change amount received again</button>
+            <button type="button" className="btn-glass px-4 py-2 rounded-xl text-sm" onClick={() => setShowing(true)}>Open INV-{inv.invoice_number}</button>
+          </div>
+        )}
+      </div>
+      {open && (
+        <AmountReceivedModal key={round} invoice={{ ...inv }} kind="correction"
+          onClose={() => setOpen(false)}
+          onSaved={(result) => {
+            setOpen(false);
+            const moved = (result?.credit_moved || []).map((c) => `CN-${c.credit_number} ${c.refund_status} ${c.refund_due}`);
+            setSaid(`Amount received is now ${result?.amount_paid}, ${result?.status}, overpaid ${result?.overpaid}${moved.length ? `, ${moved.join(', ')}` : ''}.`);
+          }} />
+      )}
+    </div>
+  );
+}
+
+// #creditnotes-list: the Invoices screen on its Credit notes tab, where a note
+// with credit to use has its Apply button (CN-1003 as seeded, and CN-1005 once
+// #received has corrected INV-1036 in the same page). The tab is the one the
+// screen remembers, set before it mounts.
+function CreditNotesListView() {
+  useState(() => {
+    try {
+      const key = 'crm.filter.invoices';
+      sessionStorage.setItem(key, JSON.stringify({ ...JSON.parse(sessionStorage.getItem(key) || '{}'), tab: 'credits' }));
+    } catch { /* no storage: the screen opens on Invoices */ }
+  });
+  return <InvoicesPanel profile={P} onNavigate={() => {}} />;
+}
+
 // #invoice-credits (INV-1045, with its issued and cancelled credit notes) and
 // #invoice-paid (INV-1046, paid, so a credit on it owes a refund), and
 // #invoice-allocated (INV-1049, with CN-1004's £224 applied to it). Mounted as
@@ -363,6 +415,7 @@ function App() {
   if (v === 'invoice-credits' || v === 'invoice-paid') return <InvoiceView id={v === 'invoice-paid' ? 'inv1046' : 'inv1045'} />;
   if (v === 'allocate') return <AllocateView />;
   if (v === 'invoice-allocated') return <InvoiceView id="inv1049" />;
+  if (v === 'received') return <ReceivedView />;
   return (
     <div className="work" style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--scene-bg)' }}>
       <main className="work flex-1 min-w-0 overflow-hidden lg:flex lg:flex-col">
@@ -385,6 +438,7 @@ function App() {
         {v === 'products' && <ProductsPanel profile={P} onNavigate={nav} />}
         {v === 'quotes' && <QuotesPanel profile={P} onNavigate={nav} onOpen={nav} />}
         {v === 'invoices' && <InvoicesPanel profile={P} onNavigate={nav} />}
+        {v === 'creditnotes-list' && <CreditNotesListView />}
         {v === 'sales' && <SalesPerformance profile={P} onNavigate={nav} />}
         {v === 'processing' && <PaymentsPanel profile={P} onNavigate={nav} />}
         {v === 'deal' && <DealDetail dealId="d1" profile={P} onClose={nav} onNavigate={nav} />}
@@ -394,7 +448,7 @@ function App() {
         {v === 'site' && <LocationDetail locationId="l1" profile={P} onClose={nav} onNavigate={nav} onCreateLead={nav} />}
         </div>
       </main>
-      <MobileNav profile={P} view={v === 'project' ? 'projects' : v === 'site' ? 'locations' : v} onGo={(k) => { location.hash = k === 'locations' ? 'site' : k; }} />
+      <MobileNav profile={P} view={v === 'project' ? 'projects' : v === 'site' ? 'locations' : v === 'creditnotes-list' ? 'invoices' : v} onGo={(k) => { location.hash = k === 'locations' ? 'site' : k; }} />
       <QuickAddCommand profile={P} onNavigate={nav} />
     </div>
   );

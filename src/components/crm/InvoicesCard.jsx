@@ -3,13 +3,17 @@ import { supabase } from '../../lib/supabase';
 import { currencyForCountry } from '../../lib/region';
 import { Receipt, Repeat } from 'lucide-react';
 import { money, invStatus, INV_BADGE, creditMarker, CN_BADGE } from './InvoicesPanel.jsx';
-import { balanceDue, creditNoteLabel, creditNoteStatusLabel, companyCreditAvailable } from '../../lib/creditNotes';
+import { balanceDue, creditNoteLabel, creditNoteStatusLabel, creditNoteStatusKind, companyCreditAvailable } from '../../lib/creditNotes';
 
 // Invoices associated with a record. Pass exactly one of companyId /
 // locationId / contactId. "+ New" raises a draft pre-associated to the record.
 export default function InvoicesCard({ companyId, locationId, contactId, profile, onNavigate }) {
   const [invoices, setInvoices] = useState([]);
   const [credits, setCredits] = useState([]);
+  // Where the shown notes' credit was applied, as { credit_note_id,
+  // invoice_number, removed_at }, for "Used on INV-1050". null when it could
+  // not be read (the credit allocations migration not applied yet).
+  const [usedOn, setUsedOn] = useState(null);
   // Every credit note of this record with credit still to apply or refund,
   // not only those under the invoices shown: "Credit available £224".
   const [available, setAvailable] = useState([]);
@@ -31,12 +35,22 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
         // ones for the invoices shown. An error (the credit notes migration
         // not applied yet) just shows none.
         const ids = rows.filter(i => i.status !== 'draft').map(i => i.id);
-        if (!ids.length) { setCredits([]); return; }
+        if (!ids.length) { setCredits([]); setUsedOn(null); return; }
         // All columns: which ones there are depends on the migrations applied,
         // and the status chip reads amount_allocated when it is there.
         const c = await supabase.from('credit_notes').select('*')
           .in('invoice_id', ids).order('credit_number');
-        if (live) setCredits(c.error ? [] : (c.data || []));
+        const notes = c.error ? [] : (c.data || []);
+        if (live) setCredits(notes);
+        // Only notes whose credit went to other invoices need the numbers.
+        const usedIds = notes.filter(n => Number(n.amount_allocated) > 0).map(n => n.id);
+        if (!usedIds.length) { if (live) setUsedOn(null); return; }
+        const a = await supabase.from('credit_allocations').select('credit_note_id, invoice_id, removed_at').in('credit_note_id', usedIds);
+        if (a.error) { if (live) setUsedOn(null); return; }
+        const invIds = [...new Set((a.data || []).map(x => x.invoice_id))];
+        const nums = invIds.length ? await supabase.from('invoices').select('id, invoice_number').in('id', invIds) : { data: [] };
+        const numOf = new Map((nums.data || []).map(x => [x.id, x.invoice_number]));
+        if (live) setUsedOn((a.data || []).map(x => ({ credit_note_id: x.credit_note_id, invoice_number: numOf.get(x.invoice_id), removed_at: x.removed_at })));
       });
     supabase.from('recurring_invoices').select('id', { count: 'exact', head: true }).eq(field, value).eq('active', true)
       .then(r => setRecurringCount(r.count || 0));
@@ -87,7 +101,7 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
       <div className="divide-y divide-bdr">
         {creditByCur.length > 0 && (
           <div className="px-4 py-2 text-[11px] flex items-center gap-2 bg-amber/10" title={creditFrom.length ? `From ${creditFrom.join(', ')}` : undefined}>
-            <span className="text-amber-deep font-semibold">Credit available</span>
+            <span className="text-amber-deep font-semibold">Credit to use</span>
             <span className="text-muted truncate">{creditFrom.length === 1 ? creditFrom[0] : `${creditFrom.length} credit notes`}</span>
             <span className="ml-auto font-semibold text-amber-deep tabular-nums shrink-0">{creditByCur.map(([c, v]) => money(v, c)).join(' + ')}</span>
           </div>
@@ -108,13 +122,20 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
                 <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${INV_BADGE[st]}`}>{st}</span>
               </div>
               {notes.map(cn => {
-                const lbl = creditNoteStatusLabel(cn);
+                const ncur = cn.currency || inv.currency;
+                // Plain words ("£224.00 to use", "Used on INV-1050"); the chip
+                // colour keys on the kind, which carries no figures.
+                const lbl = creditNoteStatusLabel(cn, {
+                  invoiceNumber: inv.invoice_number,
+                  usedOn: usedOn ? usedOn.filter(u => u.credit_note_id === cn.id) : undefined,
+                  money: (v) => money(v, ncur),
+                });
                 const gone = cn.status === 'cancelled';
                 return (
-                  <div key={cn.id} className="pl-8 pr-4 pb-2 -mt-1 flex items-center gap-2">
+                  <div key={cn.id} className="pl-8 pr-4 pb-2 -mt-1 flex items-center gap-2 min-w-0">
                     <span className={`font-mono text-[10px] shrink-0 ${gone ? 'line-through text-dim' : 'text-muted'}`}>{creditNoteLabel(cn)}</span>
-                    <span className={`text-xs tabular-nums ml-auto shrink-0 ${gone ? 'line-through text-dim' : 'text-violet-700'}`}>-{money(cn.total, cn.currency || inv.currency)}</span>
-                    <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${CN_BADGE[lbl]}`}>{lbl}</span>
+                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded min-w-0 truncate ${CN_BADGE[creditNoteStatusKind(cn)]}`} title={lbl}>{lbl}</span>
+                    <span className={`text-xs tabular-nums ml-auto shrink-0 ${gone ? 'line-through text-dim' : 'text-violet-700'}`}>-{money(cn.total, ncur)}</span>
                   </div>
                 );
               })}

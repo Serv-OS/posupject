@@ -49,6 +49,19 @@
  * same words, as allocate_credit, remove_credit_allocation and the credit note
  * functions, so a screen can show a problem before the database refuses it.
  *
+ * THE AMOUNT RECEIVED
+ * The cash on an invoice is changed through one database function,
+ * set_invoice_amount_received (the amount received migration), for both a
+ * correction (Change: the total the customer has paid) and a payment (Mark
+ * paid: this payment added to the cash already received, markPaymentTotal).
+ * Whatever has settled the invoice beyond what it asks for is held by its
+ * credit notes as refund_due, so correcting the cash moves credit to use onto
+ * or off them. amountReceivedEffect does the same sums, in the same order and
+ * with the same words, so the sheet can show what will happen first. Card
+ * payments still go through record_invoice_payment. paid_at is the day money
+ * came in, which Collected counts on: it stays while there is cash on the
+ * invoice, even when a correction reopens it.
+ *
  * Pure on purpose: no React, no Supabase, so it can be tested against the
  * invoice maths.
  */
@@ -563,18 +576,87 @@ export const creditNoteLabel = (n) => {
 };
 
 /**
- * The status chip: Issued, Available (credit available, none of it used yet),
- * Part used (some applied to an invoice, some left), Used (all applied),
- * Refunded (what was left refunded, whether or not some was used first) or
- * Cancelled.
+ * A fixed word for the kind of status a credit note has, for keying chip
+ * colours and list filters (the label itself carries amounts and invoice
+ * numbers): Issued (it only reduced its own invoice), Available (credit to
+ * use, none of it used yet), Part used (some applied to an invoice, some
+ * left), Used (all applied), Refunded (what was left refunded, whether or not
+ * some was used first) or Cancelled.
  */
-export const creditNoteStatusLabel = (note) => {
+export const creditNoteStatusKind = (note) => {
   if (note?.status === 'cancelled') return 'Cancelled';
   if (note?.refund_status === 'owed') return isPos(noteAllocatedDec(note)) ? 'Part used' : 'Available';
   if (note?.refund_status === 'allocated') return 'Used';
   if (note?.refund_status === 'refunded') return 'Refunded';
   return 'Issued';
 };
+
+// Pennies as the database's to_char(x, 'FM999,999,999,990.00') writes them:
+// 1,344.00, 0.50. Worked on the exact decimal, so no float can round it.
+function moneyDigits(a) {
+  const p = toPennies(a);
+  const neg = p.n < ZERO;
+  const digits = (neg ? -p.n : p.n).toString().padStart(3, '0');
+  const whole = digits.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${neg ? '-' : ''}${whole}.${digits.slice(-2)}`;
+}
+// £ unless the row says USD: posupcrm rows carry no currency and are pounds.
+const currencySign = (currency) => (currency === 'USD' ? '$' : '£');
+const moneyText = (a, currency) => `${currencySign(currency)}${moneyDigits(a)}`;
+
+// INV-1050 from a number, 'INV-1050', an invoice row or a row holding one
+// ({ invoice: { invoice_number } }, as the lists load it).
+function invoiceRef(v) {
+  const n = v != null && typeof v === 'object' ? (v.invoice_number ?? v.invoice?.invoice_number) : v;
+  if (n == null || n === '') return null;
+  return String(n).startsWith('INV-') ? String(n) : `INV-${n}`;
+}
+// "INV-1050", "INV-1050 and INV-1051", "INV-1050, INV-1051 and INV-1052".
+function joinRefs(refs) {
+  const list = [...new Set(refs.filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  if (list.length <= 1) return list[0] || '';
+  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+}
+
+/**
+ * What a credit note's status says, in plain words:
+ *   issued with nothing owed  "Used on INV-1036": it reduced its own
+ *                             invoice's balance
+ *   credit to use             "£224.00 to use", or when part has gone
+ *                             "£100.00 used, £124.00 to use" (and
+ *                             "£124.00 refunded" when a refund came first)
+ *   all applied               "Used on INV-1050", every invoice it went to
+ *   Refunded, Cancelled       as they were
+ * options (all optional):
+ *   invoiceNumber  the note's own invoice number; otherwise read from
+ *                  note.invoice.invoice_number or note.invoice_number
+ *   usedOn         the invoices its credit was applied to: numbers, 'INV-'
+ *                  texts, invoice rows or allocation rows carrying
+ *                  invoice.invoice_number (removed ones are skipped);
+ *                  otherwise note.used_on
+ *   money          (amount, currency) => text, to format as the screen does;
+ *                  otherwise £ (or $ for a USD note) with 2 places
+ * Chip colours and filters key on creditNoteStatusKind, which never changes.
+ */
+export function creditNoteStatusLabel(note, { invoiceNumber, usedOn, money } = {}) {
+  const kind = creditNoteStatusKind(note);
+  if (kind === 'Cancelled' || kind === 'Refunded') return kind;
+  const fmt = (n) => (typeof money === 'function' ? money(n, note?.currency) : moneyText(decOr0(n), note?.currency));
+  if (kind === 'Available' || kind === 'Part used') {
+    // The figures creditUse gives, worked out here so nothing is used before it is defined.
+    const used = toPennies(noteAllocatedDec(note)), refunded = toPennies(refundedDec(note));
+    return [isPos(used) ? `${fmt(toNumber(used))} used` : null, isPos(refunded) ? `${fmt(toNumber(refunded))} refunded` : null,
+      `${fmt(toNumber(availableDec(note)))} to use`].filter(Boolean).join(', ');
+  }
+  if (kind === 'Used') {
+    const rows = (usedOn ?? note?.used_on ?? []).filter((r) => !(r && typeof r === 'object' && r.removed_at));
+    const refs = joinRefs(rows.map(invoiceRef));
+    return refs ? `Used on ${refs}` : 'Used on another invoice';
+  }
+  const own = invoiceRef(invoiceNumber ?? note?.invoice?.invoice_number ?? note?.invoice_number);
+  return own ? `Used on ${own}` : 'Used on its invoice';
+}
 
 /**
  * Why Mark refunded would be refused, by the same checks, in the same order
@@ -757,4 +839,202 @@ export function removeAllocationEffect({ allocation, note, invoice, invoiceNotes
     invoice: { amount_allocated: after.amount_allocated, balance_due: balance, reopen, status: reopen ? 'sent' : invoice?.status },
     refunds: fit.refunds,
   };
+}
+
+// ── The amount received ─────────────────────────────────────────────────────
+/** The two ways set_invoice_amount_received is called: Change and Mark paid. */
+export const RECEIVED_KINDS = ['correction', 'payment'];
+/** The reason a payment is recorded with when none is typed. */
+export const PAYMENT_REASON = 'Payment received';
+
+/**
+ * What Mark paid sends as the amount received: the cash already received on
+ * the invoice (in pennies; a paid invoice with no amount_paid counts as paid
+ * in full) plus this payment, exactly as typed, so a payment with more than 2
+ * places is still refused rather than rounded away. null when the payment is
+ * not a number.
+ */
+export function markPaymentTotal(invoice, payment) {
+  const amt = toDec(payment);
+  return amt ? toNumber(add(toPennies(paidDec(invoice)), amt)) : null;
+}
+
+/**
+ * What setting an invoice's amount received does, by the same rules, in the
+ * same order and with the same words as set_invoice_amount_received, so the
+ * sheet can say it before anyone saves and the harness can do it.
+ *   invoice               the invoice (its amount_paid, amount_credited and
+ *                         amount_allocated columns are read, as balanceDue does)
+ *   notes                 its credit notes (cancelled ones are skipped)
+ *   allocationsFromNotes  optional: the credit_allocations rows applied FROM
+ *                         those notes; the active ones are summed per note
+ *                         (as the database does) instead of each note's
+ *                         amount_allocated
+ *   amount                the TOTAL cash received afterwards (for Mark paid,
+ *                         markPaymentTotal(invoice, payment))
+ *   reason                checked only when passed; a blank one on a payment
+ *                         is "Payment received"
+ *   kind                  'correction' (Change, the default) or 'payment'
+ *   expectedFrom          optional: the amount received the screen worked
+ *                         from (p_expected_from); refused when the invoice no
+ *                         longer has it
+ * A payment is refused on an invoice that is paid or has nothing left to pay:
+ * that is Change's job.
+ * Returns { problem } when the database would refuse, otherwise:
+ *   from_amount, amount_paid  the cash before and after, in pennies
+ *   status                'paid' once cash plus credit applied covers what the
+ *                         invoice asks for; a paid invoice that no longer is
+ *                         goes back to 'sent'; sent and viewed stay as they are
+ *   paid_at               the day money came in, which Collected counts on:
+ *                         'keep' (an invoice that stays paid, or one with cash
+ *                         on it that already has a date, reopened or not),
+ *                         'now' (its first cash, or it becomes paid, with no
+ *                         date yet) or 'clear' (left with no cash and unpaid)
+ *   balance_due, overpaid what is left to pay, and settled beyond what it asks
+ *   credit_moved          [{ id, credit_number, refund_due, refund_status,
+ *                         credit_available }] for each note that changes, in
+ *                         the order the database changes them (newest first)
+ *   not_on_a_credit_note  overpaid with no credit note to hold it
+ *   reason                the reason as it will be stored
+ */
+export function amountReceivedEffect({ invoice, notes = [], allocationsFromNotes, amount, reason, kind = 'correction', expectedFrom } = {}) {
+  const k = kind ?? 'correction';
+  if (!RECEIVED_KINDS.includes(k)) return { problem: 'Choose correction or payment.' };
+  if (!invoice) return { problem: 'Invoice not found.' };
+  if (!CREDITABLE_STATUSES.includes(invoice.status)) {
+    return { problem: 'The amount received can only be changed on a sent, viewed or paid invoice.' };
+  }
+  const payment = k === 'payment';
+  const what = payment ? 'The payment' : 'The amount received';
+
+  const applied = allocatedDec(invoice);
+  const from = toPennies(paidDec(invoice));
+  // A card payment or a colleague's change landed after the screen read it.
+  if (expectedFrom != null) {
+    const seen = toDec(expectedFrom);
+    if (!seen || cmp(toPennies(seen), from) !== 0) {
+      return { problem: 'The amount received on this invoice changed while this was open. Check the figures and save again.' };
+    }
+  }
+  const asked = askedAfter(invoice, decOr0(invoice.amount_credited));
+  if (payment) {
+    const name = invoiceRef(invoice) || 'This invoice';
+    if (invoice.status === 'paid') return { problem: `${name} has already been paid. Use Change to correct the amount received.` };
+    if (cmp(add(from, toPennies(applied)), asked) >= 0) return { problem: `${name} has nothing left to pay. Use Change to correct the amount received.` };
+  }
+  const amt = toDec(amount);
+  if (!amt || (!payment && amt.n < ZERO)) return { problem: payment ? 'The payment must be more than 0.' : 'The amount received must be 0 or more.' };
+  // Whole pennies, after the same 6 place wash as the rounding rule.
+  if (cmp(roundTo(amt, 6), toPennies(amt)) !== 0) return { problem: `${what} can have at most 2 decimal places.` };
+  const to = toPennies(amt);
+  if (payment && cmp(to, from) <= 0) return { problem: 'The payment must be more than 0.' };
+  if (!payment && cmp(to, from) === 0) return { problem: 'That is already the amount received on this invoice.' };
+
+  let why = reason === undefined ? undefined : trimmed(reason);
+  if (payment && (why === undefined || why === '')) why = PAYMENT_REASON;
+  if (why !== undefined) {
+    const length = [...why].length;
+    if (length < REASON_MIN || length > REASON_MAX) return { problem: `Give a reason of ${REASON_MIN} to ${REASON_MAX} characters.` };
+  }
+
+  const settled = add(to, toPennies(applied));
+  const target = max0(sub(settled, asked));
+
+  const issued = (notes || []).filter((c) => c?.status === 'issued');
+  const rows = Array.isArray(allocationsFromNotes) ? allocationsFromNotes.filter((a) => a && !a.removed_at) : null;
+  const usedOf = (c) => (rows ? rows.filter((a) => a.credit_note_id === c.id).reduce((s, a) => add(s, decOr0(a.amount)), DZERO) : noteAllocatedDec(c));
+  const refundedOf = (c) => decOr0(c.refunded_amount);
+  const held = issued.reduce((s, c) => add(s, refundOnNote(c)), DZERO);
+  const fixed = issued.reduce((s, c) => add(add(s, refundedOf(c)), usedOf(c)), DZERO);
+  if (cmp(target, fixed) < 0) {
+    const lowest = sub(add(asked, fixed), toPennies(applied));
+    return {
+      problem: `${moneyText(fixed, invoice.currency)} of the credit from this invoice has already been used or refunded, so the amount received cannot go below ${moneyText(lowest, invoice.currency)}.`,
+    };
+  }
+
+  const wasPaid = invoice.status === 'paid';
+  const paid = cmp(settled, asked) >= 0;
+  const status = paid ? 'paid' : wasPaid ? 'sent' : invoice.status;
+  // The day money came in, as the database sets it: as it was while the
+  // invoice stays paid; now if it has no date yet once there is cash or it
+  // becomes paid; cleared when it is left with no cash and unpaid.
+  const dated = invoice.paid_at != null && invoice.paid_at !== '' && invoice.paid_at !== false;
+  const paidAt = paid && wasPaid ? 'keep'
+    : paid || isPos(to) ? (dated ? 'keep' : 'now')
+      : dated ? 'clear' : 'keep';
+  const newest = (a, b) => (Number(b.credit_number) || 0) - (Number(a.credit_number) || 0);
+  const moved = [];
+  let more = DZERO;
+  if (cmp(target, held) > 0) {
+    // More overpaid: added newest first, each note up to its total.
+    more = sub(target, held);
+    for (const c of issued.filter((x) => ['none', 'owed', 'allocated'].includes(x.refund_status)).sort(newest)) {
+      if (!isPos(more)) break;
+      const step = minDec(more, sub(decOr0(c.total), decOr0(c.refund_due)));
+      if (!isPos(step)) continue;
+      const due = add(decOr0(c.refund_due), step);
+      moved.push({ id: c.id, credit_number: c.credit_number, refund_due: toNumber(due), refund_status: 'owed',
+        credit_available: toNumber(max0(toPennies(sub(sub(due, usedOf(c)), refundedOf(c))))) });
+      more = sub(more, step);
+    }
+  } else if (cmp(target, held) < 0) {
+    // Less overpaid: off the credit still to use, newest first.
+    let less = sub(held, target);
+    for (const c of issued.filter((x) => x.refund_status === 'owed').sort(newest)) {
+      if (!isPos(less)) break;
+      const used = usedOf(c), refunded = refundedOf(c);
+      const step = minDec(less, max0(sub(sub(decOr0(c.refund_due), used), refunded)));
+      if (!isPos(step)) continue;
+      const due = sub(decOr0(c.refund_due), step);
+      const left = sub(sub(due, used), refunded);
+      const st = isPos(left) ? 'owed' : isPos(refunded) ? 'refunded' : isPos(used) ? 'allocated' : 'none';
+      moved.push({ id: c.id, credit_number: c.credit_number, refund_due: toNumber(due), refund_status: st,
+        credit_available: toNumber(max0(toPennies(left))) });
+      less = sub(less, step);
+    }
+  }
+
+  return {
+    problem: null,
+    kind: k,
+    reason: why,
+    from_amount: toNumber(from),
+    amount_paid: toNumber(to),
+    status,
+    paid_at: paidAt,
+    balance_due: toNumber(max0(sub(asked, settled))),
+    overpaid: toNumber(target),
+    credit_moved: moved,
+    not_on_a_credit_note: toNumber(max0(more)),
+  };
+}
+
+/**
+ * What to do about money paid beyond what an invoice asks for that no credit
+ * note holds (overpaidNotOnCredit on the invoice screen, not_on_a_credit_note
+ * from set_invoice_amount_received on the amount received sheet), as the
+ * sentence that follows "Overpaid £X." null when nothing is overpaid.
+ *   invoice    the invoice as it is, or will be once saved (its amount_paid,
+ *              total, amount_credited and amount_allocated are read)
+ *   overpaid   what no credit note holds
+ *   canCredit  whether a credit note can still be raised on it
+ * When no more is overpaid than the credit applied TO the invoice, the customer
+ * paid without using that credit. A credit note would take VAT off a sale that
+ * was never reduced, and the note the credit came from would still read as
+ * used, so the way out is an owner removing the credit applied, which puts it
+ * back on that note to use. Otherwise a credit note is raised to use or refund
+ * it, or when none can be, it is refunded.
+ */
+export function overpaidAdvice({ invoice, overpaid, canCredit } = {}) {
+  const over = toPennies(decOr0(overpaid));
+  if (!isPos(over)) return null;
+  const applied = toPennies(allocatedDec(invoice));
+  if (isPos(applied) && cmp(over, applied) <= 0) {
+    const inFull = cmp(toPennies(paidDec(invoice)), leftDec(invoice)) >= 0;
+    return `${inFull ? 'The customer paid in full without using the credit applied.' : 'The customer paid more than was left to pay after the credit applied.'} An owner can remove the credit applied so it goes back on the credit note.`;
+  }
+  return canCredit
+    ? 'Raise a credit note to use or refund it.'
+    : 'More was paid than this invoice asks for and no credit note holds it as credit. Refund it to the customer.';
 }

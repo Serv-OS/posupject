@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   lineNet, lineTax, creditTotals, creditableLeft, balanceDue, creditState, canRaiseCredit,
-  linesFromInvoice, validateCredit, refundFor, creditNoteLabel, creditNoteStatusLabel,
+  linesFromInvoice, validateCredit, refundFor, creditNoteLabel, creditNoteStatusLabel, creditNoteStatusKind,
   issuedTotal, amountPaid, taxRatesFor, MAX_LINES,
   lineCreditLeft, creditIssueDate, cancelCreditEffect, overpaidNotOnCredit,
   creditAvailable, creditUse, settledAmount, markPaidAmount, allocationProblems, allocationDefault,
   allocationEffect, removeAllocationEffect, companyCreditAvailable, ALLOCATABLE_STATUSES, refundProblem,
+  amountReceivedEffect, markPaymentTotal, RECEIVED_KINDS, PAYMENT_REASON, overpaidAdvice,
 } from './creditNotes.js';
 
 // An invoice exactly as the app stores one. The two reduces are copied from
@@ -35,15 +36,42 @@ describe('creditNoteLabel and status', () => {
     expect(creditNoteLabel({ credit_number: 1002 })).toBe('CN-1002');
     expect(creditNoteLabel(null)).toBe('');
   });
-  it('labels the chip from status, refund and credit used', () => {
-    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'none' })).toBe('Issued');
-    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'owed', refund_due: 224, amount_allocated: 0 })).toBe('Available');
-    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'owed', refund_due: 224 })).toBe('Available');
-    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'owed', refund_due: 224, amount_allocated: 100 })).toBe('Part used');
-    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'allocated', refund_due: 224, amount_allocated: 224 })).toBe('Used');
-    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'refunded' })).toBe('Refunded');
+  it('keys the chip from status, refund and credit used', () => {
+    expect(creditNoteStatusKind({ status: 'issued', refund_status: 'none' })).toBe('Issued');
+    expect(creditNoteStatusKind({ status: 'issued', refund_status: 'owed', refund_due: 224, amount_allocated: 0 })).toBe('Available');
+    expect(creditNoteStatusKind({ status: 'issued', refund_status: 'owed', refund_due: 224 })).toBe('Available');
+    expect(creditNoteStatusKind({ status: 'issued', refund_status: 'owed', refund_due: 224, amount_allocated: 100 })).toBe('Part used');
+    expect(creditNoteStatusKind({ status: 'issued', refund_status: 'allocated', refund_due: 224, amount_allocated: 224 })).toBe('Used');
+    expect(creditNoteStatusKind({ status: 'issued', refund_status: 'refunded' })).toBe('Refunded');
+    expect(creditNoteStatusKind({ status: 'issued', refund_status: 'refunded', refund_due: 224, amount_allocated: 100, refunded_amount: 124 })).toBe('Refunded');
+    expect(creditNoteStatusKind({ status: 'cancelled', refund_status: 'none' })).toBe('Cancelled');
+  });
+
+  it('says what happened to the credit in plain words', () => {
+    // Nothing owed: it reduced its own invoice's balance.
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'none', invoice: { invoice_number: 1036 } })).toBe('Used on INV-1036');
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'none', invoice_number: 1036 })).toBe('Used on INV-1036');
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'none' }, { invoiceNumber: 1036 })).toBe('Used on INV-1036');
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'none' })).toBe('Used on its invoice');
+    // Credit to use, whole or part used.
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'owed', refund_due: 224 })).toBe('£224.00 to use');
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'owed', refund_due: 224, amount_allocated: 100 })).toBe('£100.00 used, £124.00 to use');
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'owed', refund_due: 1344, amount_allocated: 0.5, currency: 'USD' })).toBe('$0.50 used, $1,343.50 to use');
+    // Credit applied from a note that had a refund on it, then removed, owes again.
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'owed', refund_due: 224, refunded_amount: 124 })).toBe('£124.00 refunded, £100.00 to use');
+    // The screen's own money format when it passes one.
+    expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'owed', refund_due: 224, currency: 'GBP' }, { money: (n, c) => `${c} ${n}` })).toBe('GBP 224 to use');
+    // All applied: every invoice it went to, removed ones left out.
+    const used = { status: 'issued', refund_status: 'allocated', refund_due: 224, amount_allocated: 224 };
+    expect(creditNoteStatusLabel(used, { usedOn: [1050] })).toBe('Used on INV-1050');
+    expect(creditNoteStatusLabel(used, { usedOn: [{ invoice: { invoice_number: 1051 } }, { invoice_number: 1050 }, 'INV-1050'] })).toBe('Used on INV-1050 and INV-1051');
+    expect(creditNoteStatusLabel(used, { usedOn: [1100, 999, 1050, { invoice: { invoice_number: 7 }, removed_at: '2026-09-14' }] })).toBe('Used on INV-999, INV-1050 and INV-1100');
+    expect(creditNoteStatusLabel({ ...used, used_on: [1050] })).toBe('Used on INV-1050');
+    expect(creditNoteStatusLabel(used)).toBe('Used on another invoice');
+    // Refunded and Cancelled as they were.
     expect(creditNoteStatusLabel({ status: 'issued', refund_status: 'refunded', refund_due: 224, amount_allocated: 100, refunded_amount: 124 })).toBe('Refunded');
-    expect(creditNoteStatusLabel({ status: 'cancelled', refund_status: 'none' })).toBe('Cancelled');
+    expect(creditNoteStatusLabel({ status: 'cancelled', refund_status: 'none', invoice_number: 1036 })).toBe('Cancelled');
+    expect(creditNoteStatusLabel(null)).toBe('Used on its invoice');
   });
   it('adds up issued notes only', () => {
     expect(issuedTotal([{ status: 'issued', total: 10.1 }, { status: 'cancelled', total: 99 }, { status: 'issued', total: 0.2 }])).toBe(10.3);
@@ -594,7 +622,8 @@ describe("Peter's example: 224 credit taken off the next invoice", () => {
   it('the credit note has 224 available', () => {
     expect(cn).toMatchObject({ refund_status: 'owed', refund_due: 224 });
     expect(creditAvailable(cn)).toBe(224);
-    expect(creditNoteStatusLabel(cn)).toBe('Available');
+    expect(creditNoteStatusKind(cn)).toBe('Available');
+    expect(creditNoteStatusLabel(cn)).toBe('£224.00 to use');
     expect(companyCreditAvailable([cn])).toBe(224);
   });
 
@@ -608,7 +637,8 @@ describe("Peter's example: 224 credit taken off the next invoice", () => {
     expect(settledAmount(invoice)).toBe(224);
     expect(note).toMatchObject({ amount_allocated: 224, refund_status: 'allocated' });
     expect(creditAvailable(note)).toBe(0);
-    expect(creditNoteStatusLabel(note)).toBe('Used');
+    expect(creditNoteStatusKind(note)).toBe('Used');
+    expect(creditNoteStatusLabel(note, { usedOn: [{ invoice_number: 1050 }] })).toBe('Used on INV-1050');
     expect(creditUse(note)).toEqual({ used: 224, refunded: 0, left: 0 });
     expect(companyCreditAvailable([note])).toBe(0);
     // Nothing left to apply, and INV A's revenue and cash are untouched.
@@ -643,12 +673,13 @@ describe('part use, then refund the rest', () => {
     expect(effect.invoice).toEqual({ amount_allocated: 100, balance_due: 0, settles: true, status: 'paid', amount_paid: 0 });
     expect(invoice.amount_paid).toBe(0);
     expect(note.refund_status).toBe('owed');
-    expect(creditNoteStatusLabel(note)).toBe('Part used');
+    expect(creditNoteStatusKind(note)).toBe('Part used');
+    expect(creditNoteStatusLabel(note)).toBe('£100.00 used, £124.00 to use');
     expect(creditUse(note)).toEqual({ used: 100, refunded: 0, left: 124 });
     // mark_credit_note_refunded sets refunded_amount to what is left.
     const refunded = { ...note, refund_status: 'refunded', refunded_amount: creditAvailable(note) };
     expect(refunded.refunded_amount).toBe(124);
-    expect(creditNoteStatusLabel(refunded)).toBe('Refunded');
+    expect(creditNoteStatusKind(refunded)).toBe('Refunded');
     expect(creditUse(refunded)).toEqual({ used: 100, refunded: 124, left: 0 });
     expect(creditAvailable(refunded)).toBe(0);
   });
@@ -981,8 +1012,494 @@ describe('applying and removing credit at random keeps the books straight', () =
         }
         for (const c of notes) {
           expect(creditAvailable(c)).toBeGreaterThanOrEqual(0);
-          expect(creditNoteStatusLabel(c)).toBe(creditAvailable(c) === 0 ? (c.amount_allocated > 0 ? 'Used' : 'Issued') : c.amount_allocated > 0 ? 'Part used' : 'Available');
+          expect(creditNoteStatusKind(c)).toBe(creditAvailable(c) === 0 ? (c.amount_allocated > 0 ? 'Used' : 'Issued') : c.amount_allocated > 0 ? 'Part used' : 'Available');
         }
+      }
+    }
+  });
+});
+
+// ── The amount received ─────────────────────────────────────────────────────
+// What set_invoice_amount_received does to the rows, so a sequence can be
+// followed: the effect is the library's own prediction of the database.
+function receive(args) {
+  const effect = amountReceivedEffect(args);
+  if (effect.problem) throw new Error(effect.problem);
+  const paidAt = effect.paid_at === 'now' ? RECEIVED_AT : effect.paid_at === 'clear' ? null : args.invoice.paid_at;
+  const invoice = { ...args.invoice, amount_paid: effect.amount_paid, status: effect.status, paid_at: paidAt };
+  const notes = (args.notes || []).map((c) => {
+    const m = effect.credit_moved.find((x) => x.id === c.id);
+    return m ? { ...c, refund_due: m.refund_due, refund_status: m.refund_status } : c;
+  });
+  return { effect, invoice, notes };
+}
+const cents = (n) => Math.round(Number(n) * 100);
+const RECEIVED_AT = '2026-09-14T15:00:00Z';
+const USED_OR_REFUNDED = (x, y, sign = '£') => `${sign}${x} of the credit from this invoice has already been used or refunded, so the amount received cannot go below ${sign}${y}.`;
+
+describe('INV-1036: correcting what the customer actually paid', () => {
+  // 1,344 with VAT wrongly built in. CN-1001 (224) was raised, then Mark paid
+  // recorded the 1,120 balance although the customer had sent 1,344.
+  const inv1036 = { id: 'inv-1036', invoice_number: 1036, status: 'paid', total: 1344, amount_paid: 1120, amount_credited: 224, amount_allocated: 0, currency: 'GBP' };
+  const cn1001 = { id: 'cn-1001', credit_number: 1001, invoice_id: 'inv-1036', status: 'issued', total: 224, refund_status: 'none', refund_due: 0, amount_allocated: 0, refunded_amount: 0, currency: 'GBP' };
+  const inv1050 = { id: 'inv-1050', invoice_number: 1050, status: 'sent', total: 1000, amount_paid: null, amount_credited: 0, amount_allocated: 0, currency: 'GBP' };
+
+  it('was stuck: nothing overpaid on record, so no credit to use', () => {
+    expect(creditNoteStatusLabel(cn1001, { invoiceNumber: 1036 })).toBe('Used on INV-1036');
+    expect(creditAvailable(cn1001)).toBe(0);
+    expect(overpaidNotOnCredit(inv1036, [cn1001])).toBe(0);
+    expect(amountPaid(inv1036)).toBe(1120);
+  });
+
+  it('corrects to 1,344: CN-1001 holds the 224 as credit to use, then it goes on INV-1050, and going back to 1,120 is refused', () => {
+    const fixed = receive({ invoice: inv1036, notes: [cn1001], amount: 1344, reason: 'Customer paid the full 1,344 by bank transfer' });
+    expect(fixed.effect).toEqual({
+      problem: null, kind: 'correction', reason: 'Customer paid the full 1,344 by bank transfer',
+      from_amount: 1120, amount_paid: 1344, status: 'paid', paid_at: 'keep', balance_due: 0, overpaid: 224,
+      credit_moved: [{ id: 'cn-1001', credit_number: 1001, refund_due: 224, refund_status: 'owed', credit_available: 224 }],
+      not_on_a_credit_note: 0,
+    });
+    const [cn] = fixed.notes;
+    expect(cn).toMatchObject({ refund_status: 'owed', refund_due: 224 });
+    expect(creditAvailable(cn)).toBe(224);
+    expect(creditNoteStatusLabel(cn)).toBe('£224.00 to use');
+    expect(overpaidNotOnCredit(fixed.invoice, fixed.notes)).toBe(0);
+    expect(balanceDue(fixed.invoice)).toBe(0);
+
+    // Apply the 224 to the next 1,000 invoice.
+    const applied = apply({ note: cn, invoice: inv1050, amount: 224 });
+    expect(balanceDue(applied.invoice)).toBe(776);
+    expect(creditNoteStatusLabel(applied.note, { usedOn: [applied.invoice] })).toBe('Used on INV-1050');
+
+    // Now the 224 is spent, INV-1036 cannot go back to 1,120, or a penny under 1,344.
+    const rows = [applied.allocation];
+    const back = { invoice: fixed.invoice, notes: [applied.note], allocationsFromNotes: rows, reason: 'Back to what Mark paid said' };
+    expect(amountReceivedEffect({ ...back, amount: 1120 }).problem).toBe(USED_OR_REFUNDED('224.00', '1,344.00'));
+    expect(amountReceivedEffect({ ...back, amount: 1343.99 }).problem).toBe(USED_OR_REFUNDED('224.00', '1,344.00'));
+    // The same without the rows, from the note's own amount_allocated.
+    expect(amountReceivedEffect({ ...back, allocationsFromNotes: undefined, amount: 1120 }).problem).toBe(USED_OR_REFUNDED('224.00', '1,344.00'));
+    // More than the note can hold is allowed; the rest is not on a credit note.
+    expect(amountReceivedEffect({ ...back, amount: 1400 })).toMatchObject({ problem: null, overpaid: 280, credit_moved: [], not_on_a_credit_note: 56 });
+
+    // Once the applied credit is removed (the row marked removed), 1,120 is allowed again and CN-1001 goes back to none.
+    const removed = removeAllocationEffect({ allocation: applied.allocation, note: applied.note, invoice: applied.invoice, reason: 'Applied by mistake' });
+    const noteBack = { ...applied.note, amount_allocated: removed.note.amount_allocated, refund_status: removed.note.refund_status };
+    const again = amountReceivedEffect({ ...back, notes: [noteBack], allocationsFromNotes: [{ ...applied.allocation, removed_at: '2026-09-14T12:00:00Z' }], amount: 1120 });
+    expect(again).toMatchObject({ problem: null, status: 'paid', paid_at: 'keep', overpaid: 0,
+      credit_moved: [{ id: 'cn-1001', credit_number: 1001, refund_due: 0, refund_status: 'none', credit_available: 0 }] });
+  });
+
+  it('Mark paid asks what they paid, so the live mistake cannot happen again', () => {
+    // INV-1036 as it stood when Mark paid was pressed: sent, CN-1001 on it.
+    const sent = { ...inv1036, status: 'sent', amount_paid: null };
+    expect(balanceDue(sent)).toBe(1120);
+    // The sheet starts at the balance; the customer actually paid 1,344.
+    const total = markPaymentTotal(sent, 1344);
+    expect(total).toBe(1344);
+    const { effect, notes } = receive({ invoice: sent, notes: [cn1001], amount: total, kind: 'payment' });
+    expect(effect).toMatchObject({ kind: 'payment', reason: PAYMENT_REASON, from_amount: 0, amount_paid: 1344, status: 'paid', paid_at: 'now', overpaid: 224, not_on_a_credit_note: 0 });
+    expect(creditAvailable(notes[0])).toBe(224);
+    // Paying just the balance settles it with nothing over.
+    expect(amountReceivedEffect({ invoice: sent, notes: [cn1001], amount: markPaymentTotal(sent, balanceDue(sent)), kind: 'payment' }))
+      .toMatchObject({ problem: null, status: 'paid', overpaid: 0, credit_moved: [], amount_paid: 1120 });
+  });
+});
+
+describe('markPaymentTotal', () => {
+  it('adds this payment to the cash already received', () => {
+    expect(markPaymentTotal({ status: 'sent', total: 1000, amount_paid: null }, 400)).toBe(400);
+    expect(markPaymentTotal({ status: 'viewed', total: 1000, amount_paid: 300, amount_credited: 100, amount_allocated: 224 }, 376)).toBe(676);
+    expect(markPaymentTotal({ status: 'sent', total: 1000, amount_paid: 250.5 }, '12.50')).toBe(263);
+    // A paid invoice with no amount_paid counts as paid in full, in pennies.
+    expect(markPaymentTotal({ status: 'paid', total: 119.988, amount_paid: null }, 10)).toBe(129.99);
+    // Float noise in the stored cash is washed to the penny first.
+    expect(markPaymentTotal({ status: 'sent', total: 500, amount_paid: 0.1 + 0.2 }, 0.7)).toBe(1);
+  });
+  it('keeps extra places and bad input for the database to refuse', () => {
+    const inv = { status: 'sent', total: 1000, amount_paid: 100 };
+    expect(markPaymentTotal(inv, 1.005)).toBe(101.005);
+    expect(amountReceivedEffect({ invoice: inv, amount: markPaymentTotal(inv, 1.005), kind: 'payment' }).problem).toBe('The payment can have at most 2 decimal places.');
+    for (const bad of ['', 'abc', null, undefined, NaN, Infinity]) expect(markPaymentTotal(inv, bad)).toBe(null);
+    expect(amountReceivedEffect({ invoice: inv, amount: markPaymentTotal(inv, 'abc'), kind: 'payment' }).problem).toBe('The payment must be more than 0.');
+    expect(amountReceivedEffect({ invoice: inv, amount: markPaymentTotal(inv, -5), kind: 'payment' }).problem).toBe('The payment must be more than 0.');
+    expect(amountReceivedEffect({ invoice: inv, amount: markPaymentTotal(inv, 0), kind: 'payment' }).problem).toBe('The payment must be more than 0.');
+  });
+});
+
+describe('amountReceivedEffect refuses in the same order and with the same words as the database', () => {
+  const inv = { status: 'sent', total: 100, amount_paid: null, amount_credited: 0, amount_allocated: 0 };
+  const check = (args) => amountReceivedEffect({ invoice: inv, amount: 50, reason: 'Paid by bank', ...args }).problem;
+
+  it('kind, invoice and status first', () => {
+    expect(RECEIVED_KINDS).toEqual(['correction', 'payment']);
+    expect(check({ kind: 'refund' })).toBe('Choose correction or payment.');
+    expect(check({ kind: null })).toBe(null);
+    expect(amountReceivedEffect({ amount: 1 }).problem).toBe('Invoice not found.');
+    for (const status of ['draft', 'void']) {
+      expect(check({ invoice: { ...inv, status }, amount: -1, reason: 'x' })).toBe('The amount received can only be changed on a sent, viewed or paid invoice.');
+    }
+    for (const status of ['sent', 'viewed', 'paid']) expect(check({ invoice: { ...inv, status, amount_paid: 0 } })).toBe(null);
+  });
+
+  it('then the amount', () => {
+    for (const bad of [-1, -0.0000001, null, undefined, '', 'abc', NaN, Infinity, -Infinity]) {
+      expect(check({ amount: bad, reason: 'x' })).toBe('The amount received must be 0 or more.');
+    }
+    expect(check({ amount: 1.005, reason: 'x' })).toBe('The amount received can have at most 2 decimal places.');
+    expect(check({ amount: 0, reason: 'x' })).toBe('That is already the amount received on this invoice.');
+    // Float noise from the browser is whole pennies.
+    expect(amountReceivedEffect({ invoice: inv, amount: 20.000000000000004, reason: 'Paid by bank' }).amount_paid).toBe(20);
+    expect(check({ amount: '1.2e1' })).toBe(null);
+    // A paid invoice with no amount_paid was paid in full, in pennies.
+    const paid = { status: 'paid', total: 119.988, amount_paid: null, amount_credited: 0, paid_at: '2026-08-01T12:00:00Z' };
+    expect(amountReceivedEffect({ invoice: paid, amount: 119.99, reason: 'Same' }).problem).toBe('That is already the amount received on this invoice.');
+    expect(amountReceivedEffect({ invoice: paid, amount: 100, reason: 'Short paid' })).toMatchObject({ from_amount: 119.99, balance_due: 19.99, status: 'sent', paid_at: 'keep' });
+  });
+
+  it('then the reason, only when passed; a payment has a default', () => {
+    const msg = 'Give a reason of 3 to 500 characters.';
+    expect(check({ reason: '  ab ' })).toBe(msg);
+    expect(check({ reason: null })).toBe(msg);
+    expect(check({ reason: 'x'.repeat(501) })).toBe(msg);
+    expect(check({ reason: '👍'.repeat(500) })).toBe(null);
+    expect(check({ reason: undefined })).toBe(null);
+    expect(amountReceivedEffect({ invoice: inv, amount: 50, reason: '  Paid by bank  ' }).reason).toBe('Paid by bank');
+    expect(amountReceivedEffect({ invoice: inv, amount: 50, reason: '  ', kind: 'payment' }).reason).toBe(PAYMENT_REASON);
+    expect(amountReceivedEffect({ invoice: inv, amount: 50, kind: 'payment' }).reason).toBe(PAYMENT_REASON);
+    expect(check({ reason: 'x'.repeat(501), kind: 'payment' })).toBe(msg);
+    // The amount before the reason, and the reason before the money.
+    expect(check({ amount: -1, reason: 'ab' })).toBe('The amount received must be 0 or more.');
+  });
+
+  it('then the credit already used or refunded, in the invoice currency', () => {
+    const src = { id: 's', status: 'paid', total: 12500, amount_paid: 12500, amount_credited: 1234.5, amount_allocated: 0, currency: 'USD' };
+    const note = { id: 'n', credit_number: 5, invoice_id: 's', status: 'issued', total: 1234.5, refund_status: 'allocated', refund_due: 1234.5, amount_allocated: 1234.5, refunded_amount: 0, currency: 'USD' };
+    expect(amountReceivedEffect({ invoice: src, notes: [note], amount: 11000, reason: 'Wire was short' }).problem).toBe(USED_OR_REFUNDED('1,234.50', '12,500.00', '$'));
+    expect(amountReceivedEffect({ invoice: src, notes: [note], amount: 11000, reason: 'ab' }).problem).toBe('Give a reason of 3 to 500 characters.');
+    // posupcrm rows carry no currency: pounds.
+    const { currency: _c, ...crm } = src;
+    expect(amountReceivedEffect({ invoice: crm, notes: [note], amount: 0, reason: 'Never paid' }).problem).toBe(USED_OR_REFUNDED('1,234.50', '12,500.00'));
+    // Cancelled notes hold nothing.
+    expect(amountReceivedEffect({ invoice: crm, notes: [{ ...note, status: 'cancelled' }], amount: 0, reason: 'Never paid' }).problem).toBe(null);
+  });
+});
+
+describe('status, paid_at and credit applied', () => {
+  const base = { status: 'sent', total: 1000, amount_paid: null, amount_credited: 0, amount_allocated: 0 };
+  const eff = (invoice, amount) => amountReceivedEffect({ invoice, amount, reason: 'Bank statement' });
+
+  it('paid once cash covers it, back to sent when a paid invoice no longer is', () => {
+    const paid = { ...base, status: 'paid', amount_paid: 1000, paid_at: '2026-08-03T10:00:00Z' };
+    expect(eff(base, 1000)).toMatchObject({ status: 'paid', paid_at: 'now', balance_due: 0 });
+    expect(eff(base, 400)).toMatchObject({ status: 'sent', paid_at: 'now', balance_due: 600 });
+    expect(eff({ ...base, status: 'viewed' }, 400)).toMatchObject({ status: 'viewed', paid_at: 'now' });
+    expect(eff(paid, 1200)).toMatchObject({ status: 'paid', paid_at: 'keep', overpaid: 200, not_on_a_credit_note: 200 });
+    expect(eff(paid, 999.99)).toMatchObject({ status: 'sent', paid_at: 'keep', balance_due: 0.01 });
+    expect(eff(paid, 0)).toMatchObject({ status: 'sent', paid_at: 'clear', balance_due: 1000 });
+  });
+
+  it('paid_at stays the day the money came in, so Collected keeps it in its month', () => {
+    // Paid 1,000 on 3 Aug. On 14 Sep a 400 cheque bounces: 600 really came in,
+    // in August, so August keeps it while the invoice is open again.
+    const aug = { ...base, id: 'inv', status: 'paid', amount_paid: 1000, paid_at: '2026-08-03T10:00:00Z' };
+    let step = receive({ invoice: aug, amount: 600, reason: 'Cheque for 400 bounced' });
+    expect(step.effect).toMatchObject({ status: 'sent', paid_at: 'keep', balance_due: 400 });
+    expect(step.invoice.paid_at).toBe('2026-08-03T10:00:00Z');
+    // The rest comes in: paid, still dated the day the first money came in.
+    step = receive({ invoice: step.invoice, amount: markPaymentTotal(step.invoice, 400), kind: 'payment' });
+    expect(step.effect).toMatchObject({ status: 'paid', paid_at: 'keep' });
+    // A part payment counts straight away: the first cash dates the invoice.
+    step = receive({ invoice: base, amount: markPaymentTotal(base, 400), kind: 'payment' });
+    expect(step.effect).toMatchObject({ status: 'sent', paid_at: 'now', amount_paid: 400 });
+    expect(step.invoice.paid_at).toBe(RECEIVED_AT);
+    // A second part payment keeps that day.
+    expect(eff(step.invoice, 700)).toMatchObject({ status: 'sent', paid_at: 'keep' });
+    // Recorded on the wrong invoice: no cash and not paid, so no day either.
+    expect(eff(step.invoice, 0)).toMatchObject({ status: 'sent', paid_at: 'clear' });
+    // Nothing to clear stays as it is.
+    expect(eff({ ...base, amount_paid: 50 }, 0)).toMatchObject({ status: 'sent', paid_at: 'keep' });
+    // Settled with no cash at all (credit notes and credit applied) is dated when it becomes paid.
+    const credit = { ...base, amount_paid: 100, amount_credited: 500, amount_allocated: 500 };
+    expect(eff(credit, 0)).toMatchObject({ status: 'paid', paid_at: 'now', amount_paid: 0 });
+    expect(eff({ ...credit, paid_at: '2026-08-03T10:00:00Z' }, 0)).toMatchObject({ status: 'paid', paid_at: 'keep' });
+    // A paid invoice that never had a date stays that way while it stays paid.
+    expect(eff({ ...base, status: 'paid', amount_paid: 1000 }, 1100)).toMatchObject({ status: 'paid', paid_at: 'keep' });
+  });
+
+  it('counts credit applied TO the invoice as settling it, never as cash', () => {
+    const inv = { ...base, amount_allocated: 224 };
+    expect(eff(inv, 776)).toMatchObject({ status: 'paid', amount_paid: 776, balance_due: 0, overpaid: 0 });
+    expect(eff(inv, 775.99)).toMatchObject({ status: 'sent', balance_due: 0.01 });
+    // A paid invoice with no amount_paid and credit applied had cash of the rest.
+    expect(eff({ ...inv, status: 'paid' }, 1000)).toMatchObject({ from_amount: 776, overpaid: 224, not_on_a_credit_note: 224 });
+  });
+
+  it('overpaid with no credit note: allowed, and not on a credit note', () => {
+    const { effect, invoice } = receive({ invoice: { ...base, total: 100 }, amount: 150, reason: 'Paid twice by bank' });
+    expect(effect).toMatchObject({ status: 'paid', overpaid: 50, credit_moved: [], not_on_a_credit_note: 50 });
+    expect(overpaidNotOnCredit(invoice, [])).toBe(50);
+  });
+});
+
+describe('a payment is never recorded twice', () => {
+  const paidMsg = (name) => `${name} has already been paid. Use Change to correct the amount received.`;
+  const nothingMsg = (name) => `${name} has nothing left to pay. Use Change to correct the amount received.`;
+
+  it('two people with INV-1036 open: the second Mark paid is refused, and Change still works', () => {
+    const sent = { id: 'inv-1036', invoice_number: 1036, status: 'sent', total: 1344, amount_paid: null, amount_credited: 0, amount_allocated: 0 };
+    // A records the 1,344 bank transfer.
+    const first = receive({ invoice: sent, amount: markPaymentTotal(sent, 1344), kind: 'payment' });
+    expect(first.invoice).toMatchObject({ status: 'paid', amount_paid: 1344 });
+    // B's screen still showed Mark paid; the sheet reads the invoice again, now paid.
+    const again = amountReceivedEffect({ invoice: first.invoice, amount: markPaymentTotal(first.invoice, 1344), kind: 'payment' });
+    expect(again.problem).toBe(paidMsg('INV-1036'));
+    // Before the amount and the reason are looked at.
+    expect(amountReceivedEffect({ invoice: first.invoice, amount: 'abc', reason: 'ab', kind: 'payment' }).problem).toBe(paidMsg('INV-1036'));
+    // Money that really did come in on top is a correction.
+    expect(amountReceivedEffect({ invoice: first.invoice, amount: 2688, reason: 'Paid twice by bank' })).toMatchObject({ problem: null, overpaid: 1344 });
+    // Without a number it is "This invoice".
+    expect(amountReceivedEffect({ invoice: { ...first.invoice, invoice_number: undefined }, amount: 1, kind: 'payment' }).problem).toBe(paidMsg('This invoice'));
+  });
+
+  it('refuses a payment on a sent invoice with nothing left to pay', () => {
+    // Fully credited, never paid.
+    const credited = { invoice_number: 7, status: 'sent', total: 500, amount_paid: null, amount_credited: 500, amount_allocated: 0 };
+    expect(balanceDue(credited)).toBe(0);
+    expect(amountReceivedEffect({ invoice: credited, amount: 50, kind: 'payment' }).problem).toBe(nothingMsg('INV-7'));
+    // Settled by cash and credit applied together, a penny under the total in cash.
+    const settled = { invoice_number: 8, status: 'viewed', total: 1000, amount_paid: 775.999999, amount_credited: 0, amount_allocated: 224 };
+    expect(amountReceivedEffect({ invoice: settled, amount: 900, kind: 'payment' }).problem).toBe(nothingMsg('INV-8'));
+    // A penny left to pay takes a payment.
+    expect(amountReceivedEffect({ invoice: { ...settled, amount_paid: 775.99 }, amount: 776, kind: 'payment' })).toMatchObject({ problem: null, status: 'paid' });
+    // A correction on it is fine.
+    expect(amountReceivedEffect({ invoice: credited, amount: 50, reason: 'Paid anyway' })).toMatchObject({ problem: null, overpaid: 50 });
+  });
+});
+
+describe('the amount received the sheet worked from (expectedFrom)', () => {
+  const changed = 'The amount received on this invoice changed while this was open. Check the figures and save again.';
+  const base = { invoice_number: 1040, status: 'sent', total: 1000, amount_paid: null, amount_credited: 0, amount_allocated: 0 };
+
+  it('a payment that lands while the sheet is open is never swallowed', () => {
+    // Both sheets opened on 0 received. The first records 400.
+    const first = receive({ invoice: base, amount: markPaymentTotal(base, 400), kind: 'payment', expectedFrom: 0 });
+    expect(first.invoice.amount_paid).toBe(400);
+    // The second still works from 0: 0 + 500 would be taken as 400 to 500.
+    const stale = markPaymentTotal(base, 500);
+    expect(stale).toBe(500);
+    expect(amountReceivedEffect({ invoice: first.invoice, amount: stale, kind: 'payment', expectedFrom: 0 }).problem).toBe(changed);
+    // Read again, the 500 goes on top of the 400.
+    expect(amountReceivedEffect({ invoice: first.invoice, amount: markPaymentTotal(first.invoice, 500), kind: 'payment', expectedFrom: 400 }))
+      .toMatchObject({ problem: null, from_amount: 400, amount_paid: 900, balance_due: 100 });
+    // A stale total at or under the new cash says it changed, not "more than 0".
+    expect(amountReceivedEffect({ invoice: first.invoice, amount: 300, kind: 'payment', expectedFrom: 0 }).problem).toBe(changed);
+  });
+
+  it('pins a correction too, compared in pennies, and is only checked when passed', () => {
+    const inv = { ...base, amount_paid: 400.0000000001 };
+    expect(amountReceivedEffect({ invoice: inv, amount: 1000, reason: 'Bank shows 1,000', expectedFrom: 0 }).problem).toBe(changed);
+    expect(amountReceivedEffect({ invoice: inv, amount: 1000, reason: 'Bank shows 1,000', expectedFrom: '400.000000000001' }).problem).toBe(null);
+    expect(amountReceivedEffect({ invoice: inv, amount: 1000, reason: 'Bank shows 1,000', expectedFrom: 400.004 }).problem).toBe(null);
+    expect(amountReceivedEffect({ invoice: inv, amount: 1000, reason: 'Bank shows 1,000', expectedFrom: 400.005 }).problem).toBe(changed);
+    for (const bad of ['NaN', 'abc', '', NaN, Infinity]) {
+      expect(amountReceivedEffect({ invoice: inv, amount: 1000, reason: 'Bank shows 1,000', expectedFrom: bad }).problem).toBe(changed);
+    }
+    for (const skip of [null, undefined]) {
+      expect(amountReceivedEffect({ invoice: inv, amount: 1000, reason: 'Bank shows 1,000', expectedFrom: skip }).problem).toBe(null);
+    }
+    // A paid invoice with no amount_paid was paid in full: that is the figure.
+    const paid = { ...base, status: 'paid', amount_paid: null, amount_allocated: 224 };
+    expect(amountReceivedEffect({ invoice: paid, amount: 1000, reason: 'Paid in full', expectedFrom: 776 }).problem).toBe(null);
+  });
+
+  it('comes after the status, and before a payment on a paid invoice', () => {
+    expect(amountReceivedEffect({ invoice: { ...base, status: 'draft' }, amount: 1, expectedFrom: 5 }).problem)
+      .toBe('The amount received can only be changed on a sent, viewed or paid invoice.');
+    expect(amountReceivedEffect({ invoice: { ...base, status: 'paid', amount_paid: 1000 }, amount: 1100, kind: 'payment', expectedFrom: 0 }).problem).toBe(changed);
+  });
+});
+
+describe('overpaidAdvice', () => {
+  const removeCredit = 'An owner can remove the credit applied so it goes back on the credit note.';
+
+  it('credit applied that the customer did not use: remove it, never a credit note', () => {
+    // CN-1001's 224 applied to INV-1050 (1,000) and 776 recorded, so it is paid.
+    // The customer ignored the credit and paid 1,000.
+    const inv1050 = { id: 'inv-1050', invoice_number: 1050, status: 'paid', total: 1000, amount_paid: 776, amount_credited: 0, amount_allocated: 224 };
+    const { effect, invoice } = receive({ invoice: inv1050, amount: 1000, reason: 'Customer paid the full 1,000' });
+    expect(effect).toMatchObject({ overpaid: 224, not_on_a_credit_note: 224, credit_moved: [] });
+    expect(overpaidAdvice({ invoice, overpaid: effect.not_on_a_credit_note, canCredit: true }))
+      .toBe(`The customer paid in full without using the credit applied. ${removeCredit}`);
+    expect(overpaidAdvice({ invoice, overpaid: overpaidNotOnCredit(invoice, []), canCredit: false }))
+      .toBe(`The customer paid in full without using the credit applied. ${removeCredit}`);
+    // Paid more than the balance after the credit, but not the full total.
+    expect(overpaidAdvice({ invoice: { ...invoice, amount_paid: 900 }, overpaid: 124, canCredit: true }))
+      .toBe(`The customer paid more than was left to pay after the credit applied. ${removeCredit}`);
+    // Removing the credit puts it right: nothing overpaid, 224 to pay.
+    expect(balanceDue({ ...invoice, amount_allocated: 0 })).toBe(0);
+    expect(overpaidNotOnCredit({ ...invoice, amount_allocated: 0 }, [])).toBe(0);
+  });
+
+  it('otherwise raise a credit note, or refund when none can be raised; nothing when not overpaid', () => {
+    const inv = { status: 'paid', total: 500, amount_paid: 600, amount_credited: 0, amount_allocated: 0 };
+    expect(overpaidAdvice({ invoice: inv, overpaid: 100, canCredit: true })).toBe('Raise a credit note to use or refund it.');
+    expect(overpaidAdvice({ invoice: inv, overpaid: 100, canCredit: false }))
+      .toBe('More was paid than this invoice asks for and no credit note holds it as credit. Refund it to the customer.');
+    // More overpaid than the credit applied: the credit does not explain it all.
+    expect(overpaidAdvice({ invoice: { ...inv, amount_allocated: 50 }, overpaid: 150, canCredit: true })).toBe('Raise a credit note to use or refund it.');
+    expect(overpaidAdvice({ invoice: { ...inv, amount_allocated: 50 }, overpaid: 50.004, canCredit: true })).toBe(`The customer paid in full without using the credit applied. ${removeCredit}`);
+    for (const none of [0, -1, null, undefined, 0.004]) expect(overpaidAdvice({ invoice: inv, overpaid: none, canCredit: true })).toBe(null);
+  });
+});
+
+describe('moving credit to use onto and off the credit notes', () => {
+  const note = (n, total, refund_status = 'none', refund_due = 0, extra = {}) =>
+    ({ id: `cn${n}`, credit_number: n, invoice_id: 'inv', status: 'issued', total, refund_status, refund_due, amount_allocated: 0, refunded_amount: 0, ...extra });
+
+  it('lowers after a part refund, never into the refund', () => {
+    // 1,000 paid by card. CN-1 200 refunded by bank, CN-2 300 still to use.
+    const inv = { id: 'inv', status: 'paid', total: 1000, amount_paid: 1000, amount_credited: 500, amount_allocated: 0 };
+    let notes = [note(1, 200, 'refunded', 200, { refunded_amount: 200 }), note(2, 300, 'owed', 300)];
+    const args = { invoice: inv, notes, reason: 'Bank statement' };
+    expect(amountReceivedEffect({ ...args, amount: 699.99 }).problem).toBe(USED_OR_REFUNDED('200.00', '700.00'));
+    expect(amountReceivedEffect({ ...args, amount: 0 }).problem).toBe(USED_OR_REFUNDED('200.00', '700.00'));
+    let step = receive({ ...args, amount: 850 });
+    expect(step.effect.credit_moved).toEqual([{ id: 'cn2', credit_number: 2, refund_due: 150, refund_status: 'owed', credit_available: 150 }]);
+    expect(creditNoteStatusLabel(step.notes[1])).toBe('£150.00 to use');
+    step = receive({ ...args, invoice: step.invoice, notes: step.notes, amount: 700 });
+    expect(step.effect).toMatchObject({ status: 'paid', overpaid: 200, credit_moved: [{ id: 'cn2', refund_due: 0, refund_status: 'none' }] });
+    notes = step.notes;
+    expect(notes[0]).toMatchObject({ refund_status: 'refunded', refund_due: 200 });
+    // Raised again, the refunded note never takes more (as record_invoice_payment).
+    step = receive({ ...args, invoice: step.invoice, notes, amount: 1100 });
+    expect(step.effect).toMatchObject({ overpaid: 600, not_on_a_credit_note: 100, credit_moved: [{ id: 'cn2', refund_due: 300, refund_status: 'owed' }] });
+  });
+
+  it('lowers a part used note down to what was used, then it takes more again', () => {
+    // 900 paid on 1,000, a 300 credit owes 200; 150 of it applied elsewhere.
+    const inv = { id: 'inv', status: 'sent', total: 1000, amount_paid: 900, amount_credited: 300, amount_allocated: 0 };
+    const cn = note(1, 300, 'owed', 200, { amount_allocated: 150 });
+    const args = { invoice: inv, notes: [cn], reason: 'Bank statement' };
+    expect(creditNoteStatusLabel(cn)).toBe('£150.00 used, £50.00 to use');
+    expect(amountReceivedEffect({ ...args, amount: 849.99 }).problem).toBe(USED_OR_REFUNDED('150.00', '850.00'));
+    const down = receive({ ...args, amount: 850 });
+    expect(down.effect).toMatchObject({ status: 'paid', paid_at: 'now', credit_moved: [{ refund_due: 150, refund_status: 'allocated', credit_available: 0 }] });
+    expect(creditNoteStatusKind(down.notes[0])).toBe('Used');
+    const up = receive({ ...args, invoice: down.invoice, notes: down.notes, amount: 1000 });
+    expect(up.effect.credit_moved).toEqual([{ id: 'cn1', credit_number: 1, refund_due: 300, refund_status: 'owed', credit_available: 150 }]);
+  });
+
+  it('fills the newest note first, each up to its total, and takes from the newest first', () => {
+    const inv = { id: 'inv', status: 'sent', total: 1000, amount_paid: null, amount_credited: 150, amount_allocated: 0 };
+    const notes = [note(1, 100), note(2, 50), note(3, 10, 'none', 0, { status: 'cancelled' })];
+    const up = receive({ invoice: inv, notes, amount: 1000, reason: 'Paid the original total' });
+    expect(up.effect.credit_moved.map((m) => [m.credit_number, m.refund_due, m.refund_status])).toEqual([[2, 50, 'owed'], [1, 100, 'owed']]);
+    const down = receive({ invoice: up.invoice, notes: up.notes, amount: 900, reason: 'Bank shows 900' });
+    expect(down.effect.credit_moved.map((m) => [m.credit_number, m.refund_due, m.refund_status])).toEqual([[2, 0, 'none'], [1, 50, 'owed']]);
+    const short = receive({ invoice: down.invoice, notes: down.notes, amount: 849.99, reason: 'One penny short' });
+    expect(short.effect).toMatchObject({ status: 'sent', paid_at: 'keep', balance_due: 0.01, overpaid: 0 });
+    expect(short.invoice.paid_at).toBe(RECEIVED_AT);
+    expect(short.notes.every((c) => Number(c.refund_due) === 0)).toBe(true);
+    const over = receive({ invoice: short.invoice, notes: short.notes, amount: 1200, reason: 'Paid far too much' });
+    expect(over.effect).toMatchObject({ overpaid: 350, not_on_a_credit_note: 200 });
+  });
+
+  it('takes a note that owes again after a refund back to Refunded, never into the refund', () => {
+    // 1,000 paid, CN 224: 100 applied, 124 refunded, then the 100 removed, so 100 is to use again.
+    const inv = { id: 'inv', status: 'paid', total: 1000, amount_paid: 1000, amount_credited: 224, amount_allocated: 0 };
+    const cn = note(1, 224, 'owed', 224, { refunded_amount: 124 });
+    expect(creditNoteStatusLabel(cn)).toBe('£124.00 refunded, £100.00 to use');
+    expect(amountReceivedEffect({ invoice: inv, notes: [cn], amount: 899.99, reason: 'Card fee kept back' }).problem).toBe(USED_OR_REFUNDED('124.00', '900.00'));
+    const { effect, notes } = receive({ invoice: inv, notes: [cn], amount: 900, reason: 'Card fee kept back' });
+    expect(effect.credit_moved).toEqual([{ id: 'cn1', credit_number: 1, refund_due: 124, refund_status: 'refunded', credit_available: 0 }]);
+    expect(creditNoteStatusLabel(notes[0])).toBe('Refunded');
+    expect(creditUse(notes[0])).toEqual({ used: 0, refunded: 124, left: 0 });
+  });
+
+  it('sums applied credit from the rows when they are passed, as the database does', () => {
+    const inv = { id: 'inv', status: 'paid', total: 1000, amount_paid: 1000, amount_credited: 300, amount_allocated: 0 };
+    // The note's column says 100 used, the rows say 250 (one of 50 removed).
+    const cn = note(1, 300, 'owed', 300, { amount_allocated: 100 });
+    const rows = [{ credit_note_id: 'cn1', amount: 200, removed_at: null }, { credit_note_id: 'cn1', amount: 50, removed_at: null },
+      { credit_note_id: 'cn1', amount: 50, removed_at: '2026-09-14' }, { credit_note_id: 'other', amount: 999, removed_at: null }];
+    expect(amountReceivedEffect({ invoice: inv, notes: [cn], allocationsFromNotes: rows, amount: 900, reason: 'Short' }).problem).toBe(USED_OR_REFUNDED('250.00', '950.00'));
+    expect(amountReceivedEffect({ invoice: inv, notes: [cn], amount: 900, reason: 'Short' }).problem).toBe(null);
+  });
+});
+
+describe('correcting the amount received at random keeps the books straight', () => {
+  it('holds for 1,500 random sequences', () => {
+    let seed = 20260914;
+    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    const pick = (a) => a[Math.floor(rand() * a.length)];
+    for (let k = 0; k < 1500; k++) {
+      const { invoice: start } = savedInvoice([{ name: 'Kit', qty: pick([1, 2, 0.5]), unit_price: Math.round(rand() * 200000) / 100 + 1, tax_rate: pick([20, 0, 8.875]) }],
+        { id: 'src', status: pick(['sent', 'viewed', 'paid']), amount_allocated: pick([0, 0, 0, 25]), currency: pick(['GBP', 'USD', undefined]) });
+      start.amount_paid = start.status === 'paid' ? pick([start.total, null]) : pick([null, 0, Math.round(start.total * 40) / 100]);
+      let invoice = start;
+      let notes = [];
+      // One to three credit notes as issue_credit_note would store them.
+      for (let n = 0; n < 1 + Math.floor(rand() * 3); n++) {
+        const left = creditableLeft(invoice);
+        const total = Math.round(left * pick([0.1, 0.3, 0.5]) * 100) / 100;
+        if (!(total > 0)) break;
+        const cn = { ...issued(invoice, total), credit_number: n + 1, id: `cn${n + 1}` };
+        notes.push(cn);
+        invoice = afterCredit(invoice, total);
+      }
+      const others = [{ id: 't', status: 'sent', total: 100000, amount_paid: null, amount_credited: 0, amount_allocated: 0, currency: invoice.currency }];
+      for (let step = 0; step < 10; step++) {
+        const r = rand();
+        if (r < 0.2) {
+          // Apply some credit elsewhere, or refund what is left.
+          const cn = pick(notes);
+          if (creditAvailable(cn) > 0) {
+            if (rand() < 0.7) {
+              const done = apply({ note: cn, invoice: others[0], amount: Math.max(0.01, Math.round(creditAvailable(cn) * pick([0.5, 1]) * 100) / 100) });
+              notes = notes.map((c) => (c.id === cn.id ? done.note : c));
+              others[0] = done.invoice;
+            } else if (refundProblem({ note: cn }) === null) {
+              notes = notes.map((c) => (c.id === cn.id ? { ...c, refund_status: 'refunded', refunded_amount: cents(c.refunded_amount) / 100 + creditAvailable(c) } : c));
+            }
+          }
+          continue;
+        }
+        const settledNow = settledAmount(invoice);
+        const amount = pick([0, settledNow + 0.01, settledNow - 0.01, creditableLeft(invoice), creditableLeft(invoice) + 50, Math.round(rand() * invoice.total * 150) / 100, settledNow + 1000, 1.005]);
+        const kind = rand() < 0.3 ? 'payment' : 'correction';
+        const args = { invoice, notes, amount, reason: 'Bank statement', kind };
+        const effect = amountReceivedEffect(args);
+        const issuedNotes = notes.filter((c) => c.status === 'issued');
+        const fixed = cents(issuedNotes.reduce((s, c) => s + Number(c.amount_allocated || 0) + Number(c.refunded_amount || 0), 0));
+        if (effect.problem) {
+          if (effect.problem.includes('already been used or refunded')) {
+            // Refused exactly when the overpayment would be under what is used or refunded,
+            // and the lowest amount it names is then accepted (or is already the amount).
+            const lowest = Number(effect.problem.match(/below .([\d,]+\.\d\d)\./)[1].replace(/,/g, ''));
+            expect(cents(amount)).toBeLessThan(cents(lowest));
+            const atLowest = amountReceivedEffect({ ...args, amount: lowest, kind: 'correction' });
+            expect([null, 'That is already the amount received on this invoice.']).toContain(atLowest.problem);
+          }
+          continue;
+        }
+        const done = receive(args);
+        const held = cents(done.notes.filter((c) => c.status === 'issued' && c.refund_status !== 'none').reduce((s, c) => s + Number(c.refund_due), 0));
+        // Everything overpaid is on a note or reported as not on one.
+        expect(held + cents(effect.not_on_a_credit_note)).toBe(cents(effect.overpaid));
+        expect(held).toBeGreaterThanOrEqual(fixed);
+        expect(effect.not_on_a_credit_note).toBe(overpaidNotOnCredit(done.invoice, done.notes));
+        expect(effect.balance_due).toBe(balanceDue(done.invoice));
+        expect(done.invoice.status === 'paid').toBe(balanceDue(done.invoice) === 0);
+        expect(amountPaid(done.invoice)).toBe(effect.amount_paid);
+        for (const c of done.notes) {
+          expect(Number(c.refund_due)).toBeLessThanOrEqual(Number(c.total));
+          expect(creditAvailable(c)).toBeGreaterThanOrEqual(0);
+          const want = c.status === 'cancelled' ? 'Cancelled' : creditAvailable(c) > 0 ? (c.amount_allocated > 0 ? 'Part used' : 'Available')
+            : c.refund_status === 'refunded' ? 'Refunded' : c.amount_allocated > 0 ? 'Used' : 'Issued';
+          expect(creditNoteStatusKind(c)).toBe(want);
+        }
+        invoice = done.invoice;
+        notes = done.notes;
       }
     }
   });

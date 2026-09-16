@@ -1,6 +1,6 @@
 // In-memory Supabase for the design harness. Any query chain works; rows come from TABLES.
 import {
-  allocationEffect, amountPaid, cancelCreditEffect, creditAvailable, creditTotals, creditUse, issuedTotal, refundFor,
+  allocationEffect, amountPaid, amountReceivedEffect, cancelCreditEffect, creditAvailable, creditTotals, creditUse, issuedTotal, refundFor,
   refundProblem, removeAllocationEffect, validateCredit,
 } from '../lib/creditNotes.js';
 const d = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
@@ -283,6 +283,32 @@ const CREDIT_ALLOCATIONS = [
   { id: 'alloc1', credit_note_id: 'cn1004', invoice_id: 'inv1049', amount: 224, allocated_on: d(-1), note: 'They paid £224 less against this invoice.',
     created_by: ME, created_at: ts(-1), removed_at: null, removed_by: null, remove_reason: null },
 ];
+// Harness only (#received, #creditnotes-list): the INV-1036 case from 14 Sep
+// 2026, on Coffee Boy (c1). £1,344 total with the VAT built in by mistake,
+// CN-1005 took the £224 off, then Mark paid recorded the £1,120 left although
+// the customer had sent £1,344. So it reads paid with £1,120 received and
+// CN-1005 "Used on INV-1036", with no credit to use. #received opens Change on
+// it: £1,344 puts £224 to use on CN-1005, which can go on INV-1050 (Coffee
+// Boy's next £1,000 invoice), and after that £1,120 again is refused.
+INVOICES.push(
+  { id: 'inv1036', invoice_number: 1036, status: 'paid', ...COFFEE_BOY, currency: 'GBP', tax_rate: 20, subtotal: 1120, tax_amount: 224, total: 1344,
+    po_number: null, terms: null, notes: null, created_by: ME, amount_paid: 1120, amount_credited: 224, amount_allocated: 0,
+    issue_date: d(-9), due_date: d(5), public_token: 'harness-inv-1036', sent_at: ts(-9), viewed_at: ts(-8), paid_at: ts(0, 2), created_at: ts(-9), updated_at: ts(0, 2) },
+);
+INVOICE_LINES.push(
+  { id: 'inv1036-l1', invoice_id: 'inv1036', name: 'Kiosk install and training', description: 'Priced with the VAT already in it', qty: 1, unit_price: 1120, tax_rate: 20, sort: 0 },
+);
+CREDIT_NOTES.push(
+  { id: 'cn1005', credit_number: 1005, invoice_id: 'inv1036', ...COFFEE_BOY, invoice: { invoice_number: 1036 }, ...CN_COMMON, status: 'issued', issue_date: d(0),
+    reason: 'VAT was added to a price that already included it.', subtotal: 186.67, tax_amount: 37.33, total: 224, currency: 'GBP', refund_status: 'none', refund_due: 0,
+    public_token: 'harness-cn-1005', created_at: ts(0, 2), updated_at: ts(0, 2) },
+);
+CREDIT_NOTE_LINES.push(
+  { id: 'cn1005-l1', credit_note_id: 'cn1005', invoice_line_id: 'inv1036-l1', name: 'Kiosk install and training', description: 'VAT charged twice', qty: 1, unit_price: 186.67, tax_rate: 20, sort: 0 },
+);
+// Every change to an amount received, written by set_invoice_amount_received
+// below. None yet: INV-1036 was marked paid before there was a history.
+const PAYMENT_ADJUSTMENTS = [];
 const SUPPORT_SETTINGS = [{ id: 1, business_name: 'ServOS', business_address: '1 Harness Street, Manchester M1 1AA', business_email: 'accounts@serv-os.app', business_phone: '0161 000 0000', logo_url: null, quote_accent: '#15C26A', invoice_terms: 'Payment within 14 days of the invoice date.' }];
 
 export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' }], user_integrations: [{ profile_id: ME, provider: 'google', email: 'peter@posup.co.uk' }], ticket_email_threads: [], processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
@@ -298,7 +324,7 @@ export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' 
   ], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY,
   onboarding_form_requests: PACK_REQUESTS, onboarding_form_secure: PACK_SECURE,
   invoices: INVOICES, invoice_line_items: INVOICE_LINES, credit_notes: CREDIT_NOTES, credit_note_lines: CREDIT_NOTE_LINES, support_settings: SUPPORT_SETTINGS,
-  credit_allocations: CREDIT_ALLOCATIONS };
+  credit_allocations: CREDIT_ALLOCATIONS, invoice_payment_adjustments: PAYMENT_ADJUSTMENTS };
 export const MEMBERS_LIST = MEMBERS;
 
 // Harness only: delete() really removes rows from these tables, so saving an
@@ -331,7 +357,7 @@ function makeQuery(table) {
     order: () => proxy, limit: (n) => { rows = rows.slice(0, n); return proxy; }, range: () => proxy,
     single: () => { single = true; return proxy; }, maybeSingle: () => { single = true; return proxy; },
     insert: (v) => { const now = new Date().toISOString(); inserted = (Array.isArray(v) ? v : [v]).map((r) => ({ id: `stub-${Math.random().toString(36).slice(2, 9)}`, created_at: now, occurred_at: now, ...r })); return proxy; },
-    update: (v) => { patch = v; return proxy; }, upsert: () => proxy, delete: () => { removing = DELETES.has(table); return proxy; },
+    update: (v) => { patch = v; return proxy; }, upsert: (v, o) => { const keys = String(o?.onConflict || 'id').split(',').map((k) => k.trim()); const all = (TABLES[table] = TABLES[table] || []); const now = new Date().toISOString(); inserted = (Array.isArray(v) ? v : [v]).map((r) => { const i = all.findIndex((x) => keys.every((k) => x[k] === r[k])); if (i >= 0) all.splice(i, 1); return { id: `stub-${Math.random().toString(36).slice(2, 9)}`, created_at: now, ...r }; }); return proxy; }, delete: () => { removing = DELETES.has(table); return proxy; },
     then: (r, j) => Promise.resolve(res()).then(r, j), catch: (j) => Promise.resolve(res()).catch(j), finally: (f) => Promise.resolve(res()).finally(f),
   };
   const proxy = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => proxy) });
@@ -454,6 +480,33 @@ function creditRpc(name, args = {}) {
     Object.assign(inv, { amount_allocated: effect.invoice.amount_allocated, updated_at: now,
       ...(effect.invoice.reopen ? { status: 'sent', amount_paid: cash } : {}) });
     return { data: { ...row }, error: null };
+  }
+  if (name === 'set_invoice_amount_received') {
+    // The same checks, messages, status, paid_at and credit note moves as
+    // set_invoice_amount_received (amountReceivedEffect), with its history row.
+    // p_expected_from is checked the same way: a sheet working from an amount
+    // received that has since changed is refused.
+    const inv = TABLES.invoices.find((i) => i.id === args.p_invoice_id);
+    if (!inv) return creditFail('Invoice not found.');
+    const notes = TABLES.credit_notes.filter((c) => c.invoice_id === inv.id);
+    const allocationsFromNotes = TABLES.credit_allocations.filter((a) => notes.some((c) => c.id === a.credit_note_id));
+    const effect = amountReceivedEffect({ invoice: inv, notes, allocationsFromNotes, amount: args.p_amount, reason: args.p_reason ?? '', kind: args.p_kind ?? 'correction', expectedFrom: args.p_expected_from });
+    if (effect.problem) return creditFail(effect.problem);
+    Object.assign(inv, { amount_paid: effect.amount_paid, status: effect.status, updated_at: now,
+      ...(effect.paid_at === 'now' ? { paid_at: now } : effect.paid_at === 'clear' ? { paid_at: null } : {}) });
+    effect.credit_moved.forEach((mv) => Object.assign(notes.find((c) => c.id === mv.id), { refund_due: mv.refund_due, refund_status: mv.refund_status, updated_at: now }));
+    TABLES.invoice_payment_adjustments.push({
+      id: `adj${TABLES.invoice_payment_adjustments.length + 1}`, invoice_id: inv.id, from_amount: effect.from_amount, to_amount: effect.amount_paid,
+      reason: effect.reason, kind: effect.kind, created_by: ME, created_at: now,
+    });
+    return {
+      data: {
+        status: effect.status, amount_paid: effect.amount_paid, balance_due: effect.balance_due, overpaid: effect.overpaid,
+        credit_moved: effect.credit_moved.map(({ credit_number, refund_due, refund_status }) => ({ credit_number, refund_due, refund_status })),
+        not_on_a_credit_note: effect.not_on_a_credit_note,
+      },
+      error: null,
+    };
   }
   const note = TABLES.credit_notes.find((c) => c.id === args.p_id);
   if (name === 'cancel_credit_note') {

@@ -1,13 +1,14 @@
 import { useEffect, useState, useCallback } from 'react';
 import { MobileTable, MobileDock, DockField, Mono, Segmented } from './ui.jsx';
 import { supabase } from '../../lib/supabase';
-import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download, FileMinus } from 'lucide-react';
+import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download, FileMinus, Wallet } from 'lucide-react';
 import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
 import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, currencyLocale, defaultTaxRateFor } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
-import { balanceDue, creditState, amountPaid, creditNoteLabel, creditNoteStatusLabel, overpaidNotOnCredit, creditAvailable, creditUse } from '../../lib/creditNotes';
+import { balanceDue, creditState, amountPaid, creditNoteLabel, creditNoteStatusLabel, creditNoteStatusKind, overpaidNotOnCredit, creditAvailable, creditUse } from '../../lib/creditNotes';
+import ApplyCreditModal from './ApplyCreditModal.jsx';
 
 // Currency-aware and back-compatible: money(v) keeps meaning GBP for every
 // existing caller, money(v, inv.currency) renders the document's own currency.
@@ -49,8 +50,9 @@ export const creditMarker = (inv) => {
   if (state === 'none' || invStatus(inv) === 'credited') return applied;
   return state === 'full' ? 'Credited' : 'Part credited';
 };
-// Credit note chips, keyed by creditNoteStatusLabel: Available and Part used
-// still have credit to apply or refund, Used and Refunded have none left.
+// Credit note chip colours, keyed by creditNoteStatusKind (the label itself
+// carries amounts and invoice numbers): Available and Part used still have
+// credit to apply or refund, Used and Refunded have none left.
 export const CN_BADGE = {
   Issued: 'bg-violet-100 text-violet-700',
   Available: 'bg-amber/15 text-amber-deep', 'Part used': 'bg-amber/15 text-amber-deep',
@@ -93,6 +95,13 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const [credits, setCredits] = useState([]);
   const [creditsReady, setCreditsReady] = useState(false);
   const [creditFilter, setCreditFilter] = useState('all');
+  // Credit applied from each note, for "Used on INV-1050". allocReady stays
+  // false when the table is not there yet (the credit allocations migration
+  // not applied): then the labels say "another invoice" and there is no Apply.
+  const [allocs, setAllocs] = useState([]);
+  const [allocReady, setAllocReady] = useState(false);
+  const [applyNote, setApplyNote] = useState(null);   // the credit note the apply screen is open on
+  const [flash, setFlash] = useState('');
   // Chasing payment means opening an invoice and coming back over and over, so
   // the tab, status filter and search you were working survive the round trip.
   const [filters, setFilters] = useStickyState('invoices', {
@@ -110,7 +119,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [i, r, c, l, ct, pr, cn] = await Promise.all([
+    const [i, r, c, l, ct, pr, cn, al] = await Promise.all([
       supabase.from('invoices').select('*, company:companies(name), location:locations(name)').order('created_at', { ascending: false }),
       supabase.from('recurring_invoices').select('*, company:companies(name), location:locations(name)').order('created_at', { ascending: false }),
       // country on both: a new recurring schedule picks its currency from the
@@ -123,10 +132,12 @@ export default function InvoicesPanel({ profile, onNavigate }) {
       // just leaves the tab empty rather than breaking the invoice list.
       supabase.from('credit_notes').select('*, invoice:invoices(invoice_number), company:companies(name), location:locations(name)')
         .order('created_at', { ascending: false }),
+      supabase.from('credit_allocations').select('credit_note_id, invoice_id, removed_at'),
     ]);
     setInvoices(i.data || []); setSchedules(r.data || []); setCompanies(c.data || []);
     setLocations(l.data || []); setContacts(ct.data || []); setProducts(pr.data || []);
     setCredits(cn.error ? [] : (cn.data || [])); setCreditsReady(!cn.error);
+    setAllocs(al.error ? [] : (al.data || [])); setAllocReady(!al.error);
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -303,6 +314,22 @@ export default function InvoicesPanel({ profile, onNavigate }) {
     : creditFilter === 'cancelled' ? searchedCredits.filter(cn => cn.status === 'cancelled')
     : searchedCredits;
   const statusText = (inv) => [invStatus(inv), creditMarker(inv)?.toLowerCase(), overpaidOf(inv) > 0 ? 'overpaid' : null].filter(Boolean).join(', ');
+  // A credit note's status in plain words: "Used on INV-1036", "£224.00 to
+  // use", "Used on INV-1050". Chip colours key on creditNoteStatusKind.
+  const numberOf = new Map(invoices.map(i => [i.id, i.invoice_number]));
+  const cnLabel = (cn) => creditNoteStatusLabel(cn, {
+    usedOn: allocReady ? allocs.filter(a => a.credit_note_id === cn.id).map(a => ({ invoice_number: numberOf.get(a.invoice_id), removed_at: a.removed_at })) : undefined,
+    money: (v) => money(v, curOf(cn)),
+  });
+  // Apply, straight from the list: only with credit to use and the right to.
+  const canApply = (cn) => canWrite && allocReady && cn.status === 'issued' && creditAvailable(cn) > 0;
+  const openApply = (cn, e) => { e?.stopPropagation(); setApplyNote(cn); };
+  const onApplied = (_row, { note, invoice, amount, settles }) => {
+    setApplyNote(null);
+    setFlash(`${money(amount, curOf(note))} from ${creditNoteLabel(note)} applied to INV-${invoice.invoice_number}${settles ? ', now paid' : ''}`);
+    setTimeout(() => setFlash(''), 3000);
+    load();
+  };
 
   // What a schedule bills each run. Shared with the row below so the printed
   // list and the screen can never quietly disagree about the number.
@@ -335,10 +362,10 @@ export default function InvoicesPanel({ profile, onNavigate }) {
           columns: ['Credit note', 'Invoice', 'Customer', 'Date', 'Status', 'Currency', 'Total'],
           rows: shownCredits.map(cn => [
             creditNoteLabel(cn), invLabel(cn), custName(cn), fmtD(cn.issue_date),
-            [creditNoteStatusLabel(cn), creditUseText(cn)].filter(Boolean).join(': '), curOf(cn), money(cn.total, curOf(cn)),
+            [cnLabel(cn), creditNoteStatusKind(cn) === 'Refunded' ? creditUseText(cn) : ''].filter(Boolean).join(': '), curOf(cn), money(cn.total, curOf(cn)),
           ]),
           filters: [
-            creditFilter === 'available' ? 'Credit available' : creditFilter === 'cancelled' ? 'Cancelled' : null,
+            creditFilter === 'available' ? 'Credit to use' : creditFilter === 'cancelled' ? 'Cancelled' : null,
             cq ? `Search: "${creditSearch.trim()}"` : null,
           ].filter(Boolean),
           // Cancelled notes are listed but count for nothing.
@@ -362,7 +389,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
   // One definition for header, filters and rows so the columns cannot drift.
   const GRID = 'grid items-center gap-3 px-5 grid-cols-[96px_minmax(0,1.4fr)_minmax(0,1.4fr)_178px_108px_84px_34px]';
-  const CN_GRID = 'grid items-center gap-3 px-5 grid-cols-[88px_88px_minmax(0,1.6fr)_96px_108px_150px]';
+  const CN_GRID = 'grid items-center gap-3 px-5 grid-cols-[88px_88px_minmax(0,1.6fr)_96px_108px_196px]';
   const colInput = 'w-full px-2 py-1 bg-card border border-bdr rounded-lg text-[11px] text-paper placeholder-dim focus:outline-none focus:border-ember';
   // Safari draws an EMPTY date box with today's date greyed in, so an untouched
   // filter looks like it is already narrowing the list. Never let the browser's
@@ -385,8 +412,9 @@ export default function InvoicesPanel({ profile, onNavigate }) {
             )}
           </div>
           {view === 'credits'
-            ? <Mono className="!tracking-[.18em] uppercase">{searchedCredits.length} credit note{searchedCredits.length === 1 ? '' : 's'} · {withCredit.length} with credit available</Mono>
+            ? <Mono className="!tracking-[.18em] uppercase">{searchedCredits.length} credit note{searchedCredits.length === 1 ? '' : 's'} · {withCredit.length} with credit to use</Mono>
             : <Mono className="!tracking-[.18em] uppercase">{filtered.length} shown · {invoices.filter(i => invStatus(i) === 'overdue').length} overdue</Mono>}
+          {flash && <div className="text-xs text-emerald-600 font-semibold mt-1" role="status">✓ {flash}</div>}
         </div>
         <div className="flex-1 overflow-y-auto px-[14px] pb-[calc(70px+env(safe-area-inset-bottom))]">
           {view === 'credits' ? (
@@ -401,18 +429,25 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                   { key: 'invoice', label: 'Invoice', mono: true, render: (cn) => invLabel(cn) || null },
                   { key: 'date', label: 'Date', render: (cn) => fmtD(cn.issue_date) },
                   { key: 'total', label: 'Total', align: 'right', mono: true, render: (cn) => money(cn.total, curOf(cn)) },
-                  { key: 'status', label: 'Status', render: (cn) => creditNoteStatusLabel(cn) },
-                  { key: 'credit', label: 'Credit left', align: 'right', mono: true, render: (cn) => (creditAvailable(cn) > 0 ? money(creditAvailable(cn), curOf(cn)) : null) },
+                  { key: 'status', label: 'Status', render: (cn) => cnLabel(cn) },
+                  { key: 'credit', label: 'Credit to use', align: 'right', mono: true, render: (cn) => (creditAvailable(cn) > 0 ? money(creditAvailable(cn), curOf(cn)) : null) },
                   { key: 'site', label: 'Site', render: (cn) => partiesOf(cn).site || null },
+                  // Table mode never shows a card's action, so Apply is a column too.
+                  { key: 'apply', label: 'Apply', render: (cn) => (canApply(cn) ? (
+                    <button type="button" onClick={(e) => openApply(cn, e)} title={`Apply the credit on ${creditNoteLabel(cn)} to another invoice`}
+                      className="btn-glass px-2.5 py-1 rounded-lg text-xs font-semibold inline-flex items-center gap-1"><Wallet size={12} /> Apply</button>
+                  ) : null) },
                 ]}
                 card={(cn) => {
-                  const lbl = creditNoteStatusLabel(cn);
-                  const tone = CN_TONE[lbl] || 'uv';
-                  // What is left in the chip, not meta: once columns are
+                  // The status words in the chip, not meta: once columns are
                   // chosen a card shows those instead of meta.
-                  const left = creditAvailable(cn);
+                  const tone = CN_TONE[creditNoteStatusKind(cn)] || 'uv';
                   return { title: partiesOf(cn).company || partiesOf(cn).site || creditNoteLabel(cn), amount: money(cn.total, curOf(cn)),
-                    chip: { text: left > 0 ? `${lbl} · ${money(left, curOf(cn))} left` : lbl, tone },
+                    chip: { text: cnLabel(cn), tone },
+                    action: canApply(cn) ? (
+                      <button type="button" onClick={(e) => openApply(cn, e)}
+                        className="btn-glass px-3 min-h-[36px] rounded-xl text-[13px] font-semibold flex items-center gap-1.5"><Wallet size={14} /> Apply</button>
+                    ) : null,
                     meta: [creditNoteLabel(cn), invLabel(cn), fmtD(cn.issue_date)].filter(Boolean).join(' · ') };
                 }} />
             </div>
@@ -598,9 +633,10 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-[13px] font-bold text-paper">Credit notes</h3>
                   <span className="text-xs text-dim font-mono">({shownCredits.length})</span>
-                  <span className="text-[11px] text-dim ml-2">Raised from an invoice. Open one to apply its credit to another invoice, mark a refund or cancel it.</span>
+                  <span className="text-[11px] text-dim ml-2">Raised from an invoice. Apply credit to use here, or open one to mark a refund or cancel it.</span>
+                  {flash && <span className="text-xs text-emerald-600 font-semibold" role="status">✓ {flash}</span>}
                   <div className="ml-auto flex items-center gap-1">
-                    {[['all', 'All'], ['available', `Credit available${withCredit.length ? ` (${withCredit.length})` : ''}`], ['cancelled', 'Cancelled']].map(([k, lbl]) => (
+                    {[['all', 'All'], ['available', `To use${withCredit.length ? ` (${withCredit.length})` : ''}`], ['cancelled', 'Cancelled']].map(([k, lbl]) => (
                       <button key={k} onClick={() => setCreditFilter(k)}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${creditFilter === k ? 'bg-ember text-white' : 'text-muted hover:text-paper'}`}>{lbl}</button>
                     ))}
@@ -624,7 +660,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                     </div>
                   : shownCredits.map(cn => {
                     const { company, site } = partiesOf(cn);
-                    const lbl = creditNoteStatusLabel(cn);
+                    const kind = creditNoteStatusKind(cn);
                     const gone = cn.status === 'cancelled';
                     return (
                       <div key={cn.id} onClick={() => onNavigate?.('invoice', cn.invoice_id)}
@@ -638,9 +674,13 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                         </div>
                         <div className="text-xs text-muted text-right">{fmtD(cn.issue_date)}</div>
                         <div className={`text-sm font-semibold tabular-nums text-right ${gone ? 'line-through text-dim' : 'text-paper'}`}>{money(cn.total, curOf(cn))}</div>
-                        <div className="flex flex-col items-center gap-0.5 min-w-0">
-                          <span className={`w-full text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg text-center whitespace-nowrap ${CN_BADGE[lbl]}`}>{lbl}</span>
-                          {creditUseText(cn) && <span className={`text-[10px] text-center leading-tight ${creditAvailable(cn) > 0 ? 'text-amber-deep font-semibold' : 'text-muted'}`}>{creditUseText(cn)}</span>}
+                        <div className="flex flex-col items-center gap-1 min-w-0">
+                          <span className={`w-full text-[11px] font-semibold px-2 py-0.5 rounded-lg text-center leading-snug ${CN_BADGE[kind]}`}>{cnLabel(cn)}</span>
+                          {kind === 'Refunded' && creditUseText(cn) && <span className="text-[10px] text-center leading-tight text-muted">{creditUseText(cn)}</span>}
+                          {canApply(cn) && (
+                            <button type="button" onClick={(e) => openApply(cn, e)} title={`Apply the credit on ${creditNoteLabel(cn)} to another invoice`}
+                              className="btn-glass px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1"><Wallet size={12} /> Apply</button>
+                          )}
                         </div>
                       </div>
                     );
@@ -676,6 +716,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
         </div>
       </div>
 
+      {applyNote && <ApplyCreditModal note={applyNote} onClose={() => setApplyNote(null)} onApplied={onApplied} />}
       {editSched && <ScheduleModal schedule={editSched} companies={companies} locations={locations} contacts={contacts}
         products={products} profile={profile} onClose={() => setEditSched(null)} onSaved={() => { setEditSched(null); load(); }} />}
     </div>

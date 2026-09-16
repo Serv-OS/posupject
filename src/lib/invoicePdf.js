@@ -9,7 +9,7 @@
 // and the credit note stay matched.
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { amountPaid, balanceDue, creditableLeft, creditNoteLabel, creditNoteStatusLabel, creditState, creditTotals, creditUse, settledAmount } from './creditNotes.js'
+import { amountPaid, balanceDue, creditableLeft, creditNoteLabel, creditNoteStatusKind, creditNoteStatusLabel, creditState, creditTotals, creditUse, settledAmount } from './creditNotes.js'
 
 const hexToRgb = (hex) => {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '')
@@ -97,12 +97,15 @@ async function drawHeader(ctx, { seller = {}, title, fallbackName, meta = [], pi
 
   if (pill) {
     ry += 4
-    // 78pt wide, or wider for a longer word (CREDIT AVAILABLE), so the text
-    // never runs out of its pill.
+    // 78pt wide, or wider for longer words (USED ON INV-1050), so the text
+    // never runs out of its pill. Words too long for the space right of the
+    // seller's details (credit used on several invoices) give way to
+    // pill.short when there is one.
     doc.setFont('helvetica', 'bold').setFontSize(9)
-    const pw = Math.max(78, Math.ceil(doc.getTextWidth(pill.t)) + 16)
+    const text = pill.short && Math.ceil(doc.getTextWidth(pill.t)) + 16 > 190 ? pill.short : pill.t
+    const pw = Math.max(78, Math.ceil(doc.getTextWidth(text)) + 16)
     doc.setFillColor(...pill.bg).roundedRect(W - M - pw, ry - 11, pw, 18, 4, 4, 'F')
-    doc.setTextColor(...pill.fg).text(pill.t, W - M - pw / 2, ry + 1, { align: 'center' })
+    doc.setTextColor(...pill.fg).text(text, W - M - pw / 2, ry + 1, { align: 'center' })
     ry += 16
   }
 
@@ -285,6 +288,11 @@ export async function buildInvoiceDoc({ inv = {}, lines = [], totals = {}, selle
     rows.push(['Paid', paid, { color: [6, 120, 70] }])
     const bal = (Number(totals.total ?? inv.total ?? 0) - Number(paid))
     if (Math.abs(bal) > 0.005) rows.push(['Balance due', bal, { bold: true }])
+  } else if (status !== 'draft' && status !== 'void' && paid > 0) {
+    // Part paid with no credit (a payment recorded, or a deposit): what came in
+    // and what is left, as the public invoice page and the email show it.
+    rows.push(['Paid', paid, { color: [6, 120, 70], minus: true }])
+    rows.push(['Balance due', balance, { bold: true }])
   }
   drawTotals(ctx, rows, money)
 
@@ -321,13 +329,20 @@ export async function buildCreditNoteDoc({ note = {}, lines = [], invoice = {}, 
   const invLabel = invNumber == null || invNumber === '' ? '' : `INV-${invNumber}`
   const cancelled = note.status === 'cancelled'
 
-  // The chip the screens show (creditNoteStatusLabel): Available (as CREDIT
-  // AVAILABLE, the customer's words) and Part used in amber, Used and Refunded
-  // in green. A plain issued note has none.
-  const status = creditNoteStatusLabel(note)
+  // The status in the words the screens show (creditNoteStatusLabel: "£224.00
+  // to use", "Used on INV-1050"), coloured by its kind: credit to use in
+  // amber, used and refunded in green. A note that only reduced its own
+  // invoice has none; the Invoice line above already names it.
+  const kind = creditNoteStatusKind(note)
+  const words = creditNoteStatusLabel(note, {
+    invoiceNumber: invNumber,
+    usedOn: (allocations || []).filter((a) => a && !a.removed_at && Number(a.amount) > 0)
+      .map((a) => ({ invoice_number: a.invoice_number ?? a.number ?? a.invoice?.invoice_number })),
+    money,
+  }).toUpperCase()
   const pill = cancelled ? { t: 'CANCELLED', bg: [254, 226, 226], fg: [153, 27, 27] }
-    : ['Available', 'Part used'].includes(status) ? { t: status === 'Available' ? 'CREDIT AVAILABLE' : 'PART USED', bg: [254, 243, 199], fg: [146, 64, 14] }
-      : ['Used', 'Refunded'].includes(status) ? { t: status.toUpperCase(), bg: [209, 250, 229], fg: [6, 95, 70] }
+    : ['Available', 'Part used'].includes(kind) ? { t: words, short: kind === 'Available' ? 'CREDIT TO USE' : 'PART USED', bg: [254, 243, 199], fg: [146, 64, 14] }
+      : ['Used', 'Refunded'].includes(kind) ? { t: words, short: kind.toUpperCase(), bg: [209, 250, 229], fg: [6, 95, 70] }
         : null
   await drawHeader(ctx, {
     seller, title: 'CREDIT NOTE', fallbackName: 'Credit note', pill,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { currencyLocale, fmtMoney, taxLabelFor } from '../lib/money';
-import { creditNoteLabel, creditNoteStatusLabel, creditTotals, creditUse } from '../lib/creditNotes';
+import { creditNoteLabel, creditNoteStatusKind, creditNoteStatusLabel, creditTotals, creditUse } from '../lib/creditNotes';
 import { creditNotePdf } from '../lib/invoicePdf';
 import { Badge, Page } from './PublicInvoice.jsx';
 
@@ -27,7 +27,8 @@ const fmtDate = (d, locale = 'en-GB') => {
   return isNaN(date) ? String(d) : date.toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric' });
 };
 
-// Keyed on creditNoteStatusLabel.
+// Badge colours, keyed on creditNoteStatusKind. The words are the label the
+// staff screens show ("£224.00 to use", "Used on INV-1050").
 const STATUS_BADGE = {
   Issued: { bg: '#e0e7ff', color: '#3730a3' },
   Available: { bg: '#fef3c7', color: '#92400e' },
@@ -70,7 +71,10 @@ export default function PublicCreditNote({ token }) {
   const number = note.number ?? note.credit_number;
   const label = creditNoteLabel(number);
   const invLabel = inv.number != null && inv.number !== '' ? `INV-${inv.number}` : '';
-  const status = creditNoteStatusLabel(note);
+  const statusKind = creditNoteStatusKind(note);
+  const status = creditNoteStatusLabel(note, {
+    invoiceNumber: inv.number, usedOn: data.applied_to, money: (v) => money(v, currency),
+  });
   const cancelled = note.status === 'cancelled';
   // The stored figures are what was issued; the lines only stand in if missing.
   const sums = creditTotals(items);
@@ -126,8 +130,10 @@ export default function PublicCreditNote({ token }) {
             <div className={`text-xl font-bold text-slate-900 ${cancelled ? 'line-through' : ''}`}>{label}</div>
             <div className="text-xs text-slate-500 mt-1">Issued {fmtDate(note.issue_date, locale)}</div>
             {invLabel && <div className="text-xs text-slate-500">For invoice {invLabel}</div>}
-            <div className="mt-2">
-              <Badge {...(STATUS_BADGE[status] || STATUS_BADGE.Issued)}>{status === 'Available' ? 'Credit available' : status}</Badge>
+            {/* Capped, so a note used on several invoices wraps its words
+                rather than squeezing the seller's details on a phone. */}
+            <div className="mt-2 ml-auto max-w-[12rem]">
+              <Badge {...(STATUS_BADGE[statusKind] || STATUS_BADGE.Issued)}>{status}</Badge>
             </div>
           </div>
         </div>
