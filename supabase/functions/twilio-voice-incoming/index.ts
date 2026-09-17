@@ -232,7 +232,7 @@ serve(async (req) => {
       twiml += ` action="${FN}/twilio-voice-status?ticket=${ticketId || ""}${regionParam}"`;
       twiml += ` callerId="${to}">`;
 
-      for (const agent of onlineAgents.slice(0, 3)) {
+      for (const agent of onlineAgents.slice(0, 5)) {
         // Ring up to 3 agents simultaneously
         twiml += `<Client>`;
         twiml += `<Identity>${agent.twilio_identity}</Identity>`;
@@ -241,6 +241,10 @@ serve(async (req) => {
         // the call for that customer every single time.
         twiml += `<Parameter name="callerName" value="${xmlEscape(callerName)}"/>`;
         twiml += `<Parameter name="callerNumber" value="${xmlEscape(from)}"/>`;
+        // Which call and which ticket this is, so the agent's screen can open
+        // the ticket and tell "a colleague answered" from "nobody got to it".
+        twiml += `<Parameter name="callSid" value="${xmlEscape(callSid || "")}"/>`;
+        twiml += `<Parameter name="ticketId" value="${xmlEscape(ticketId || "")}"/>`;
         twiml += `</Client>`;
       }
 
