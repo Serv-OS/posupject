@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { CreditCard, Plus, X, TrendingUp, Banknote, PiggyBank } from 'lucide-react';
 import ProcessingAccountDrawer from './ProcessingAccountDrawer.jsx';
+import CardVolumeCard from './CardVolumeCard.jsx';
 import { loadCostTemplate, costFor, costExplain, regionForCountry, defaultMarkupFor } from '../../lib/cardCosts';
 import { STATEMENT_LINES, blankStatement, statementTotals, statementToRates } from '../../lib/statement';
 import { fmtMoney, fmtMoney0, currencySymbol, sumByCurrency, fmtByCurrency } from '../../lib/money';
@@ -195,6 +196,13 @@ export default function PaymentsPanel({ profile, onNavigate }) {
             <Headline icon={<TrendingUp size={18} />} value={fmtByCurrency(revenueBy, 0)} label="Our revenue" sub="margin this month" />
             <Headline value={liveCount} label="Live accounts" sub={`${accounts.length} total`} />
           </div>
+
+          {/* Gross card volume, per company and per site */}
+          {!loading && (
+            <CardVolumeCard accounts={accounts} volumes={volumes} period={period}
+              periodLabel={new Date(period).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}
+              onOpenAccount={setSelected} onNavigate={onNavigate} />
+          )}
 
           {/* Accounts */}
           <div className="glass-card rounded-2xl overflow-hidden">
