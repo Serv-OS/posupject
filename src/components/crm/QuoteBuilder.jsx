@@ -71,6 +71,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const [company, setCompany] = useState(null);
   const [contact, setContact] = useState(null);
   const [locations, setLocations] = useState([]);
+  const [companies, setCompanies] = useState([]);   // every customer, for the company picker
+  const [siteCompany, setSiteCompany] = useState(null); // the company the chosen site belongs to now
   const [procAccounts, setProcAccounts] = useState([]);
   const [newProc, setNewProc] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -124,16 +126,48 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     setProducts(pr.data || []);
     if (q.data?.deal_id) supabase.from('deals').select('id, name, stage').eq('id', q.data.deal_id).maybeSingle().then(r => setDeal(r.data || null));
     else setDeal(null);
+    supabase.from('companies').select('id, name, country').order('name').then(r => setCompanies(r.data || []));
     if (q.data?.company_id) {
       supabase.from('companies').select('id, name, country').eq('id', q.data.company_id).single().then(r => setCompany(r.data));
-      supabase.from('locations').select('id, name, company_id').eq('company_id', q.data.company_id).order('name').then(r => setLocations(r.data || []));
       loadProc(q.data.company_id);
-    } else {
-      supabase.from('locations').select('id, name, company_id').order('name').limit(200).then(r => setLocations(r.data || []));
-    }
+    } else setCompany(null);
+    loadSites(q.data?.company_id || null, q.data?.location_id || null);
     if (q.data?.contact_id) supabase.from('contacts').select('id, first_name, last_name, email').eq('id', q.data.contact_id).single().then(r => setContact(r.data));
     // The row as the database now holds it, for callers whose closure is stale.
     return q.data;
+  };
+
+  // The sites the picker offers: the quote's customer's sites, plus the site
+  // the quote already names even when it now belongs to someone else. A site
+  // moved to another company used to vanish from the list, so the quote could
+  // neither show it nor be pointed anywhere sensible.
+  const loadSites = async (companyId, locationId) => {
+    const q = supabase.from('locations').select('id, name, company_id').order('name');
+    const { data } = companyId ? await q.eq('company_id', companyId) : await q.limit(200);
+    let list = data || [];
+    let current = locationId ? list.find(l => l.id === locationId) : null;
+    if (locationId && !current) {
+      const { data: one } = await supabase.from('locations').select('id, name, company_id').eq('id', locationId).maybeSingle();
+      if (one) { current = one; list = [one, ...list]; }
+    }
+    setLocations(list);
+    if (current?.company_id && current.company_id !== companyId) {
+      const { data: co } = await supabase.from('companies').select('id, name').eq('id', current.company_id).maybeSingle();
+      setSiteCompany(co || null);
+    } else setSiteCompany(null);
+  };
+
+  // Accepted quotes are a contract with that customer: their company stays put.
+  const companyLocked = !quote || ['signed', 'paid', 'won'].includes(quote.status);
+  /** Put the quote on another customer. Keeps the site only when it is that customer's. */
+  const changeCompany = async (companyId) => {
+    if (companyLocked || !companyId || companyId === quote.company_id) return;
+    const site = locations.find(l => l.id === quote.location_id);
+    const keepSite = site && site.company_id === companyId;
+    setQuote(prev => ({ ...prev, company_id: companyId, location_id: keepSite ? prev.location_id : null }));
+    setCompany(companies.find(c => c.id === companyId) || null);
+    loadProc(companyId);
+    await loadSites(companyId, keepSite ? quote.location_id : null);
   };
 
   // Card-processing proposals for the attach picker + savings preview.
@@ -255,6 +289,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
         payment_terms: quote.payment_terms, deposit_percent: Number(quote.deposit_percent) || 0,
         tax_rate: Number(quote.tax_rate) || 0, terms: quote.terms || null, notes: quote.notes || null,
         status: quote.status, location_id: quote.location_id || null,
+        company_id: quote.company_id || null,
         currency: cur,
         // Days after go-live before software billing starts; shown to the customer and used by the go-live trigger.
         saas_start_days: Math.max(0, Math.min(365, Number(quote.saas_start_days) || 0)),
@@ -459,11 +494,13 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
         </div>
 
         {sheet === 'settings' && (
-          <EditSheet title="Quote settings" values={quote} onChange={(k, v) => (k === 'currency' ? changeCurrency(v) : setQ(k, v))} onCancel={() => setSheet(null)} onSave={() => setSheet(null)} openSections={2}
+          <EditSheet title="Quote settings" values={quote} onChange={(k, v) => (k === 'currency' ? changeCurrency(v) : k === 'company_id' ? changeCompany(v) : setQ(k, v))} onCancel={() => setSheet(null)} onSave={() => setSheet(null)} openSections={2}
             sections={[
               { title: 'Status & currency', fields: [
                 { key: 'status', label: 'Status', type: 'select', options: ['draft', 'sent', 'viewed', 'signed', 'paid', 'won', 'declined', 'expired', 'void'].map(x => [x, x]) },
                 { key: 'currency', label: 'Currency', type: 'select', options: [['GBP', 'GBP £'], ['USD', 'USD $']] },
+                ...(companyLocked ? [] : [{ key: 'company_id', label: 'Customer (company)', type: 'select', options: companies.map(c => [c.id, c.name]),
+                  hint: siteCompany ? `This site now belongs to ${siteCompany.name}. Pick it here to move the quote.` : undefined }]),
                 { key: 'location_id', label: 'Location (install site)', type: 'select', options: [['', '— None —'], ...locations.map(l => [l.id, l.name])] },
               ] },
               { title: 'Dates & terms', fields: [
@@ -653,6 +690,19 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                   {['draft','sent','viewed','signed','paid','won','declined','expired','void'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>
                 <div><label className={label}>Currency</label><select className={input} value={cur} onChange={e => changeCurrency(e.target.value)} disabled={curLocked}>
                   <option value="GBP">GBP £</option><option value="USD">USD $</option></select></div>
+                <div className="col-span-2"><label className={label}>Customer (company)</label>
+                  <select className={input} value={quote.company_id || ''} onChange={e => changeCompany(e.target.value)} disabled={companyLocked || !canWrite}>
+                    {!quote.company_id && <option value="">— None —</option>}
+                    {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  {companyLocked && <div className="text-[11px] text-dim mt-1">An accepted quote stays with the customer who accepted it.</div>}
+                  {siteCompany && !companyLocked && (
+                    <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-900">
+                      <span className="flex-1">This site now belongs to <b>{siteCompany.name}</b>, but the quote is still on {company?.name || 'another customer'}.</span>
+                      {canWrite && <button onClick={() => changeCompany(siteCompany.id)} className="shrink-0 font-semibold text-amber-900 underline">Move quote to {siteCompany.name}</button>}
+                    </div>
+                  )}
+                </div>
                 <div className="col-span-2"><label className={label}>Location (install site)</label>
                   <select className={input} value={quote.location_id || ''} onChange={e => setQ('location_id', e.target.value || null)}>
                     <option value="">— None —</option>
