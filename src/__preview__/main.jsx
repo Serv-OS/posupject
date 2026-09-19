@@ -23,6 +23,7 @@ import ExpensesPanel from '../components/finance/ExpensesPanel.jsx';
 import WhatIOwePanel from '../components/finance/WhatIOwePanel.jsx';
 import ProductsPanel from '../components/crm/ProductsPanel.jsx';
 import QuotesPanel from '../components/crm/QuotesPanel.jsx';
+import PublicQuote from '../components/PublicQuote.jsx';
 import InvoicesPanel from '../components/crm/InvoicesPanel.jsx';
 import InvoiceBuilder from '../components/crm/InvoiceBuilder.jsx';
 import CreditNoteModal from '../components/crm/CreditNoteModal.jsx';
@@ -221,6 +222,13 @@ if (!window.__fnPatched) {
       note.sent_at = new Date().toISOString(); note.email_to = to;
       return ok({ success: true, to, sent_at: note.sent_at });
     }
+    // The customer's quote page (#publicquote). The POST records the signature
+    // so a test can check a real drawing was sent.
+    if (fn === 'quote-public') {
+      if ((opts.method || 'GET') === 'GET') return ok(harnessQuote());
+      window.__signed = body;
+      return ok({ executed: true });
+    }
     if (fn === 'gmail-personal') {
       if (body.action === 'list') return ok({ messages: LIST });
       if (body.action === 'thread') return ok({ messages: THREAD, subject: 'Re: Menu changes for the weekend' });
@@ -236,6 +244,19 @@ if (!window.__fnPatched) {
 }
 
 const P = { id: 'u-peter', display_name: 'Peter', email: 'peter@posup.co.uk', role: 'owner' };
+
+function harnessQuote() {
+  return {
+    quote: { number: 1003, status: 'viewed', currency: 'GBP', payment_terms: 'invoice_later', deposit_percent: 0,
+      valid_until: '2026-09-30', created_at: '2026-09-10', terms: 'Standard terms apply.', one_off_subtotal: 1200, tax_amount: 240, one_off_total: 1440 },
+    items: [
+      { id: 'i1', category: 'hardware', name: 'Sunmi D3 Pro', quantity: 2, unit_price: 600, billing: 'one_off', sort_order: 1 },
+      { id: 'i2', category: 'saas', name: 'ServOS Core', quantity: 1, unit_price: 69, billing: 'monthly', sort_order: 2 },
+    ],
+    contact: { name: 'Sam Carter' }, company: { name: 'Coffee Boy Retail' }, location: { name: 'Huddersfield' },
+    seller: { name: 'ServOS', email: 'hello@serv-os.app', accent: '#15C26A' },
+  };
+}
 
 // The customer's page, full screen and outside the CRM layout, as it is live.
 const PACK_ROUTES = { pack: 'harness-pack-uk', 'pack-us': 'harness-pack-us' };
@@ -416,6 +437,7 @@ function App() {
   if (v === 'allocate') return <AllocateView />;
   if (v === 'invoice-allocated') return <InvoiceView id="inv1049" />;
   if (v === 'received') return <ReceivedView />;
+  if (v === 'publicquote') return <PublicQuote token="harness-quote" />;
   return (
     <div className="work" style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--scene-bg)' }}>
       <main className="work flex-1 min-w-0 overflow-hidden lg:flex lg:flex-col">

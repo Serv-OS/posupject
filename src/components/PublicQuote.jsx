@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { customerLines, customerRecurring, groupQuoteLines, lineCaption, saasStartText } from '../lib/quoteLines';
 import { LogoLockup } from './ServOSLogo.jsx';
+import SignaturePad from './SignaturePad.jsx';
 import { fmtMoney, fmtMoney0, taxLabelFor } from '../lib/money';
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
@@ -19,9 +20,7 @@ export default function PublicQuote({ token }) {
   const [done, setDone] = useState(false);
   const paid = new URLSearchParams(window.location.search).get('paid') === '1';
 
-  const canvasRef = useRef(null);
-  const drawing = useRef(false);
-  const hasSig = useRef(false);
+  const padRef = useRef(null);
 
   useEffect(() => { (async () => {
     try {
@@ -33,17 +32,17 @@ export default function PublicQuote({ token }) {
     setLoading(false);
   })(); }, [token]);
 
-  const pos = (e) => { const c = canvasRef.current; const r = c.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return { x: t.clientX - r.left, y: t.clientY - r.top }; };
-  const startDraw = (e) => { e.preventDefault(); drawing.current = true; const ctx = canvasRef.current.getContext('2d'); const { x, y } = pos(e); ctx.beginPath(); ctx.moveTo(x, y); };
-  const moveDraw = (e) => { if (!drawing.current) return; e.preventDefault(); const ctx = canvasRef.current.getContext('2d'); const { x, y } = pos(e); ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#1a1a1a'; ctx.lineTo(x, y); ctx.stroke(); hasSig.current = true; };
-  const endDraw = () => { drawing.current = false; };
-  const clearSig = () => { const c = canvasRef.current; c.getContext('2d').clearRect(0, 0, c.width, c.height); hasSig.current = false; };
+  const clearSig = () => padRef.current?.clear();
+  const typedSig = () => {
+    if (!name.trim()) { setError('Please type your full name first.'); return; }
+    if (padRef.current?.signWithName(name)) setError('');
+  };
 
   const submit = async () => {
     if (!name.trim()) { setError('Please type your full name.'); return; }
-    if (!hasSig.current) { setError('Please draw your signature.'); return; }
+    if (!padRef.current || padRef.current.isEmpty()) { setError('Please sign in the box, or tap "Use my typed name".'); return; }
     setSubmitting(true); setError('');
-    const signature = canvasRef.current.toDataURL('image/png');
+    const signature = padRef.current.toDataURL();
     try {
       const res = await fetch(`${FN}/quote-public`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, name: name.trim(), signature }) });
       const d = await res.json();
@@ -56,7 +55,8 @@ export default function PublicQuote({ token }) {
         // Payment couldn't start (e.g. Stripe not connected) — signature + close already done
         setDone(true); setSubmitting(false); return;
       }
-      if (d.executed) { setDone(true); setSubmitting(false); return; }
+      // Signed. Never leave the button spinning, whatever came back.
+      setDone(true); setSubmitting(false);
     } catch { setError('Could not submit. Please try again.'); setSubmitting(false); }
   };
 
@@ -259,15 +259,16 @@ export default function PublicQuote({ token }) {
         ) : (
           <>
             <div className="text-sm text-slate-600 mb-3">By signing below you accept this order form and its terms.</div>
+            {/* text-base: iOS zooms the whole page into any input under 16px and leaves it zoomed. */}
             <input value={name} onChange={e => setName(e.target.value)} placeholder="Type your full name"
-              className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+              autoComplete="name" enterKeyHint="done"
+              className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base mb-3 focus:outline-none focus:ring-2 focus:ring-orange-400" />
             <div className="text-xs text-slate-500 mb-1">Draw your signature</div>
-            <div className="border border-slate-300 rounded-lg bg-white">
-              <canvas ref={canvasRef} width={620} height={150} className="w-full touch-none"
-                onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={endDraw} onMouseLeave={endDraw}
-                onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={endDraw} />
+            <SignaturePad ref={padRef} onChange={(ink) => { if (ink) setError(''); }} />
+            <div className="flex items-center justify-between mt-1.5">
+              <button type="button" onClick={clearSig} className="text-xs text-slate-400 py-1.5 hover:text-slate-600">Clear signature</button>
+              <button type="button" onClick={typedSig} className="text-xs font-semibold py-1.5 hover:underline" style={{ color: accent }}>Use my typed name</button>
             </div>
-            <button onClick={clearSig} className="text-xs text-slate-400 mt-1 hover:text-slate-600">Clear signature</button>
             {error && <div className="text-sm text-red-600 mt-2">{error}</div>}
             <button onClick={submit} disabled={submitting}
               style={{ backgroundColor: accent }}
