@@ -36,9 +36,8 @@ const BEFORE = {
   food_printing: ['account', { multiple: 'choice', detail: 'textarea' }],
   current_pos: ['account', { system: 'text' }],
   anything_else: ['account', { notes: 'textarea' }],
-  site_readiness: ['install', { internet: 'confirm', ethernet: 'confirm', wifi_coverage: 'confirm', hardware: 'confirm', power: 'confirm', notes: 'textarea' }],
+  site_readiness: ['install', { internet: 'confirm', ethernet: 'confirm', wifi_coverage: 'confirm', power: 'confirm', notes: 'textarea' }],
   network: ['install', { wifi_name: 'text', wifi_password: 'text' }],
-  ipads: ['todo', { unboxed: 'confirm', updated: 'confirm' }],
   signoff: ['signoff', { full_name: 'text', position: 'text', terms: 'terms', agreed: 'confirm' }],
 };
 // The showIf rules as they were, copied from the old definition.
@@ -68,9 +67,8 @@ const OLD_PACK = {
   drinks_printing: { wanted: 'Yes', areas: 'Bar\n- Everything' },
   food_printing: { multiple: 'Yes', detail: 'The pizza oven gets everything' },
   current_pos: { system: 'none' },
-  site_readiness: { internet: true, ethernet: true, wifi_coverage: true, hardware: true, power: true },
+  site_readiness: { internet: true, ethernet: true, wifi_coverage: true, power: true },
   network: { wifi_name: 'MozzGuest', wifi_password: 'pepperoni123' },
-  ipads: { unboxed: true, updated: true },
   signoff: { full_name: 'Jane Smith', position: 'Director', agreed: true },
 };
 
@@ -102,7 +100,7 @@ describe('definition shape', () => {
         expect(field(sectionKey, fieldKey)?.type, `${sectionKey}.${fieldKey}`).toBe(type);
       }
     }
-    expect(GROUPS.map((g) => g.key)).toEqual(['account', 'install', 'todo', 'signoff']);
+    expect(GROUPS.map((g) => g.key)).toEqual(['account', 'install', 'signoff']);
   });
 
   it('orders the Account group company, VAT, bank, representative, trading, then as before', () => {
@@ -153,10 +151,10 @@ describe('definition shape', () => {
   });
 
   it('adds the ninth sign-off clause and bumps the terms version', () => {
-    expect(TERMS_VERSION).toBe(2);
+    expect(TERMS_VERSION).toBe(3);
     const clauses = field('signoff', 'terms').clauses;
-    expect(clauses).toHaveLength(9);
-    expect(clauses[8]).toBe('I agree that the bank and identity details given here can be used to set up and check our payments and billing accounts, and shared with our payment providers for that reason.');
+    expect(clauses).toHaveLength(8);
+    expect(clauses[7]).toBe('I agree that the bank and identity details given here can be used to set up and check our payments and billing accounts, and shared with our payment providers for that reason.');
   });
 });
 

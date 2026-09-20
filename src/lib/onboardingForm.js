@@ -235,11 +235,10 @@ const colour = (ctx) => (isUS(ctx) ? 'color' : 'colour');
 export const GROUPS = [
   { key: 'account', title: 'Account config', short: 'Account', blurb: 'What we build your till and card payments from.' },
   { key: 'install', title: 'Install information', short: 'Install', blurb: 'What has to be true on site before our engineer travels.' },
-  { key: 'todo', title: 'Things to do', short: 'To do', blurb: 'A couple of jobs for you before install day.' },
   { key: 'signoff', title: 'Sign off', short: 'Sign off', blurb: 'Who is confirming this, and what you are confirming.' },
 ];
 
-export const TERMS_VERSION = 2;
+export const TERMS_VERSION = 3;
 
 const ORG_COMPANY_HINT = 'The legal entity we contract with, invoice, and set your card payments up for.';
 const UK_ORG_NAME_HINT = 'Exactly as on Companies House, including Ltd or Limited. Not your trading name, that comes later.';
@@ -522,7 +521,6 @@ export const SECTIONS = [
       { key: 'internet', label: 'I confirm we have an active internet connection', type: 'confirm', required: true },
       { key: 'ethernet', label: 'I confirm network (ethernet) cables are run to every location a printer will go', type: 'confirm', required: true },
       { key: 'wifi_coverage', label: 'I confirm we have full WiFi coverage of the building', type: 'confirm', required: true },
-      { key: 'hardware', label: 'I confirm I have my Lightspeed hardware', type: 'confirm', required: true },
       { key: 'power', label: 'I confirm there is sufficient power where the POS and devices will be located', type: 'confirm', required: true },
       { key: 'notes', label: 'Anything not ticked above, or anything we should know about the site', type: 'textarea' },
     ],
@@ -536,19 +534,6 @@ export const SECTIONS = [
       // not the venue record, which the old wording claimed.
       { key: 'wifi_password', label: 'WiFi password', type: 'text', required: true, sensitive: true,
         hint: 'Held on your onboarding pack and only visible to our team.' },
-    ],
-  },
-
-  // ── Things to do ──────────────────────────────────────────────────────────
-  {
-    key: 'ipads', group: 'todo', title: 'Your iPads',
-    hint: 'Both of these need doing before install day. They take a few minutes and save hours on site.',
-    fields: [
-      { key: 'unboxed', type: 'confirm', required: true,
-        label: 'Unboxed the iPads, powered them on, and signed each one into an Apple ID',
-        hint: 'To check it is working, download any free app from the App Store. If that works, the Apple ID is active.' },
-      { key: 'updated', type: 'confirm', required: true,
-        label: 'Updated every iPad to the latest iOS' },
     ],
   },
 
@@ -572,7 +557,6 @@ export const SECTIONS = [
           'The site readiness confirmations are accurate, and I will tell you straight away if any of them stop being true before the install date.',
           'I understand that if information is missing or wrong, or the site is not ready as confirmed, the installation may not be able to go ahead on the day.',
           'I understand that an installation that has to be rearranged for those reasons may be rechargeable to us, including the engineer visit.',
-          'I have completed, or will complete before install day, the jobs listed under Things to do.',
           'I understand that significant changes to the menu, users or printing setup after this pack is submitted may delay the build and may be chargeable.',
           'I have the right to share the details given here, including staff names, PINs and network details, and I am happy for them to be used to set up and support the system.',
           'I agree that the bank and identity details given here can be used to set up and check our payments and billing accounts, and shared with our payment providers for that reason.',

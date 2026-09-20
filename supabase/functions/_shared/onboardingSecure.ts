@@ -125,7 +125,7 @@ export function idFileFits(key: string, file: unknown, answers: Obj | null | und
 
 /** The sign off wording the server stamps on a pack as _meta.terms_version.
  *  Mirrors TERMS_VERSION in src/lib/onboardingForm.js: bump both together. */
-export const TERMS_VERSION = 2;
+export const TERMS_VERSION = 3;
 
 /** Which secure keys the customer is being asked for, given their answers.
  *  Mirrors the showIf rules of those eight fields in the definition, and the
