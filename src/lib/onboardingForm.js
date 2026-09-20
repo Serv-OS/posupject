@@ -518,9 +518,15 @@ export const SECTIONS = [
     key: 'site_readiness', group: 'install', title: 'Site readiness',
     hint: 'Our engineer travels on the strength of these. If any are not true yet, leave it unticked and tell us in the notes rather than guessing.',
     fields: [
+      // Who is putting the network in decides which confirmations are fair to
+      // ask for. If we are fitting it, the building's WiFi coverage is our job,
+      // not something the customer can confirm, so that tick disappears.
+      { key: 'network_by_us', label: 'Are we installing your network?', type: 'choice', options: ['Yes', 'No'], required: true,
+        hint: 'Yes if we are supplying and fitting the network and WiFi. No if your own network is already in and working.' },
       { key: 'internet', label: 'I confirm we have an active internet connection', type: 'confirm', required: true },
       { key: 'ethernet', label: 'I confirm network (ethernet) cables are run to every location a printer will go', type: 'confirm', required: true },
-      { key: 'wifi_coverage', label: 'I confirm we have full WiFi coverage of the building', type: 'confirm', required: true },
+      { key: 'wifi_coverage', label: 'I confirm we have full WiFi coverage of the building', type: 'confirm', required: true,
+        showIf: (a) => a.network_by_us !== 'Yes' },
       { key: 'power', label: 'I confirm there is sufficient power where the POS and devices will be located', type: 'confirm', required: true },
       { key: 'notes', label: 'Anything not ticked above, or anything we should know about the site', type: 'textarea' },
     ],

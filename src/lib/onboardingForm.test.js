@@ -36,7 +36,7 @@ const BEFORE = {
   food_printing: ['account', { multiple: 'choice', detail: 'textarea' }],
   current_pos: ['account', { system: 'text' }],
   anything_else: ['account', { notes: 'textarea' }],
-  site_readiness: ['install', { internet: 'confirm', ethernet: 'confirm', wifi_coverage: 'confirm', power: 'confirm', notes: 'textarea' }],
+  site_readiness: ['install', { network_by_us: 'choice', internet: 'confirm', ethernet: 'confirm', wifi_coverage: 'confirm', power: 'confirm', notes: 'textarea' }],
   network: ['install', { wifi_name: 'text', wifi_password: 'text' }],
   signoff: ['signoff', { full_name: 'text', position: 'text', terms: 'terms', agreed: 'confirm' }],
 };
@@ -67,7 +67,7 @@ const OLD_PACK = {
   drinks_printing: { wanted: 'Yes', areas: 'Bar\n- Everything' },
   food_printing: { multiple: 'Yes', detail: 'The pizza oven gets everything' },
   current_pos: { system: 'none' },
-  site_readiness: { internet: true, ethernet: true, wifi_coverage: true, power: true },
+  site_readiness: { network_by_us: 'No', internet: true, ethernet: true, wifi_coverage: true, power: true },
   network: { wifi_name: 'MozzGuest', wifi_password: 'pepperoni123' },
   signoff: { full_name: 'Jane Smith', position: 'Director', agreed: true },
 };
@@ -276,6 +276,32 @@ describe('visibility matrix', () => {
     // The old card and page call visibleFields with no ctx at all.
     expect(visibleFields(section('trading'), { trading: { same_address: 'No' } }).map((f) => f.key)).toContain('trading_address');
     expect(field('vat', 'number').showIf({ registered: 'Yes' })).toBe(true);
+  });
+});
+
+describe('who is installing the network', () => {
+  const keys = (a) => visibleFields(section('site_readiness'), { site_readiness: a }).map((f) => f.key);
+
+  it('drops the WiFi coverage confirmation when we are fitting the network', () => {
+    expect(keys({ network_by_us: 'Yes' })).not.toContain('wifi_coverage');
+  });
+
+  it('keeps it when the customer already has their own network, and before the question is answered', () => {
+    expect(keys({ network_by_us: 'No' })).toContain('wifi_coverage');
+    expect(keys({})).toContain('wifi_coverage');
+  });
+
+  it('does not ask a customer to confirm coverage we have not built yet, but still asks the rest', () => {
+    const shown = keys({ network_by_us: 'Yes' });
+    expect(shown).toContain('internet');
+    expect(shown).toContain('ethernet');
+    expect(shown).toContain('power');
+  });
+
+  it('never counts the hidden tick as missing', () => {
+    const answers = { site_readiness: { network_by_us: 'Yes', internet: true, ethernet: true, power: true } };
+    const missing = missingKeys(missingRequired(answers, formContext(answers)));
+    expect(missing).not.toContain('site_readiness.wifi_coverage');
   });
 });
 
