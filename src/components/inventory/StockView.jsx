@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Boxes, Search, X, Undo2, Send, Pencil, Trash2, PoundSterling } from 'lucide-react';
 import { CONDITIONS, recallToServicing, resolveServicing, dispatchRmaTl, thresholdFor, fmtGBP, csvExport, norm, setProductCost, renameSerial, deleteSerial } from '../../lib/inventoryOps';
+import { toDayISO } from '../../lib/day';
 
 const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
 const STATUS_BADGE = {
@@ -121,7 +122,7 @@ export default function StockView({ profile, onNavigate }) {
       warehouse: r.warehouse?.name || '', customer: r.location?.name || r.company?.name || r.customer_name || '',
       condition: r.condition || '', used: r.used ? 'yes' : '', cost: r.cost ?? '', po: r.po_number || '',
     }));
-    csvExport(rows, `stock-${tab}-${new Date().toISOString().slice(0, 10)}.csv`);
+    csvExport(rows, `stock-${tab}-${toDayISO()}.csv`);
   };
 
   const TABS = [['holding', `Holding (${holding.length})`], ['deployed', `Deployed (${deployed.length})`],

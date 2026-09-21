@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Play, Square, Coffee, AlertTriangle } from 'lucide-react';
+import { toDayISO } from '../../lib/day';
 
 // Your own clock. Everything that matters happens server-side: the punch() RPC
 // stamps every time from the database clock and a trigger freezes the columns
@@ -29,7 +30,7 @@ export default function ClockCard({ profile }) {
     // business_today() resolves the date in the business timezone, so an
     // evening punch never lands on the wrong day.
     const { data: bd } = await supabase.rpc('business_today');
-    const day = bd || new Date().toISOString().slice(0, 10);
+    const day = bd || toDayISO();
     const [{ data: rows }, { data: sh }] = await Promise.all([
       supabase.from('shift_punches').select('*')
         .eq('user_id', profile.id).eq('business_date', day)

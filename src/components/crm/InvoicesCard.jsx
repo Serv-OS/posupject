@@ -4,6 +4,7 @@ import { currencyForCountry } from '../../lib/region';
 import { Receipt, Repeat } from 'lucide-react';
 import { money, invStatus, INV_BADGE, creditMarker, CN_BADGE } from './InvoicesPanel.jsx';
 import { balanceDue, creditNoteLabel, creditNoteStatusLabel, creditNoteStatusKind, companyCreditAvailable } from '../../lib/creditNotes';
+import { toDayISO } from '../../lib/day';
 
 // Invoices associated with a record. Pass exactly one of companyId /
 // locationId / contactId. "+ New" raises a draft pre-associated to the record.
@@ -62,7 +63,7 @@ export default function InvoicesCard({ companyId, locationId, contactId, profile
   }, [field, value]);
 
   const newInvoice = async () => {
-    const seed = { status: 'draft', created_by: profile.id, [field]: value, due_date: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10) };
+    const seed = { status: 'draft', created_by: profile.id, [field]: value, due_date: toDayISO(new Date(Date.now() + 14 * 86400000)) };
     // location implies its company for clean rollups
     if (locationId) {
       const { data: loc } = await supabase.from('locations').select('company_id').eq('id', locationId).maybeSingle();

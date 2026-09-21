@@ -9,6 +9,7 @@ import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
 import { balanceDue, creditState, amountPaid, creditNoteLabel, creditNoteStatusLabel, creditNoteStatusKind, overpaidNotOnCredit, creditAvailable, creditUse } from '../../lib/creditNotes';
 import ApplyCreditModal from './ApplyCreditModal.jsx';
+import { isPastDay, toDayISO } from '../../lib/day';
 
 // Currency-aware and back-compatible: money(v) keeps meaning GBP for every
 // existing caller, money(v, inv.currency) renders the document's own currency.
@@ -31,7 +32,7 @@ export const invStatus = (inv) => {
   if ((Number(inv.amount_credited) > 0 || Number(inv.amount_allocated) > 0) && balanceDue(inv) === 0) {
     return creditState(inv) === 'full' && amountPaid(inv) === 0 ? 'credited' : inv.status;
   }
-  if (inv.due_date && new Date(inv.due_date) < new Date(new Date().toDateString())) return 'overdue';
+  if (isPastDay(inv.due_date)) return 'overdue';
   return inv.status;
 };
 export const INV_BADGE = {
@@ -145,7 +146,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const newInvoice = async () => {
     const { data, error } = await supabase.from('invoices').insert({
       status: 'draft', created_by: profile.id,
-      due_date: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
+      due_date: toDayISO(new Date(Date.now() + 14 * 86400000)),
     }).select('id').single();
     if (error) { alert(error.message); return; }
     onNavigate?.('invoice', data.id);
@@ -745,7 +746,7 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
   const [f, setF] = useState({
     label: s.label || '', company_id: s.company_id || '', location_id: s.location_id || '', contact_id: s.contact_id || '',
     email_to: s.email_to || '', frequency: s.frequency || 'monthly', day_of_month: s.day_of_month ?? 1,
-    next_run: s.next_run || new Date().toISOString().slice(0, 10), due_days: s.due_days ?? 14,
+    next_run: s.next_run || toDayISO(), due_days: s.due_days ?? 14,
     currency: s.currency || 'GBP',
     tax_rate: s.tax_rate ?? defaultTaxRateFor(s.currency), terms: s.terms || '', notes: s.notes || '',
     auto_send: s.auto_send ?? true, active: s.active ?? true,

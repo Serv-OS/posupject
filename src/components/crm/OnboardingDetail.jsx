@@ -7,6 +7,7 @@ import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 import OnboardingPackCard from './OnboardingPackCard.jsx';
 import AttachmentsCard from './AttachmentsCard.jsx';
+import { fmtDay } from '../../lib/day';
 
 const STAGES = [
   'kickoff','hardware_ordered','hardware_shipped','account_menu_config',
@@ -300,10 +301,10 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
               <Card title="Key Dates">
                 <div className="space-y-3">
                   <Field label="Onboarding call" value={ob.kickoff_at ? new Date(ob.kickoff_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : null} />
-                  <Field label="Expected install" value={ob.expected_install_date ? new Date(ob.expected_install_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : null} />
-                  <Field label="Actual install" value={ob.actual_install_date ? new Date(ob.actual_install_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : null} />
-                  <Field label="Go-live" value={ob.target_go_live ? new Date(ob.target_go_live).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : null} />
-                  <Field label="Activation" value={ob.activation_date ? new Date(ob.activation_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : null} />
+                  <Field label="Expected install" value={fmtDay(ob.expected_install_date) || null} />
+                  <Field label="Actual install" value={fmtDay(ob.actual_install_date) || null} />
+                  <Field label="Go-live" value={fmtDay(ob.target_go_live) || null} />
+                  <Field label="Activation" value={fmtDay(ob.activation_date) || null} />
                 </div>
               </Card>
 

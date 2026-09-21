@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
+import { fmtDay } from '../../lib/day';
 
 const STAGES = [
   { key: 'kickoff',              label: 'Kickoff',           color: '#3b82f6' },
@@ -59,7 +60,7 @@ export default function OnboardingBoard({ profile, onSelectOnboarding, onNavigat
     const cl = locations.find(l => l.company_id === o.company_id);
     return cl?.name || '';
   };
-  const fmtD = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '';
+  const fmtD = (d) => fmtDay(d, { day: '2-digit', month: '2-digit', year: '2-digit' });
   const fmtDT = (d) => d ? new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
 
   const byStage = useMemo(() => {

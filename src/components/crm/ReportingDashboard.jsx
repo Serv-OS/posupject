@@ -13,6 +13,7 @@ const DEAL_STAGE_LABELS = {
 };
 import { fmtMoney0, sumByCurrency, fmtByCurrency } from '../../lib/money';
 import { oneOffValue, recurringValue, totalValue } from '../../lib/dealValue';
+import { isPastDay, toDayISO } from '../../lib/day';
 
 // CEO-defined targets (see project_sales_targets memory)
 const MONTHLY_ARR_QUOTA = 48000;   // 48K new ARR per AE per month; a £ target (see formatCurrency)
@@ -471,7 +472,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
 
   // Task metrics
   const taskMetrics = useMemo(() => {
-    const overdue = tasks.filter(t => t.due_date && t.status !== 'done' && new Date(t.due_date) < new Date());
+    const overdue = tasks.filter(t => t.status !== 'done' && isPastDay(t.due_date));
     const blocked = tasks.filter(t => t.status === 'blocked');
     return { total: tasks.length, done: tasks.filter(t => t.status === 'done').length, overdue: overdue.length, blocked: blocked.length };
   }, [tasks]);
@@ -498,7 +499,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
       if (!lastMoved[h.object_id] || new Date(h.changed_at) > new Date(lastMoved[h.object_id])) lastMoved[h.object_id] = h.changed_at;
     }
     const cutoff = pipeWindow === 'all' ? null : (() => {
-      const d = new Date(); d.setDate(d.getDate() + Number(pipeWindow)); return d.toISOString().slice(0, 10);
+      const d = new Date(); d.setDate(d.getDate() + Number(pipeWindow)); return toDayISO(d);
     })();
     const open = deals.filter(d => OPEN_STAGES.includes(d.stage))
       .filter(d => pipeOwner === 'all' || (pipeOwner === 'none' ? !d.owner_id : d.owner_id === pipeOwner))
@@ -524,7 +525,7 @@ export default function ReportingDashboard({ profile, onNavigate }) {
       const list = open.filter(d => d.stage === stage);
       return { stage, label: DEAL_STAGE_LABELS[stage] || stage, count: list.length, prob: weights[stage] ?? 0, ...money(list) };
     });
-    const today = new Date().toISOString().slice(0, 10);
+    const today = toDayISO();
     const rows = open.map(d => ({
       d,
       company: companies.find(c => c.id === d.company_id)?.name || '',

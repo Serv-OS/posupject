@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { toDayISO } from '../lib/day';
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
@@ -17,7 +18,7 @@ const ago = (ts) => {
   return new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' });
 };
 const stamp = (ts) => ts ? new Date(ts).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
-const dayKey = (d) => d.toISOString().slice(0, 10);
+const dayKey = (d) => toDayISO(d);
 
 // The last 14 calendar days, oldest first — the strip everyone reads first.
 const lastDays = (n = 14) => {

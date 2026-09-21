@@ -22,6 +22,10 @@ import EntityPicker from './EntityPicker.jsx';
 import { primaryLead } from '../../lib/leadStages';
 // Deals carry their own currency (GBP or USD, set from the quote): never a bare £.
 import { fmtMoney0 } from '../../lib/money';
+import { fmtDay } from '../../lib/day';
+
+// Venue dates are shown in full, the way the edit boxes take them.
+const DMY_FULL = { day: '2-digit', month: '2-digit', year: 'numeric' };
 
 const STATUS_OPTIONS = ['prospect', 'onboarding', 'live', 'churned'];
 const STATUS_COLORS = {
@@ -214,7 +218,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
         <button onClick={onClose} className="text-[13px] text-dim">&larr; Sites</button>
         <div className="font-display text-[22px] font-extrabold text-paper truncate">{location.name}</div>
         <div className="text-[13px] text-muted truncate">
-          {company?.name || 'No company'}{location.go_live_date ? ` · live since ${new Date(location.go_live_date).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })}` : location.status ? ` · ${location.status}` : ''}
+          {company?.name || 'No company'}{location.go_live_date ? ` · live since ${fmtDay(location.go_live_date, { month: 'short', year: '2-digit' })}` : location.status ? ` · ${location.status}` : ''}
         </div>
         <div className="flex gap-2 mt-2.5">
           {location.phone
@@ -463,10 +467,10 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
               <Card title="Key Dates">
                 <div className="space-y-3">
                   <Field label="Onboarding call" value={location.kickoff_at ? new Date(location.kickoff_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : null} />
-                  <Field label="Expected install" value={location.expected_install_date ? new Date(location.expected_install_date).toLocaleDateString('en-GB') : null} />
-                  <Field label="Actual install" value={location.actual_install_date ? new Date(location.actual_install_date).toLocaleDateString('en-GB') : null} />
-                  <Field label="Go-live" value={location.go_live_date ? new Date(location.go_live_date).toLocaleDateString('en-GB') : null} />
-                  <Field label="Activation" value={location.activation_date ? new Date(location.activation_date).toLocaleDateString('en-GB') : null} />
+                  <Field label="Expected install" value={fmtDay(location.expected_install_date, DMY_FULL) || null} />
+                  <Field label="Actual install" value={fmtDay(location.actual_install_date, DMY_FULL) || null} />
+                  <Field label="Go-live" value={fmtDay(location.go_live_date, DMY_FULL) || null} />
+                  <Field label="Activation" value={fmtDay(location.activation_date, DMY_FULL) || null} />
                 </div>
               </Card>
 

@@ -6,6 +6,7 @@ import CardVolumeCard from './CardVolumeCard.jsx';
 import { loadCostTemplate, costFor, costExplain, regionForCountry, defaultMarkupFor } from '../../lib/cardCosts';
 import { STATEMENT_LINES, blankStatement, statementTotals, statementToRates } from '../../lib/statement';
 import { fmtMoney, fmtMoney0, currencySymbol, sumByCurrency, fmtByCurrency } from '../../lib/money';
+import { toDayISO } from '../../lib/day';
 
 // No bare-£ helpers in here: a card can be American, so every figure goes
 // through moneyFor(ccyOf(card)) and takes the card's own symbol.
@@ -735,7 +736,7 @@ function CostTemplates({ profile, onEdit, editing, onClose }) {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const current = (region) => (rows.filter(r => r.region_code === region && r.effective_from <= new Date().toISOString().slice(0, 10))[0]) || null;
+  const current = (region) => (rows.filter(r => r.region_code === region && r.effective_from <= toDayISO())[0]) || null;
 
   if (loading) return null;
   return (
@@ -811,7 +812,7 @@ function CostTemplateModal({ region, from, profile, onClose, onSaved }) {
   // actually uses them, rather than inviting someone to double-count.
   const [showScheme, setShowScheme] = useState(() =>
     RATE_CATEGORIES.some(c => from?.rows?.[c.key]?.scheme_rate_pct != null || from?.rows?.[c.key]?.scheme_txn_minor != null));
-  const [effective, setEffective] = useState(new Date().toISOString().slice(0, 10));
+  const [effective, setEffective] = useState(toDayISO());
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');

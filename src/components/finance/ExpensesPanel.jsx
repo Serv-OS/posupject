@@ -5,8 +5,9 @@ import { Receipt as ReceiptText, Plus, Truck as Car, ChevronRight, Check, X, Dow
 import { fmtMoney, sumByCurrency, fmtByCurrency, taxLabelFor, CURRENCIES } from '../../lib/money.js';
 import { isApprover, STATUS_LABEL, STATUS_BADGE, PAID_BY_SHORT, isCompanyPaid,
   buildApprovePatch, personOf, expenseMatches, sumExpenses } from '../../lib/expenseOps.js';
+import { toDayISO, fmtDay } from '../../lib/day';
 
-const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
+const fmtD = (d) => fmtDay(d, undefined, 'en-GB', '—');
 const fsel = 'px-2 py-1 bg-card border border-bdr rounded-lg text-[11px] text-paper focus:outline-none focus:border-ember';
 // An active filter is outlined, so "on" never has to be inferred from how a
 // browser chooses to draw an empty control.
@@ -47,7 +48,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
   const [tab, setTab] = useState('mine');
   const [rows, setRows] = useState([]);
   const [members, setMembers] = useState([]);
-  const [runMonth, setRunMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [runMonth, setRunMonth] = useState(() => toDayISO().slice(0, 7));
   const [includeOlder, setIncludeOlder] = useState(true);
   const [paying, setPaying] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -78,7 +79,7 @@ export default function ExpensesPanel({ profile, onNavigate }) {
     const { data, error } = await supabase.from('expenses').insert({
       submitter_id: profile.id, reimburse_to_user_id: profile.id, created_by: profile.id,
       paid_by: me?.default_expense_paid_by || 'personal',
-      status: 'draft', type: 'staff_claim', expense_date: new Date().toISOString().slice(0, 10),
+      status: 'draft', type: 'staff_claim', expense_date: toDayISO(),
     }).select('id').single();
     if (error) { alert(error.message); return; }
     onNavigate?.('expense', data.id);
@@ -213,9 +214,9 @@ export default function ExpensesPanel({ profile, onNavigate }) {
 
   const rangeLabel = f.from || f.to ? `${f.from || 'start'} to ${f.to || 'today'}` : 'all dates';
   const setRange = (from, to) => setF(p => ({ ...p, from, to }));
-  const thisMonth = () => { const d = new Date(); const m = d.toISOString().slice(0, 7); setRange(`${m}-01`, new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10)); };
-  const lastMonth = () => { const d = new Date(); const p2 = new Date(d.getFullYear(), d.getMonth() - 1, 1); const m = p2.toISOString().slice(0, 7);
-    setRange(`${m}-01`, new Date(p2.getFullYear(), p2.getMonth() + 1, 0).toISOString().slice(0, 10)); };
+  const thisMonth = () => { const d = new Date(); const m = toDayISO(d).slice(0, 7); setRange(`${m}-01`, toDayISO(new Date(d.getFullYear(), d.getMonth() + 1, 0))); };
+  const lastMonth = () => { const d = new Date(); const p2 = new Date(d.getFullYear(), d.getMonth() - 1, 1); const m = toDayISO(p2).slice(0, 7);
+    setRange(`${m}-01`, toDayISO(new Date(p2.getFullYear(), p2.getMonth() + 1, 0))); };
   const taxYear = () => { const d = new Date(); const y = (d.getMonth() > 3 || (d.getMonth() === 3 && d.getDate() >= 6)) ? d.getFullYear() : d.getFullYear() - 1;
     setRange(`${y}-04-06`, `${y + 1}-04-05`); };
 

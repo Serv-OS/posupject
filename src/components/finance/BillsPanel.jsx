@@ -6,12 +6,13 @@ import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, de
 import { currencyForCountry } from '../../lib/region.js';
 import { advanceRunDate, buildBillFromSchedule, isDue } from '../../lib/recurringBills.js';
 import { canDeleteBill, deleteBill, billLabel } from '../../lib/billOps.js';
+import { fmtDay, isPastDay, toDayISO } from '../../lib/day';
 
-const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
+const fmtD = (d) => fmtDay(d, undefined, 'en-GB', '—');
 
 export const billStatus = (b) => {
   if (['paid', 'void', 'draft'].includes(b.status)) return b.status;
-  if (b.due_date && new Date(b.due_date) < new Date(new Date().toDateString())) return 'overdue';
+  if (isPastDay(b.due_date)) return 'overdue';
   return b.status;
 };
 const BADGE = {
@@ -53,14 +54,14 @@ export default function BillsPanel({ profile, onNavigate }) {
   const newBill = async () => {
     const { data, error } = await supabase.from('bills').insert({
       status: 'draft', created_by: profile.id,
-      due_date: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
+      due_date: toDayISO(new Date(Date.now() + 14 * 86400000)),
     }).select('id').single();
     if (error) { alert(error.message); return; }
     onNavigate?.('bill', data.id);
   };
 
   const generateDue = async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = toDayISO();
     const dueScheds = schedules.filter(s => isDue(s, today));
     if (!dueScheds.length) { alert('No recurring bills are due.'); return; }
     if (!confirm(`Generate ${dueScheds.length} due bill(s) now? They'll be created as "to pay".`)) return;
@@ -96,7 +97,7 @@ export default function BillsPanel({ profile, onNavigate }) {
   const overdueSum = sumByCurrency(overdueList, owed);
   const mStart = new Date(); mStart.setDate(1);
   const paidThisMonth = sumByCurrency(bills.filter(b => b.status === 'paid' && b.paid_at && new Date(b.paid_at) >= mStart), b => b.amount_paid ?? b.total ?? 0);
-  const dueCount = schedules.filter(s => isDue(s, new Date().toISOString().slice(0, 10))).length;
+  const dueCount = schedules.filter(s => isDue(s, toDayISO())).length;
   const filtered = statusFilter === 'all' ? bills : bills.filter(b => billStatus(b) === statusFilter);
   const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
 
@@ -279,7 +280,7 @@ function ScheduleModal({ schedule, suppliers, categories, companies, locations, 
     label: s.label || '', supplier_id: s.supplier_id || '', category_id: s.category_id || '',
     company_id: s.company_id || '', location_id: s.location_id || '', cost_context: s.cost_context || 'ongoing',
     frequency: s.frequency || 'monthly', day_of_month: s.day_of_month ?? 1,
-    next_run: s.next_run || new Date().toISOString().slice(0, 10), due_days: s.due_days ?? 14,
+    next_run: s.next_run || toDayISO(), due_days: s.due_days ?? 14,
     currency: s.currency || 'GBP',
     active: s.active ?? true, notes: s.notes || '',
   });

@@ -3,11 +3,12 @@ import { supabase } from '../../lib/supabase';
 import { useGoogleConnection } from '../../lib/useGoogle';
 import { Calendar as CalIcon, RefreshCw, ChevronLeft, ChevronRight, MapPin, Users, Video, ExternalLink } from 'lucide-react';
 import ScheduleMeeting from './ScheduleMeeting.jsx';
+import { toDayISO } from '../../lib/day';
 
 const FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/google-calendar`;
 const WINDOW_DAYS = 14;
 
-const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+const dayKey = (d) => toDayISO(d);
 const fmtDayHeading = (iso) => {
   const d = new Date(iso + 'T00:00:00');
   const today = dayKey(new Date());

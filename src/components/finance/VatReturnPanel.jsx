@@ -4,9 +4,10 @@ import { FileText, Download, AlertTriangle } from 'lucide-react';
 import { gbp2, round2, fmtMoney, sumByCurrency, fmtByCurrency, CURRENCIES } from '../../lib/money.js';
 import { computeVatReturn, vatReturnCsv } from '../../lib/vatReturn.js';
 import { isUkVat } from '../../lib/branding.js';
+import { toDayISO } from '../../lib/day';
 
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
-const startOfQuarter = () => { const d = new Date(); const m = Math.floor(d.getMonth() / 3) * 3; return new Date(d.getFullYear(), m, 1).toISOString().slice(0, 10); };
+const startOfQuarter = () => { const d = new Date(); const m = Math.floor(d.getMonth() / 3) * 3; return toDayISO(new Date(d.getFullYear(), m, 1)); };
 const downloadCsv = (text, filename) => {
   const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob); const a = document.createElement('a');
@@ -17,7 +18,7 @@ export default function VatReturnPanel({ profile }) {
   const uk = isUkVat();
   const [tab, setTab] = useState('vat');
   const [from, setFrom] = useState(startOfQuarter());
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
+  const [to, setTo] = useState(toDayISO());
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 

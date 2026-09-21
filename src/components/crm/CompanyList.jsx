@@ -5,6 +5,7 @@ import { primaryLead, LEAD_STAGES, LEAD_STAGE_MAP } from '../../lib/leadStages';
 import { ListContainer, RecordCard, CardHead, Chip, ChipRow, MetaRow, OwnerTag } from './cardKit.jsx';
 import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
+import { fmtDay } from '../../lib/day';
 
 export default function CompanyList({ profile, onSelect }) {
   const [companies, setCompanies] = useState([]);
@@ -90,7 +91,7 @@ export default function CompanyList({ profile, onSelect }) {
     return m ? (m.display_name || m.email.split('@')[0]) : '';
   };
 
-  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '';
+  const fmtDate = (d) => fmtDay(d);
   const stageLabel = (key) => LEAD_STAGE_MAP[key]?.label || key;
 
   const exportPdf = async () => {

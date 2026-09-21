@@ -2,8 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Percent, Plus, X } from 'lucide-react';
 import { resolveVat, resolveAmap, resolveAfr } from '../../lib/rates.js';
+import { toDayISO } from '../../lib/day';
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => toDayISO();
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'open';
 
 // Field specs per rate table — drives both the list columns and the add-row modal.
