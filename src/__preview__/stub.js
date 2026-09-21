@@ -310,7 +310,9 @@ CREDIT_NOTE_LINES.push(
 const PAYMENT_ADJUSTMENTS = [];
 const SUPPORT_SETTINGS = [{ id: 1, business_name: 'ServOS', business_address: '1 Harness Street, Manchester M1 1AA', business_email: 'accounts@serv-os.app', business_phone: '0161 000 0000', logo_url: null, quote_accent: '#15C26A', invoice_terms: 'Payment within 14 days of the invoice date.' }];
 
-export const TABLES = { gmail_connections_safe: [{ email: 'support@serv-os.app' }], user_integrations: [{ profile_id: ME, provider: 'google', email: 'peter@posup.co.uk' }], ticket_email_threads: [], processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
+export const TABLES = { project_templates: [{ id: 'tpl1', name: 'New template', description: 'ServOS onboarding' }],
+  task_templates: [{ id: 'tt1', project_template_id: 'tpl1', title: 'Order hardware', description: null, priority: 'P2', parent_template_id: null, due_offset_days: 0, sort_order: 0 }],
+  automations: [], gmail_connections_safe: [{ email: 'support@serv-os.app' }], user_integrations: [{ profile_id: ME, provider: 'google', email: 'peter@posup.co.uk' }], ticket_email_threads: [], processing_cost_templates: COST_TEMPLATES, monthly_volumes: [], deal_stage_weights: WEIGHTS, deal_trading: [
   // Dollar rows, so the Volume tab has to show pounds and dollars side by side.
   { deal_id: 'd7', name: 'Mozz Pizza — Orem (won)', stage: 'closed_won', owner_id: ME, company_id: 'c3', currency: 'USD', closed_at: ts(-1), site_count: 1, est_monthly_revenue: 98000, est_avg_transaction: 41, est_monthly_transactions: 2400, actual_monthly_revenue: 0, probability: 1, weighted_monthly_revenue: 98000, is_won: true, is_closed: true },
   { deal_id: 'd6', name: 'Mozz Pizza — Provo', stage: 'negotiation', owner_id: ME, company_id: 'c3', currency: 'USD', site_count: 1, est_monthly_revenue: 131554, est_avg_transaction: 44, est_monthly_transactions: 3004, probability: 0.85, weighted_monthly_revenue: 111821, is_won: false, is_closed: false },

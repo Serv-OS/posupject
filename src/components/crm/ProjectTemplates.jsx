@@ -14,6 +14,58 @@ const PRIORITY_STYLES = {
   P3: 'bg-slate-100 text-slate-600 border border-slate-200',
 };
 
+const INPUT = "w-full px-3 py-2 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
+const SMALL_INPUT = "px-2 py-1.5 bg-card border border-bdr rounded text-xs text-paper placeholder-dim focus:outline-none focus:border-ember";
+
+/* One task row, and it lives HERE, at module level, on purpose.
+ *
+ * While this was declared inside ProjectTemplates it was a brand new component
+ * type on every render. React compares types, sees a different one, throws the
+ * whole row away and mounts a fresh one, which takes the focus with it: you
+ * could type exactly one character in a task title before the box went dead.
+ * Typing updates local state through onEdit; the save still happens on blur. */
+function TaskRow({ row, isChild, isOwner, onEdit, onPatch, onMove, onDelete, onAddSub }) {
+  const smallInput = SMALL_INPUT;
+  return (
+    <div className={`glass-inner rounded-xl p-3 ${isChild ? 'ml-8' : ''}`}>
+      <div className="flex items-center gap-2">
+        <div className="flex flex-col shrink-0">
+          <button onClick={() => onMove(row, -1)} disabled={!isOwner} className="text-[10px] text-dim hover:text-paper leading-none py-0.5" title="Move up">▲</button>
+          <button onClick={() => onMove(row, 1)} disabled={!isOwner} className="text-[10px] text-dim hover:text-paper leading-none py-0.5" title="Move down">▼</button>
+        </div>
+        <input className={smallInput + ' flex-1'} value={row.title} disabled={!isOwner}
+          onChange={e => onEdit(row.id, { title: e.target.value })}
+          onBlur={e => onPatch(row.id, { title: e.target.value })}
+          placeholder={isChild ? 'Sub-task title' : 'Task title'} />
+        <select className={smallInput + ' shrink-0 ' + (PRIORITY_STYLES[row.priority] || '')} value={row.priority} disabled={!isOwner}
+          onChange={e => onPatch(row.id, { priority: e.target.value })} title="Priority">
+          {PRIORITIES.map(p => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
+        </select>
+        <label className="flex items-center gap-1 text-[10px] text-muted shrink-0" title="Due this many days after the job starts">
+          +<input type="number" min="0" className={smallInput + ' w-14 text-center'} value={row.due_offset_days ?? 0} disabled={!isOwner}
+            onChange={e => onEdit(row.id, { due_offset_days: parseInt(e.target.value || '0', 10) })}
+            onBlur={e => onPatch(row.id, { due_offset_days: parseInt(e.target.value || '0', 10) })} />d
+        </label>
+        <label className="flex items-center gap-1 text-[10px] text-muted shrink-0 cursor-pointer" title="Assign to the job's owner when created">
+          <input type="checkbox" className="accent-ember" checked={row.default_assignee_role === 'owner'} disabled={!isOwner}
+            onChange={e => onPatch(row.id, { default_assignee_role: e.target.checked ? 'owner' : null })} />
+          owner
+        </label>
+        {isOwner && <button onClick={() => onDelete(row)} className="text-red-500 hover:text-red-600 text-sm shrink-0" title="Delete">×</button>}
+      </div>
+      <div className="mt-1.5 flex items-start gap-2 pl-6">
+        <input className={smallInput + ' flex-1 !text-dim'} value={row.description || ''} disabled={!isOwner}
+          onChange={e => onEdit(row.id, { description: e.target.value })}
+          onBlur={e => onPatch(row.id, { description: e.target.value || null })}
+          placeholder="Notes / instructions for whoever does this (optional)" />
+        {!isChild && isOwner && (
+          <button onClick={() => onAddSub(row.id)} className="text-[10px] text-ember hover:text-ember-deep font-medium shrink-0 py-1.5">+ Sub-task</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ProjectTemplates({ profile }) {
   const [templates, setTemplates] = useState([]);
   const [taskTemplates, setTaskTemplates] = useState([]); // all rows, all templates
@@ -138,6 +190,9 @@ export default function ProjectTemplates({ profile }) {
     setTaskTemplates(prev => [...prev, data]);
   };
 
+  // Typing only moves local state. The save still happens on blur.
+  const editTask = (id, patch) => setTaskTemplates(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
+
   const patchTask = async (id, patch) => {
     setTaskTemplates(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
     await supabase.from('task_templates').update(patch).eq('id', id);
@@ -165,47 +220,8 @@ export default function ProjectTemplates({ profile }) {
     ]);
   };
 
-  const input = "w-full px-3 py-2 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
-  const smallInput = "px-2 py-1.5 bg-card border border-bdr rounded text-xs text-paper placeholder-dim focus:outline-none focus:border-ember";
-
-  const TaskRow = ({ row, isChild }) => (
-    <div className={`glass-inner rounded-xl p-3 ${isChild ? 'ml-8' : ''}`}>
-      <div className="flex items-center gap-2">
-        <div className="flex flex-col shrink-0">
-          <button onClick={() => moveTask(row, -1)} disabled={!isOwner} className="text-[10px] text-dim hover:text-paper leading-none py-0.5" title="Move up">▲</button>
-          <button onClick={() => moveTask(row, 1)} disabled={!isOwner} className="text-[10px] text-dim hover:text-paper leading-none py-0.5" title="Move down">▼</button>
-        </div>
-        <input className={smallInput + ' flex-1'} value={row.title} disabled={!isOwner}
-          onChange={e => setTaskTemplates(prev => prev.map(t => t.id === row.id ? { ...t, title: e.target.value } : t))}
-          onBlur={e => patchTask(row.id, { title: e.target.value })}
-          placeholder={isChild ? 'Sub-task title' : 'Task title'} />
-        <select className={smallInput + ' shrink-0 ' + (PRIORITY_STYLES[row.priority] || '')} value={row.priority} disabled={!isOwner}
-          onChange={e => patchTask(row.id, { priority: e.target.value })} title="Priority">
-          {PRIORITIES.map(p => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
-        </select>
-        <label className="flex items-center gap-1 text-[10px] text-muted shrink-0" title="Due this many days after the job starts">
-          +<input type="number" min="0" className={smallInput + ' w-14 text-center'} value={row.due_offset_days ?? 0} disabled={!isOwner}
-            onChange={e => setTaskTemplates(prev => prev.map(t => t.id === row.id ? { ...t, due_offset_days: parseInt(e.target.value || '0', 10) } : t))}
-            onBlur={e => patchTask(row.id, { due_offset_days: parseInt(e.target.value || '0', 10) })} />d
-        </label>
-        <label className="flex items-center gap-1 text-[10px] text-muted shrink-0 cursor-pointer" title="Assign to the job's owner when created">
-          <input type="checkbox" className="accent-ember" checked={row.default_assignee_role === 'owner'} disabled={!isOwner}
-            onChange={e => patchTask(row.id, { default_assignee_role: e.target.checked ? 'owner' : null })} />
-          owner
-        </label>
-        {isOwner && <button onClick={() => deleteTask(row)} className="text-red-500 hover:text-red-600 text-sm shrink-0" title="Delete">×</button>}
-      </div>
-      <div className="mt-1.5 flex items-start gap-2 pl-6">
-        <input className={smallInput + ' flex-1 !text-dim'} value={row.description || ''} disabled={!isOwner}
-          onChange={e => setTaskTemplates(prev => prev.map(t => t.id === row.id ? { ...t, description: e.target.value } : t))}
-          onBlur={e => patchTask(row.id, { description: e.target.value || null })}
-          placeholder="Notes / instructions for whoever does this (optional)" />
-        {!isChild && isOwner && (
-          <button onClick={() => addTask(row.id)} className="text-[10px] text-ember hover:text-ember-deep font-medium shrink-0 py-1.5">+ Sub-task</button>
-        )}
-      </div>
-    </div>
-  );
+  const input = INPUT;
+  const smallInput = SMALL_INPUT;
 
   return (
     <div className="h-full flex flex-col">
@@ -323,8 +339,8 @@ export default function ProjectTemplates({ profile }) {
                 <div className="space-y-2">
                   {parents.map(p => (
                     <div key={p.id} className="space-y-2">
-                      <TaskRow row={p} isChild={false} />
-                      {childrenOf(p.id).map(c => <TaskRow key={c.id} row={c} isChild />)}
+                      <TaskRow row={p} isChild={false} isOwner={isOwner} onEdit={editTask} onPatch={patchTask} onMove={moveTask} onDelete={deleteTask} onAddSub={addTask} />
+                      {childrenOf(p.id).map(c => <TaskRow key={c.id} row={c} isChild isOwner={isOwner} onEdit={editTask} onPatch={patchTask} onMove={moveTask} onDelete={deleteTask} onAddSub={addTask} />)}
                     </div>
                   ))}
                   {parents.length === 0 && (

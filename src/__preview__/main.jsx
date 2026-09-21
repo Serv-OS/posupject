@@ -24,6 +24,7 @@ import WhatIOwePanel from '../components/finance/WhatIOwePanel.jsx';
 import ProductsPanel from '../components/crm/ProductsPanel.jsx';
 import QuotesPanel from '../components/crm/QuotesPanel.jsx';
 import PublicQuote from '../components/PublicQuote.jsx';
+import ProjectTemplates from '../components/crm/ProjectTemplates.jsx';
 import InvoicesPanel from '../components/crm/InvoicesPanel.jsx';
 import InvoiceBuilder from '../components/crm/InvoiceBuilder.jsx';
 import CreditNoteModal from '../components/crm/CreditNoteModal.jsx';
@@ -438,6 +439,7 @@ function App() {
   if (v === 'invoice-allocated') return <InvoiceView id="inv1049" />;
   if (v === 'received') return <ReceivedView />;
   if (v === 'publicquote') return <PublicQuote token="harness-quote" />;
+  if (v === 'templates') return <div className="work" style={{ height: '100vh' }}><ProjectTemplates profile={P} /></div>;
   return (
     <div className="work" style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--scene-bg)' }}>
       <main className="work flex-1 min-w-0 overflow-hidden lg:flex lg:flex-col">
