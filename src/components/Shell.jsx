@@ -214,6 +214,7 @@ export default function Shell({ session }) {
     else if (type === 'account') { setView('account'); }
     else if (type === 'inbox') { setView('inbox'); }
     else if (type === 'calendar') { setView('calendar'); }
+    else if (type === 'booking') { setView('bookings'); }
     else if (type === 'chat') { setView('chat'); }
     // List shortcuts (used by My Work "View all")
     else if (type === 'ticket_list') { setView('tickets'); }

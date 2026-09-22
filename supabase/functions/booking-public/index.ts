@@ -74,6 +74,77 @@ async function googleBusy(token: string, fromIso: string, toIso: string, hostEma
   return out;
 }
 
+/* Tell our side that a meeting was booked or dropped.
+ *
+ * Google emails the ATTENDEE when the event is created (sendUpdates=all), and
+ * that invite is their confirmation. It does NOT email the organiser: the
+ * event is created with the host's own credentials, so Google treats it as
+ * something the host already knows about. The booking simply appeared in the
+ * calendar and nothing else said a word, which is why nobody here was ever
+ * told a meeting had been booked.
+ *
+ * So raise a notification the way the rest of the CRM does: a row in
+ * notifications, which trg_notify_dispatch hands to notify-dispatch, which
+ * sends the email (support mailbox), the SMS and the in-app bell, honouring
+ * each person's preferences. entity_type 'booking' makes the button in the
+ * email open the Bookings screen.
+ */
+async function notifyHost(
+  supabase: any,
+  opts: { bt: any; booking: any; kind: "booked" | "cancelled" },
+) {
+  const { bt, booking, kind } = opts;
+  try {
+    // Who to tell: the host, by user id, else by their email address, and if
+    // the host is not a CRM user at all, every owner. Never nobody.
+    let recipients: string[] = [];
+    if (bt?.host_user_id) recipients = [bt.host_user_id];
+    if (!recipients.length && bt?.host_email) {
+      const { data } = await supabase.from("profiles").select("id").ilike("email", bt.host_email).limit(1);
+      if (data?.length) recipients = [data[0].id];
+    }
+    if (!recipients.length) {
+      const { data } = await supabase.from("profiles").select("id").eq("role", "owner");
+      recipients = (data || []).map((p: any) => p.id);
+    }
+    if (!recipients.length) return;
+
+    const tz = bt?.timezone || "Europe/London";
+    const when = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz, weekday: "short", day: "numeric", month: "short",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(new Date(booking.starts_at));
+
+    const lines = [
+      kind === "booked"
+        ? `${booking.name} booked a ${bt.duration_mins} minute ${bt.name}.`
+        : `${booking.name} cancelled their ${bt.name}.`,
+      `When: ${when} (${tz})`,
+      `Email: ${booking.email}`,
+      booking.phone ? `Phone: ${booking.phone}` : "",
+      booking.company ? `Company: ${booking.company}` : "",
+      booking.notes ? `Notes: ${booking.notes}` : "",
+      kind === "booked"
+        ? "The invite and the Meet link have gone to them, and it is on the calendar."
+        : "It has been taken off the calendar.",
+    ].filter(Boolean);
+
+    await supabase.from("notifications").insert(recipients.map((id) => ({
+      recipient_id: id,
+      type: "system",
+      title: kind === "booked"
+        ? `New meeting: ${bt.name} with ${booking.name}`
+        : `Meeting cancelled: ${bt.name} with ${booking.name}`,
+      body: lines.join("\n"),
+      entity_type: "booking",
+      link_id: booking.id || null,
+    })));
+  } catch (e) {
+    // A booking that was taken must never fail because we could not announce it.
+    console.error("booking notify failed", (e as Error).message);
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -90,14 +161,16 @@ serve(async (req) => {
     if (!bk) return json({ error: "That booking link is not valid." }, 404);
     if (bk.status === "cancelled") return json({ ok: true, already: true });
     await supabase.from("bookings").update({ status: "cancelled", cancelled_at: new Date().toISOString() }).eq("id", bk.id);
+    const { data: cbt } = await supabase.from("booking_types")
+      .select("name, host_email, host_user_id, timezone, duration_mins").eq("id", bk.booking_type_id).maybeSingle();
     if (bk.google_event_id) {
-      const { data: bt } = await supabase.from("booking_types").select("host_email").eq("id", bk.booking_type_id).maybeSingle();
-      const { token } = await googleToken(supabase, bt?.host_email || "");
+      const { token } = await googleToken(supabase, cbt?.host_email || "");
       if (token) {
         await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${bk.google_event_id}?sendUpdates=all`,
           { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
       }
     }
+    if (cbt) await notifyHost(supabase, { bt: cbt, booking: bk, kind: "cancelled" });
     return json({ ok: true });
   }
 
@@ -234,6 +307,16 @@ serve(async (req) => {
         channel_metadata: { kind: "booking", booking_id: bk?.id },
       });
     }
+
+    // Our side hears about it too. Google only tells the person who booked.
+    await notifyHost(supabase, {
+      bt,
+      booking: {
+        id: bk?.id, name, email, phone: body?.phone || null, company: body?.company || null,
+        notes: body?.notes || null, starts_at: new Date(startsAt).toISOString(),
+      },
+      kind: "booked",
+    });
 
     return json({
       ok: true, id: bk?.id, cancel_token: cancelToken,
