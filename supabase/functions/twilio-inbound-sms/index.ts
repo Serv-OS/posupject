@@ -6,9 +6,54 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { storeAttachment } from "../_shared/attachments.ts";
 import { isOpenNow } from "../_shared/hours.ts";
 import { phoneVariants } from "../_shared/phone.ts";
 import { loadRegions, regionForTwilioNumber, effective } from "../_shared/region.ts";
+
+/* Picture messages (MMS).
+ *
+ * Twilio posts media as NumMedia + MediaUrl0..N, and this webhook used to read
+ * only From and Body: a photo was thrown away without a trace, and a photo with
+ * no words was refused outright by the "missing required fields" check, so the
+ * customer heard nothing back at all.
+ *
+ * Note for the UK: Twilio carries MMS in the US and Canada only, so a picture
+ * sent to a +44 number never reaches Twilio in the first place and none of this
+ * runs. It is the US numbers (psc-crm, SEA) where photos really arrive.
+ *
+ * The media URL needs the account's own credentials, and the file is put in the
+ * same private bucket as email attachments so the ticket shows it the same way.
+ */
+async function storeInboundMedia(supabase: any, form: FormData, o: { ticketId: string; activityId: string | null }) {
+  const count = parseInt(String(form.get("NumMedia") || "0"), 10) || 0;
+  if (!count || !o.ticketId) return 0;
+  const sid = Deno.env.get("TWILIO_ACCOUNT_SID");
+  const token = Deno.env.get("TWILIO_AUTH_TOKEN");
+  if (!sid || !token) { console.error("media arrived but TWILIO_ACCOUNT_SID/AUTH_TOKEN are not set"); return 0; }
+  const auth = "Basic " + btoa(`${sid}:${token}`);
+  let saved = 0;
+  for (let i = 0; i < count; i++) {
+    const url = String(form.get(`MediaUrl${i}`) || "");
+    if (!url) continue;
+    const mime = String(form.get(`MediaContentType${i}`) || "application/octet-stream");
+    try {
+      const r = await fetch(url, { headers: { Authorization: auth } });
+      if (!r.ok) { console.error("media fetch failed", r.status); continue; }
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      const ext = (mime.split("/")[1] || "bin").split(";")[0];
+      const ok = await storeAttachment(supabase, {
+        ticketId: o.ticketId, activityId: o.activityId,
+        name: `photo-${i + 1}.${ext}`, mime, bytes, source: "sms",
+      });
+      if (ok) saved++;
+    } catch (e) {
+      // A picture that will not download must never cost us the message itself.
+      console.error("media store failed:", (e as Error).message);
+    }
+  }
+  return saved;
+}
 
 serve(async (req) => {
   // Twilio sends webhooks as POST with form-urlencoded body
@@ -31,7 +76,11 @@ serve(async (req) => {
     const body = formData.get("Body") as string;
     const messageSid = formData.get("MessageSid") as string;
 
-    if (!from || !body) {
+    // A picture with no words is still a message, so only a missing sender,
+    // or a message with neither text nor media, is rejected here.
+    const mediaCount = parseInt(String(formData.get("NumMedia") || "0"), 10) || 0;
+    const messageBody = body || (mediaCount ? (mediaCount > 1 ? `(${mediaCount} photos)` : "(photo)") : "");
+    if (!from || (!body && !mediaCount)) {
       return twimlResponse("Missing required fields");
     }
 
@@ -159,10 +208,11 @@ serve(async (req) => {
     }
 
     // Create activity
+    let inboundActivityId: string | null = null;
     if (ticketId) {
-      await supabase.from("crm_activities").insert({
+      const { data: act } = await supabase.from("crm_activities").insert({
         type: "sms",
-        body: body,
+        body: messageBody,
         subject_type: "ticket",
         subject_id: ticketId,
         direction: "inbound",
@@ -175,7 +225,10 @@ serve(async (req) => {
           to_number: to,
           twilio_sid: messageSid,
         },
-      });
+      }).select("id").single();
+      inboundActivityId = act?.id ?? null;
+      // Any photos land on this same message, as email attachments do.
+      await storeInboundMedia(supabase, formData, { ticketId, activityId: inboundActivityId });
     }
 
     // Auto-reply on first contact only (avoid replying to every message).
