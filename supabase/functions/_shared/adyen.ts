@@ -51,6 +51,12 @@ export function checkoutBase(env: string | undefined, livePrefix: string | undef
 
 export type AdyenConfig = {
   apiKey: string; merchantAccount: string; env: string; livePrefix?: string;
+  /** Where OUR money lands. On a reseller platform, without this the funds sit
+   *  on the platform's liable account, which is not ours. */
+  balanceAccount?: string;
+  /** false hands the Adyen processing cost to the platform's liable account,
+   *  which on a reseller platform means the reseller pays for our sales. */
+  feesOnUs?: boolean;
 };
 
 /** Read the environment, or say plainly that Adyen is not set up here yet. */
@@ -62,6 +68,8 @@ export function adyenConfig(): AdyenConfig | null {
     apiKey, merchantAccount,
     env: (Deno.env.get("ADYEN_ENV") || "test").toLowerCase(),
     livePrefix: Deno.env.get("ADYEN_LIVE_PREFIX") || undefined,
+    balanceAccount: Deno.env.get("ADYEN_BALANCE_ACCOUNT") || undefined,
+    feesOnUs: (Deno.env.get("ADYEN_FEES_ON_US") || "true").toLowerCase() !== "false",
   };
 }
 
@@ -84,6 +92,40 @@ async function call(cfg: AdyenConfig, method: string, path: string, body?: unkno
     throw new Error(`adyen ${method} ${path} failed (${r.status}${data?.errorCode ? ` ${data.errorCode}` : ""}): ${msg}`);
   }
   return data;
+}
+
+/**
+ * Where the money goes.
+ *
+ * ONE split: the whole amount to our own balance account. No Commission split:
+ * commission on a balance platform always goes to the platform's LIABLE
+ * account, which here belongs to the reseller, and Peter's rule (14 Oct) is
+ * that ServOS's own sales carry no commission of any kind.
+ *
+ * The fee split carries no amount on purpose: Adyen only knows the fee after
+ * the payment, and naming an account moves the cost there. Without it the cost
+ * falls on the reseller's liable account, which would mean they pay for our
+ * card sales.
+ *
+ * A chargeback is deducted from the same account, so a dispute on our sale
+ * comes out of our money and not theirs.
+ *
+ * We never send `store`: a store carries the venue split profile (0.8% + 5p to
+ * the liable account) and Adyen applies it to a payment link, which would take
+ * commission out of our own invoice.
+ */
+export function paymentSplits(cfg: AdyenConfig, amount: number, currency: string, reference: string) {
+  if (!cfg.balanceAccount) return null;
+  const splits: Record<string, unknown>[] = [{
+    type: "BalanceAccount",
+    account: cfg.balanceAccount,
+    amount: { value: minorUnits(amount), currency: (currency || "GBP").toUpperCase() },
+    reference: `${reference}-net`,
+  }];
+  if (cfg.feesOnUs !== false) {
+    splits.push({ type: "PaymentFee", account: cfg.balanceAccount, reference: `${reference}-fee` });
+  }
+  return splits;
 }
 
 export type LinkInput = {
@@ -116,6 +158,12 @@ export async function createPaymentLink(cfg: AdyenConfig, input: LinkInput) {
   if (input.countryCode) body.countryCode = input.countryCode;
   if (input.returnUrl) body.returnUrl = input.returnUrl;
   if (input.metadata) body.metadata = input.metadata;
+  const splits = paymentSplits(cfg, input.amount, input.currency, input.reference);
+  if (splits) {
+    body.splits = splits;
+    // A dispute on our sale is ours, not the platform's.
+    body.platformChargebackLogic = { behavior: "deductFromOneBalanceAccount", targetAccount: cfg.balanceAccount };
+  }
   // Keyed on reference AND money. Adyen replays the first response for a key
   // for 7 days, so keying on the invoice alone would hand back last week's
   // link at last week's price after a re-price, a deposit, or a credit note.

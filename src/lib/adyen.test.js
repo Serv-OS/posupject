@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { minorUnits, fromMinorUnits, checkoutBase } from '../../supabase/functions/_shared/adyen.ts';
+import { minorUnits, fromMinorUnits, checkoutBase, paymentSplits } from '../../supabase/functions/_shared/adyen.ts';
 import {
   isTrue, signedPayload, plainSignedPayload, hexToBytes, verifyItem,
   invoiceReference, invoiceIdFromReference, decide,
@@ -149,5 +149,48 @@ describe('what a notification means', () => {
     for (const code of ['REFUND', 'REFUND_FAILED', 'REFUNDED_REVERSED', 'CHARGEBACK']) {
       expect(decide(item({ eventCode: code })).action).toBe('note');
     }
+  });
+});
+
+describe('where the money goes', () => {
+  const BA = 'BA32C5F22322CJ5PXF2BD7FKK';
+  const cfg = (o = {}) => ({ apiKey: 'k', merchantAccount: 'FranPOS_QSR_UK', env: 'live', balanceAccount: BA, ...o });
+
+  it('sends the whole sale to our own balance account', () => {
+    const splits = paymentSplits(cfg(), 298.8, 'GBP', 'inv-x');
+    const net = splits.find((s) => s.type === 'BalanceAccount');
+    expect(net.account).toBe(BA);
+    expect(net.amount).toEqual({ value: 29880, currency: 'GBP' });
+    expect(net.reference).toBe('inv-x-net');
+  });
+
+  it('takes no commission, because commission goes to the reseller', () => {
+    // Peter, 14 Oct: no commission of any kind on ServOS's own sales. On a
+    // balance platform a Commission split always books to the LIABLE account,
+    // which here is FranPOS, so the split must simply not exist.
+    const splits = paymentSplits(cfg(), 298.8, 'GBP', 'inv-x');
+    expect(splits.some((s) => s.type === 'Commission')).toBe(false);
+    expect(splits.find((s) => s.type === 'BalanceAccount').amount.value).toBe(minorUnits(298.8));
+  });
+
+  it('puts the card cost on us, with no amount, as Adyen requires', () => {
+    const fee = paymentSplits(cfg(), 100, 'GBP', 'inv-x').find((s) => s.type === 'PaymentFee');
+    expect(fee).toEqual({ type: 'PaymentFee', account: BA, reference: 'inv-x-fee' });
+    expect(fee.amount).toBeUndefined();
+  });
+
+  it('can leave the card cost with the platform if we ever want that', () => {
+    const splits = paymentSplits(cfg({ feesOnUs: false }), 100, 'GBP', 'inv-x');
+    expect(splits.some((s) => s.type === 'PaymentFee')).toBe(false);
+    expect(splits).toHaveLength(1);
+  });
+
+  it('sends no splits at all when no balance account is configured', () => {
+    expect(paymentSplits(cfg({ balanceAccount: undefined }), 100, 'GBP', 'inv-x')).toBeNull();
+  });
+
+  it('uses the payment currency, so a US sale is not booked in pounds', () => {
+    const net = paymentSplits(cfg(), 1200, 'usd', 'inv-y').find((s) => s.type === 'BalanceAccount');
+    expect(net.amount).toEqual({ value: 120000, currency: 'USD' });
   });
 });
