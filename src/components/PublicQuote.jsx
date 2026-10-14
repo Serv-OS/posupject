@@ -20,9 +20,35 @@ export default function PublicQuote({ token }) {
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
-  const paid = new URLSearchParams(window.location.search).get('paid') === '1';
+  const params = new URLSearchParams(window.location.search);
+  const paid = params.get('paid') === '1';          // Stripe only redirects here on success
+  // Adyen sends every outcome back to one url, so a return proves nothing. The
+  // page waits for the webhook instead of announcing a payment that may have
+  // failed, which is the mistake this whole page was fixed for.
+  const [checking, setChecking] = useState(params.get('from') === 'adyen');
 
   const padRef = useRef(null);
+
+  // Coming back from the card page: look again a few times while the webhook
+  // lands, rather than making the customer refresh.
+  useEffect(() => {
+    if (!checking) return;
+    let stop = false;
+    const times = [3000, 6000, 12000];
+    times.forEach((ms, i) => setTimeout(async () => {
+      if (stop) return;
+      try {
+        const res = await fetch(`${FN}/quote-public?token=${encodeURIComponent(token)}`);
+        const d = await res.json();
+        if (res.ok && !stop) {
+          setData(d);
+          if (d?.quote?.paid) { setChecking(false); stop = true; }
+          else if (i === times.length - 1) setChecking(false);
+        }
+      } catch { /* leave the page as it is */ }
+    }, ms));
+    return () => { stop = true; };
+  }, [checking, token]);
 
   useEffect(() => { (async () => {
     try {
@@ -283,7 +309,9 @@ export default function PublicQuote({ token }) {
                 paid told the customer "Accepted & paid". */}
             <div className="text-lg font-bold text-slate-800">{settled ? 'Accepted & paid' : 'Accepted & signed'}</div>
             {q.signed_by_name && <div className="text-sm text-slate-500">Signed by {q.signed_by_name}</div>}
-            {owes ? (
+            {checking ? (
+              <div className="text-sm text-slate-500 mt-2">Checking your payment with the bank…</div>
+            ) : owes ? (
               <>
                 <div className="text-sm text-amber-700 mt-2">
                   Payment of {money(due, cur)} has not gone through yet.

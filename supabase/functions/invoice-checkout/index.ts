@@ -5,7 +5,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=denonext";
 import { balanceDue } from "../_shared/invoiceEmail.ts";
-import { adyenConfig, createPaymentLink } from "../_shared/adyen.ts";
+import { adyenConfig, createPaymentLink, expirePaymentLink } from "../_shared/adyen.ts";
 import { invoiceReference } from "../_shared/adyenWebhook.ts";
 
 const cors = {
@@ -44,6 +44,10 @@ serve(async (req) => {
 
     // Adyen when it is configured: our own account, our own money.
     if (adyen) {
+      if (inv.adyen_link_id) {
+        try { await expirePaymentLink(adyen, inv.adyen_link_id); }
+        catch (e) { console.error(`invoice-checkout: old link not expired: ${(e as Error).message}`); }
+      }
       const link = await createPaymentLink(adyen, {
         amount, currency: inv.currency || "GBP",
         reference: invoiceReference(inv.id),
@@ -51,7 +55,7 @@ serve(async (req) => {
         shopperEmail: inv.email_to || undefined,
         countryCode: (inv.currency || "GBP").toUpperCase() === "USD" ? "US" : "GB",
         shopperLocale: (inv.currency || "GBP").toUpperCase() === "USD" ? "en-US" : "en-GB",
-        returnUrl: `${base}/i/${token}?paid=1`,
+        returnUrl: `${base}/i/${token}?from=adyen`,
         expiresInDays: 30,
         metadata: { invoice_number: String(inv.invoice_number) },
       });

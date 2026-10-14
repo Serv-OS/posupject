@@ -12,7 +12,8 @@ export async function ensureInvoiceForQuote(supabase: any, q: any): Promise<any 
   }
 
   const { data: existing } = await supabase.from("invoices")
-    .select("*").eq("quote_id", q.id).limit(1);
+    .select("*").eq("quote_id", q.id).neq("status", "void")
+    .order("invoice_number", { ascending: false }).limit(1);
   if (existing?.length) return existing[0];
 
   const today = new Date().toISOString().slice(0, 10);

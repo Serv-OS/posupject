@@ -116,8 +116,11 @@ export async function createPaymentLink(cfg: AdyenConfig, input: LinkInput) {
   if (input.countryCode) body.countryCode = input.countryCode;
   if (input.returnUrl) body.returnUrl = input.returnUrl;
   if (input.metadata) body.metadata = input.metadata;
-  // Keyed on our reference: a double click cannot create two links to pay twice.
-  return await call(cfg, "POST", "/paymentLinks", body, `link-${input.reference}`);
+  // Keyed on reference AND money. Adyen replays the first response for a key
+  // for 7 days, so keying on the invoice alone would hand back last week's
+  // link at last week's price after a re-price, a deposit, or a credit note.
+  const key = `link-${input.reference}-${minorUnits(input.amount)}-${(input.currency || "GBP").toUpperCase()}`;
+  return await call(cfg, "POST", "/paymentLinks", body, key);
 }
 
 export const getPaymentLink = (cfg: AdyenConfig, linkId: string) =>

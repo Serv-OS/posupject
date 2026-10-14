@@ -24,7 +24,12 @@ export default function PublicInvoice({ token }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [paying, setPaying] = useState(false);
-  const justPaid = new URLSearchParams(window.location.search).get('paid') === '1';
+  const qs = new URLSearchParams(window.location.search);
+  // Stripe only sent the customer back here when the payment succeeded. Adyen
+  // sends them back whatever happened, so that return is not proof of payment:
+  // the page shows it as still owing until the webhook says otherwise.
+  const justPaid = qs.get('paid') === '1';
+  const backFromAdyen = qs.get('from') === 'adyen';
 
   useEffect(() => { (async () => {
     try {
@@ -84,6 +89,7 @@ export default function PublicInvoice({ token }) {
   // Back from Stripe before the payment has been recorded: the card paid the
   // balance, so the rows show it paid rather than a balance still owing.
   const pendingPaid = justPaid && inv.status !== 'paid';
+  const confirming = backFromAdyen && inv.status !== 'paid';
   const cashRow = pendingPaid ? markPaidAmount(sums) : paid;
   const balanceRow = pendingPaid ? 0 : balance;
   // Settled beyond what the invoice now asks for (paid, then credited): that
@@ -241,13 +247,21 @@ export default function PublicInvoice({ token }) {
             </div>
           ) : (
             <>
+              {/* Back from the card page: the payment is confirmed by the
+                  webhook, not by the customer landing here, so the page says
+                  it is checking rather than claiming either way. */}
+              {confirming && (
+                <div className="rounded-xl p-3 mb-2 text-center text-sm bg-slate-50 text-slate-600">
+                  Checking your payment with the bank. If it went through, this page will show it shortly.
+                </div>
+              )}
               <button onClick={pay} disabled={paying}
                 className="w-full py-3.5 rounded-xl text-white font-bold text-base transition hover:opacity-90 disabled:opacity-50"
                 style={{ background: accent }}>
                 {paying ? 'Redirecting…' : `Pay ${money(balance, currency)} by card`}
               </button>
               {error && <div className="text-sm text-red-600 text-center mt-2">{error}</div>}
-              <div className="text-[11px] text-slate-400 text-center mt-2">Secure card payment powered by Stripe</div>
+              <div className="text-[11px] text-slate-400 text-center mt-2">Secure card payment</div>
             </>
           )}
         </div>

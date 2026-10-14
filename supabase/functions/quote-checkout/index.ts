@@ -6,7 +6,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=deno";
-import { adyenConfig, createPaymentLink } from "../_shared/adyen.ts";
+import { adyenConfig, createPaymentLink, expirePaymentLink } from "../_shared/adyen.ts";
 import { invoiceReference } from "../_shared/adyenWebhook.ts";
 import { ensureInvoiceForQuote, quoteContactEmail } from "../_shared/quoteInvoice.ts";
 import { balanceDue } from "../_shared/invoiceEmail.ts";
@@ -67,6 +67,13 @@ serve(async (req) => {
       // already does; this makes sure of it either way.
       const invoice = inv || await ensureInvoiceForQuote(supabase, quote);
       if (!invoice?.id) return json({ error: "Could not raise the invoice for this quote." }, 500);
+      // Kill whatever link this invoice had: Adyen keeps a link payable for
+      // its whole life, so a re-priced quote would otherwise still have the
+      // old amount sitting there, payable.
+      if (invoice.adyen_link_id) {
+        try { await expirePaymentLink(adyen, invoice.adyen_link_id); }
+        catch (e) { console.error(`quote-checkout: old link not expired: ${(e as Error).message}`); }
+      }
       const link = await createPaymentLink(adyen, {
         amount, currency: quote.currency || "GBP",
         reference: invoiceReference(invoice.id),
@@ -74,11 +81,12 @@ serve(async (req) => {
         shopperEmail: (await quoteContactEmail(supabase, quote)) || undefined,
         countryCode: (quote.currency || "GBP").toUpperCase() === "USD" ? "US" : "GB",
         shopperLocale: (quote.currency || "GBP").toUpperCase() === "USD" ? "en-US" : "en-GB",
-        returnUrl: `${base}/q/${token}?paid=1`,
+        returnUrl: `${base}/q/${token}?from=adyen`,
         expiresInDays: 30,
         metadata: { quote_id: String(quote.id), quote_number: String(quote.quote_number) },
       });
       await supabase.from("quotes").update({ adyen_link_id: link?.id || null }).eq("id", quote.id);
+      await supabase.from("invoices").update({ adyen_link_id: link?.id || null }).eq("id", invoice.id);
       if (!link?.url) return json({ error: "Adyen did not return a payment link." }, 502);
       return json({ url: link.url });
     }

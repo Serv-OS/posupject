@@ -56,7 +56,7 @@ async function sign(payload: string, hexKey: string): Promise<string> {
   return btoa(String.fromCharCode(...new Uint8Array(mac)));
 }
 
-const sameString = (a: string, b: string) => {
+export const sameString = (a: string, b: string) => {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
