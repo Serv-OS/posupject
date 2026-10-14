@@ -62,6 +62,23 @@ export default function PublicQuote({ token }) {
     } catch { setError('Could not submit. Please try again.'); setSubmitting(false); }
   };
 
+  // Start the card page again for a quote that is signed but unpaid.
+  const payNow = async () => {
+    setSubmitting(true); setError('');
+    try {
+      const cs = await fetch(`${FN}/quote-checkout`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, origin: window.location.origin }),
+      });
+      const cd = await cs.json();
+      if (cs.ok && cd.url) { window.location.href = cd.url; return; }
+      setError(cd.error || 'We could not open the payment page. Please contact us and we will send you a payment link.');
+    } catch {
+      setError('We could not open the payment page. Please contact us and we will send you a payment link.');
+    }
+    setSubmitting(false);
+  };
+
   const wrap = (children) => (
     <div className="min-h-screen w-full bg-slate-100 py-6 px-3 sm:px-4 flex justify-center">
       <div className="w-full max-w-3xl">{children}</div>
@@ -76,6 +93,15 @@ export default function PublicQuote({ token }) {
   const seller = data.seller || {};
   const accent = seller.accent || '#E8743C';
   const accepted = paid || done || ['signed', 'paid', 'won'].includes(q.status);
+  // Settled = the money is in, from the money columns (or the ?paid=1 return
+  // Stripe sends us). A status of 'won' says the deal closed, never that it
+  // was paid. `owes` is what puts the Pay now button on an accepted quote, so
+  // a failed card page does not need a brand new quote link.
+  const settled = paid || q.paid === true;
+  const owes = accepted && !settled && q.owes_payment === true;
+  const due = q.payment_terms === 'deposit' && q.deposit_percent
+    ? Math.round(Number(q.one_off_total || 0) * Number(q.deposit_percent)) / 100
+    : Number(q.one_off_total || 0);
   // What the customer pays for software, from the software lines alone.
   // quotes.recurring_arr is never used here: it includes our card margin
   // estimate, which made two quotes for the same software show different
@@ -251,10 +277,28 @@ export default function PublicQuote({ token }) {
         <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-3">Acceptance</div>
         {accepted ? (
           <div className="text-center py-4">
-            <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-2xl mx-auto mb-2">✓</div>
-            <div className="text-lg font-bold text-slate-800">{paid || q.status === 'paid' || q.status === 'won' ? 'Accepted & paid' : 'Accepted & signed'}</div>
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center text-2xl mx-auto mb-2 ${settled ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>{settled ? '✓' : '!'}</div>
+            {/* Paid means PAID. The old line read the status, and 'won' is set
+                the moment the deal closes on signature, so a quote nobody had
+                paid told the customer "Accepted & paid". */}
+            <div className="text-lg font-bold text-slate-800">{settled ? 'Accepted & paid' : 'Accepted & signed'}</div>
             {q.signed_by_name && <div className="text-sm text-slate-500">Signed by {q.signed_by_name}</div>}
-            <div className="text-sm text-slate-500">Thank you — we'll be in touch to get you started.</div>
+            {owes ? (
+              <>
+                <div className="text-sm text-amber-700 mt-2">
+                  Payment of {money(due, cur)} has not gone through yet.
+                </div>
+                {error && <div className="text-sm text-red-600 mt-2">{error}</div>}
+                <button onClick={payNow} disabled={submitting}
+                  style={{ backgroundColor: accent }}
+                  className="mt-3 px-6 py-3 text-white text-sm font-semibold rounded-lg transition hover:opacity-90 disabled:opacity-50">
+                  {submitting ? 'Opening…' : `Pay ${money(due, cur)} now`}
+                </button>
+                <div className="text-xs text-slate-400 mt-2">Your signature is saved, you do not need to sign again.</div>
+              </>
+            ) : (
+              <div className="text-sm text-slate-500">Thank you — we'll be in touch to get you started.</div>
+            )}
           </div>
         ) : q.expired ? (
           <div className="text-center text-slate-500 text-sm py-4">This quote has expired. Please contact us for an updated quote.</div>

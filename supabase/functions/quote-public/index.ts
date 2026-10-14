@@ -50,6 +50,14 @@ serve(async (req) => {
           // works out the customer's software price from the lines instead.
           terms: quote.terms || s.quote_terms || "",
           signed: !!quote.signed_at, signed_by_name: quote.signed_by_name, created_at: quote.created_at, expired,
+          // Money, from the money columns only. The page used to read the
+          // STATUS: 'won' is set when the deal closes on signature, so a quote
+          // nobody had paid announced "Accepted & paid" to the customer. The
+          // Habitum signed, the card page failed, and the page still thanked
+          // them for paying (14 Oct). owed drives the Pay now button.
+          paid: !!quote.paid_at,
+          amount_paid: quote.amount_paid ?? null,
+          owes_payment: quote.payment_terms !== "invoice_later" && !quote.paid_at,
           card_processing: quote.card_processing || null,
         },
         seller: {
