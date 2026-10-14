@@ -6,6 +6,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=deno";
+import { adyenConfig, createPaymentLink } from "../_shared/adyen.ts";
+import { invoiceReference } from "../_shared/adyenWebhook.ts";
+import { ensureInvoiceForQuote, quoteContactEmail } from "../_shared/quoteInvoice.ts";
 import { balanceDue } from "../_shared/invoiceEmail.ts";
 
 const cors = {
@@ -22,8 +25,10 @@ serve(async (req) => {
     // Prefer the in-app connected key; fall back to an env secret
     const { data: conn } = await supabase.from("stripe_connection").select("secret_key").eq("id", 1).maybeSingle();
     const stripeKey = conn?.secret_key || Deno.env.get("STRIPE_SECRET_KEY");
-    if (!stripeKey) return json({ error: "Stripe is not connected yet." }, 503);
-    const stripe = new Stripe(stripeKey, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
+    if (!stripeKey && !adyenConfig()) return json({ error: "No card processor is connected yet." }, 503);
+    const stripe = stripeKey
+      ? new Stripe(stripeKey, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() })
+      : (null as unknown as Stripe);
     const { token, origin } = await req.json();
     if (!token) return json({ error: "Missing token" }, 400);
 
@@ -52,6 +57,32 @@ serve(async (req) => {
     }
 
     const base = origin || new URL(req.url).origin;
+
+    // Adyen is ours; Stripe is what we are leaving. Whichever is configured on
+    // this instance answers, so the switch is a secret, not a deploy.
+    const adyen = adyenConfig();
+    if (adyen) {
+      // The reference the webhook maps back to money is the INVOICE's id, so
+      // the invoice has to exist before the link does. For a signed quote it
+      // already does; this makes sure of it either way.
+      const invoice = inv || await ensureInvoiceForQuote(supabase, quote);
+      if (!invoice?.id) return json({ error: "Could not raise the invoice for this quote." }, 500);
+      const link = await createPaymentLink(adyen, {
+        amount, currency: quote.currency || "GBP",
+        reference: invoiceReference(invoice.id),
+        description: label,
+        shopperEmail: (await quoteContactEmail(supabase, quote)) || undefined,
+        countryCode: (quote.currency || "GBP").toUpperCase() === "USD" ? "US" : "GB",
+        shopperLocale: (quote.currency || "GBP").toUpperCase() === "USD" ? "en-US" : "en-GB",
+        returnUrl: `${base}/q/${token}?paid=1`,
+        expiresInDays: 30,
+        metadata: { quote_id: String(quote.id), quote_number: String(quote.quote_number) },
+      });
+      await supabase.from("quotes").update({ adyen_link_id: link?.id || null }).eq("id", quote.id);
+      if (!link?.url) return json({ error: "Adyen did not return a payment link." }, 502);
+      return json({ url: link.url });
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [{

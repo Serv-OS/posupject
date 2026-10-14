@@ -22,6 +22,10 @@ verify_jwt = false
 verify_jwt = false
 [functions.quote-checkout]
 verify_jwt = false
+# Adyen cannot send a Supabase JWT. With the check on, every notification
+# 401s and Adyen marks the endpoint failing: the HMAC signature is the proof.
+[functions.adyen-webhook]
+verify_jwt = false
 [functions.quote-public]
 verify_jwt = false
 [functions.stripe-connect]

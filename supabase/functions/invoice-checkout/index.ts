@@ -5,6 +5,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=denonext";
 import { balanceDue } from "../_shared/invoiceEmail.ts";
+import { adyenConfig, createPaymentLink } from "../_shared/adyen.ts";
+import { invoiceReference } from "../_shared/adyenWebhook.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -25,9 +27,10 @@ serve(async (req) => {
     if (!inv || inv.status === "void") return json({ error: "Invoice not found" }, 404);
     if (inv.status === "paid") return json({ error: "This invoice is already paid." }, 400);
 
+    const adyen = adyenConfig();
     const { data: conn } = await supabase.from("stripe_connection").select("secret_key").eq("id", 1).maybeSingle();
-    if (!conn?.secret_key) return json({ error: "Payments are not configured." }, 400);
-    const stripe = new Stripe(conn.secret_key, { apiVersion: "2023-10-16" });
+    if (!adyen && !conn?.secret_key) return json({ error: "Payments are not configured." }, 400);
+    const stripe = conn?.secret_key ? new Stripe(conn.secret_key, { apiVersion: "2023-10-16" }) : (null as unknown as Stripe);
 
     // Charge what is still owed, not the invoice total: a deposit already
     // taken, a credit note already issued or credit applied from another
@@ -38,6 +41,24 @@ serve(async (req) => {
     if (amount <= 0) return json({ error: "Nothing left to pay on this invoice." }, 400);
 
     const base = origin || new URL(req.url).origin;
+
+    // Adyen when it is configured: our own account, our own money.
+    if (adyen) {
+      const link = await createPaymentLink(adyen, {
+        amount, currency: inv.currency || "GBP",
+        reference: invoiceReference(inv.id),
+        description: `Invoice ${inv.invoice_number}`,
+        shopperEmail: inv.email_to || undefined,
+        countryCode: (inv.currency || "GBP").toUpperCase() === "USD" ? "US" : "GB",
+        shopperLocale: (inv.currency || "GBP").toUpperCase() === "USD" ? "en-US" : "en-GB",
+        returnUrl: `${base}/i/${token}?paid=1`,
+        expiresInDays: 30,
+        metadata: { invoice_number: String(inv.invoice_number) },
+      });
+      await supabase.from("invoices").update({ adyen_link_id: link?.id || null }).eq("id", inv.id);
+      if (!link?.url) return json({ error: "Adyen did not return a payment link." }, 502);
+      return json({ url: link.url });
+    }
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [{
