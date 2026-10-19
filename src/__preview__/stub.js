@@ -7,8 +7,8 @@ const d = (n) => { const x = new Date(); x.setDate(x.getDate() + n); return x.to
 const ts = (n, h = 0) => { const x = new Date(); x.setDate(x.getDate() + n); x.setHours(x.getHours() - h); return x.toISOString(); };
 const ME = 'u-peter';
 export const MEMBERS = [{ id: 'u-peter', display_name: 'Peter', email: 'peter@posup.co.uk', role: 'owner' }, { id: 'u-sarah', display_name: 'Sarah', email: 'sarah@posup.co.uk', role: 'editor' }, { id: 'u-james', display_name: 'James', email: 'james@posup.co.uk', role: 'editor' }];
-const COMPANIES = [{ id: 'c1', name: 'Coffee Boy — Barnsley', country: 'GB' }, { id: 'c2', name: 'Lightspeed POS UK Ltd', country: 'GB' }, { id: 'c3', name: 'Mozz Pizza', country: null }, { id: 'c4', name: 'Container Coffee Shops LTD', country: 'GB' }];
-const LOCATIONS = [{ id: 'l1', name: 'Verde — Macclesfield', company_id: 'c2', status: 'live', phone: '01625 442 118', email: 'verde@example.com', address: '14 Mill Street', city: 'Macclesfield', postcode: 'SK11 6NN', venue_type: 'restaurant', covers: 80, go_live_date: '2026-03-14', owner_id: ME, created_at: ts(-200) }, { id: 'l2', name: 'Mozz — Provo', company_id: 'c3', status: 'live', country: 'US', venue_type: 'restaurant', covers: 60, owner_id: ME, created_at: ts(-30) }];
+const COMPANIES = [{ id: 'c1', name: 'Coffee Boy — Barnsley', country: 'GB' }, { id: 'c2', name: 'Lightspeed POS UK Ltd', country: 'GB' }, { id: 'c3', name: 'Mozz Pizza', country: null }, { id: 'c4', name: 'Container Coffee Shops LTD', country: 'GB' }, { id: 'c5', name: 'Coffee Boy Retail', country: 'GB' }, { id: 'c6', name: 'TDNZ COFFEE LTD', country: 'GB' }];
+const LOCATIONS = [{ id: 'l1', name: 'Verde — Macclesfield', company_id: 'c2', status: 'live', phone: '01625 442 118', email: 'verde@example.com', address: '14 Mill Street', city: 'Macclesfield', postcode: 'SK11 6NN', venue_type: 'restaurant', covers: 80, go_live_date: '2026-03-14', owner_id: ME, created_at: ts(-200) }, { id: 'l2', name: 'Mozz — Provo', company_id: 'c3', status: 'live', country: 'US', venue_type: 'restaurant', covers: 60, owner_id: ME, created_at: ts(-30) }, { id: 'l3', name: 'Coffee Boy - Barnsley Train Station', company_id: 'c6', status: 'prospect', country: 'GB', venue_type: 'cafe', owner_id: ME, created_at: ts(-60) }, { id: 'l4', name: 'Coffee Boy - Leeds', company_id: 'c5', status: 'prospect', country: 'GB', city: 'Leeds', venue_type: 'cafe', owner_id: ME, created_at: ts(-60) }];
 const LEADS = [{ id: 'lead1', name: 'Cafe Brigante - Leeds Center', stage: 'deal', deal_id: 'd1', source: 'website', priority: 'medium', venue_type: 'cafe', current_pos: 'Lightspeed', owner_id: ME, company_id: 'c1', location_id: 'l1', created_at: ts(-90) }];
 const DEALS = [
   { id: 'd1', name: 'Coffee Boy — Barnsley Train Station', company_id: 'c1', stage: 'proposal_sent', owner_id: ME, hardware_value: 3200, services_value: 850, saas_arr: 1788, payments_arr: 0, expected_close_date: d(12), created_at: ts(-40), updated_at: ts(-3) },
@@ -73,7 +73,25 @@ const QLINES = [
   { id: 'ql4', quote_id: 'q1', name: 'ServOS Growth', category: 'saas', billing_type: 'monthly', qty: 1, unit_price: 149, discount: 0, tax_rate: 20, line_total: 149, sort: 3 },
 ];
 const PRODUCTS = [{ id: 'pr1', name: 'Lightspeed terminal', category: 'hardware', billing_type: 'one_off', default_price: 390, default_price_usd: 549, cost_price: 260, cost_price_usd: 340, active: true }, { id: 'pr2', name: 'Card reader', category: 'hardware', billing_type: 'one_off', default_price: 149, active: true }, { id: 'pr3', name: 'ServOS Growth', category: 'saas', billing_type: 'monthly', default_price: 149, default_price_usd: 199, active: true }, { id: 'pr4', name: 'Kiosk stand (US only)', category: 'hardware', billing_type: 'one_off', default_price: null, default_price_usd: 899, cost_price_usd: 610, active: true }];
-const SERIALS = [{ id: 'sn1', serial: 'LS-88213', location_id: 'l1', product: { name: 'Lightspeed terminal' }, status: 'deployed' }, { id: 'sn2', serial: 'LS-88214', location_id: 'l1', product: { name: 'Lightspeed terminal' }, status: 'deployed' }, { id: 'sn3', serial: 'CR-1120', location_id: 'l1', product: { name: 'Card reader' }, status: 'deployed' }];
+// Stock: the Barnsley units as they were on 16 Oct (wrong company, no site),
+// kit on the Verde site, one Verde unit with no site, and some in the store.
+const unitRow = (id, serial, product_name, category, o = {}) => ({ id, serial, product_name, category, status: 'deployed', company_id: null, location_id: null, customer_name: null, dispatch_ref: null, deployed_at: ts(-3), used: false, condition: '', cost: null, warehouse_id: null, updated_at: ts(-3), ...o });
+const BARNSLEY = { company_id: 'c5', dispatch_ref: 'Barnsley STN' };
+const SERIALS = [
+  unitRow('sn1', 'LS-88213', 'Lightspeed terminal', 'POS Terminal', { company_id: 'c2', location_id: 'l1', cost: 260 }),
+  unitRow('sn2', 'LS-88214', 'Lightspeed terminal', 'POS Terminal', { company_id: 'c2', location_id: 'l1', cost: 260 }),
+  unitRow('sn3', 'CR-1120', 'Card reader', 'Payment Terminal', { company_id: 'c2', location_id: 'l1', cost: 149 }),
+  unitRow('sn4', 'CR-1121', 'Card reader', 'Payment Terminal', { company_id: 'c2', cost: 149, dispatch_ref: 'Verde spare' }),
+  unitRow('sn5', 'X88C3000600024', 'TV Menu Stick', 'Menu Board', { ...BARNSLEY, cost: 55 }),
+  unitRow('sn6', '8CEDE1166468', 'Unifi UX7 Router', 'Gateway/Router', { ...BARNSLEY, cost: 177 }),
+  unitRow('sn7', '000168253677259', 'ServOS Card Reader', 'Payment Terminal', { ...BARNSLEY, cost: 249 }),
+  unitRow('sn8', 'X88C300600189', 'TV Menu Stick', 'Menu Board', { ...BARNSLEY, cost: 55 }),
+  unitRow('sn9', 'ZB02263Q10102', 'Sunmi Customer Facing Display', 'Customer-Facing Display', { company_id: 'c5', cost: 115.78 }),
+  unitRow('sn10', 'DP01264210762', 'Sunmi D3 Pro', 'POS Terminal', { company_id: 'c5', cost: 323.6 }),
+  unitRow('sn11', 'DP01264210999', 'Sunmi D3 Pro', 'POS Terminal', { status: 'in_stock', deployed_at: null, warehouse_id: 'wh1', cost: 323.6 }),
+  unitRow('sn12', 'X88C3000600300', 'TV Menu Stick', 'Menu Board', { status: 'in_stock', deployed_at: null, warehouse_id: 'wh1', cost: 55 }),
+];
+const MOVEMENTS = [{ id: 'mv1', type: 'out', product_name: 'TV Menu Stick', serials: ['X88C3000600024'], qty: 1, company_id: 'c5', location_id: null, ref: 'Barnsley STN', by_name: 'duncan', occurred_at: ts(-3) }];
 const ACTIVITIES = [
   { id: 'c1', type: 'call', direction: 'outbound', actor_id: ME, occurred_at: ts(0, 2), channel_metadata: { to: '+447700900123', duration_seconds: 182 }, contact_id: 'ct1', subject_type: 'contact', subject_id: 'ct1' },
   { id: 'c2', type: 'call', direction: 'inbound', actor_id: ME, occurred_at: ts(0, 5), channel_metadata: { from_number: '+441625442118', duration_seconds: 0 } },{ id: 'a1', type: 'note', is_internal: true, subject: 'Cannot add sub account button is missing from my account', body: 'Cannot add sub account button is missing from my account', actor_id: ME, occurred_at: ts(0, 0.05), subject_type: 'task', subject_id: 't3', created_at: ts(0, 0.05) }];
@@ -319,7 +337,7 @@ export const TABLES = { project_templates: [{ id: 'tpl1', name: 'New template', 
     // Venue turnover per deal, one in each region: the Volume tab must never add these two.
     { deal_id: 'd1', name: 'Coffee Boy — Barnsley Train Station', company_id: 'c1', stage: 'proposal_sent', site_count: 1, est_monthly_revenue: 42000, est_monthly_transactions: 5000, est_avg_transaction: 8.4 },
     { deal_id: 'dus1', name: 'Mozz Pizza — Provo', company_id: 'c3', stage: 'proposal_sent', site_count: 1, est_monthly_revenue: 131554, est_monthly_transactions: 3004, est_avg_transaction: 43.79 },
-  ], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, crm_activities: ACTIVITIES, time_entries: TIME, expenses: [
+  ], location_modules: [], modules: [], feature_requests: [], profiles: MEMBERS, companies: COMPANIES, locations: LOCATIONS, deals: DEALS, crm_projects: PROJECTS, tasks: TASKS, work_items: WORK, tickets: TICKETS, onboardings: ONBOARDINGS, contacts: CONTACTS, associations: ASSOC, notifications: NOTIFS, bills: BILLS, quotes: QUOTES, quote_line_items: QLINES, products: PRODUCTS, inv_serials: SERIALS, inv_movements: MOVEMENTS, inv_warehouses: [{ id: 'wh1', name: 'Barnsley store' }], inv_thresholds: [], crm_activities: ACTIVITIES, time_entries: TIME, expenses: [
     { id: 'ex1', expense_date: d(-2), description: 'Provo site visit, taxis', merchant: 'Uber', amount: 84.2, net: 84.2, vat_amount: 0, total: 84.2, currency: 'USD', status: 'submitted', company_id: 'c3', location_id: 'l2', created_by: ME, created_at: ts(-2) },
     { id: 'ex2', expense_date: d(-5), description: 'Train to Macclesfield', merchant: 'Northern', amount: 32.5, net: 32.5, vat_amount: 0, total: 32.5, currency: 'GBP', status: 'submitted', company_id: 'c2', location_id: 'l1', created_by: ME, created_at: ts(-5) },
   ], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY,
@@ -347,6 +365,17 @@ function makeQuery(table) {
     if (patch) {
       rows.forEach((r) => { const textChanged = table === 'crm_activities' && 'body' in patch && patch.body !== r.body; Object.assign(r, patch); if (textChanged) r.edited_at = new Date().toISOString(); });
       patch = null;
+    }
+    // Stock rows name their company and site the way the real joins do,
+    // worked out on every read so a move shows its new place at once.
+    if (table === 'inv_serials' || table === 'inv_movements') {
+      rows.forEach((r) => {
+        const c = TABLES.companies.find((x) => x.id === r.company_id);
+        const l = TABLES.locations.find((x) => x.id === r.location_id);
+        r.company = c ? { name: c.name } : null;
+        r.location = l ? { name: l.name } : null;
+        if (table === 'inv_serials') r.warehouse = r.warehouse_id === 'wh1' ? { name: 'Barnsley store' } : null;
+      });
     }
     return { data: single ? (rows[0] ?? null) : head ? null : rows, error: null, count: rows.length };
   };

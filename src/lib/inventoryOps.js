@@ -39,7 +39,76 @@ export async function assertSerialsNew(serials) {
 }
 
 async function ledger(row) {
-  await supabase.from('inv_movements').insert(row);
+  // The unit has already moved by the time this runs, so a failed audit line
+  // is reported, not thrown: throwing would tell the user the move failed.
+  const { error } = await supabase.from('inv_movements').insert(row);
+  if (error) console.error('inv_movements: audit line not written', error.message, row);
+}
+
+// One ledger line per product, the shape every movement already uses.
+async function ledgerByProduct(rows, base) {
+  const byProduct = {};
+  (rows || []).forEach(r => { (byProduct[r.product_name] = byProduct[r.product_name] || []).push(r); });
+  for (const [product, rs] of Object.entries(byProduct)) {
+    const extra = typeof base === 'function' ? base(rs) : base;
+    await ledger({ product_name: product, serials: rs.map(r => r.serial), qty: rs.length, ...extra });
+  }
+}
+
+// ── Where a unit is ─────────────────────────────────────────────────────────
+// Read off a row that embeds company:companies(name) and location:locations(name).
+// The company and the site are two facts; showing one in place of the other
+// hid every unit that had a company but no site.
+export const companyLabel = (r) => r?.company?.name || r?.customer_name || '';
+export const siteLabel = (r) => r?.location?.name || '';
+export const whereLabel = (r) => [companyLabel(r), siteLabel(r)].filter(Boolean).join(' · ') || '—';
+
+// Kit that is out with a customer, as opposed to kit in our hands.
+export const MOVABLE = ['deployed', 'staged'];
+
+export const sitesOf = (locations, companyId) => (locations || []).filter(l => l.company_id === companyId);
+
+/** A company with sites, but no site picked: the kit will only show on the company. */
+export const missingSite = (locations, companyId, locationId) =>
+  !!companyId && !locationId && sitesOf(locations, companyId).length > 0;
+
+/**
+ * Who a unit goes to. A site belongs to one company, so picking a site decides
+ * the company: the two can never disagree, and kit booked to a site always
+ * shows on that company too. Free text is only for a customer not in the CRM.
+ * `site` is the locations row for locationId ({ id, company_id }) or null.
+ */
+export function targetFor(site, { companyId, locationId, customerName } = {}) {
+  if (locationId) {
+    if (!site) throw new Error('That site no longer exists. Pick it again.');
+    return { company_id: site.company_id || companyId || null, location_id: site.id, customer_name: null };
+  }
+  if (companyId) return { company_id: companyId, location_id: null, customer_name: null };
+  const name = String(customerName || '').trim();
+  if (!name) throw new Error('Pick a site or a customer (or enter a name).');
+  return { company_id: null, location_id: null, customer_name: name };
+}
+
+async function resolveTarget(input) {
+  let site = null;
+  if (input.locationId) {
+    const { data, error } = await supabase.from('locations').select('id, company_id').eq('id', input.locationId).maybeSingle();
+    if (error) throw error;
+    site = data;
+  }
+  return targetFor(site, input);
+}
+
+const uniqueSerials = (serials) => [...new Set((serials || []).map(norm).filter(Boolean))];
+
+// The update is conditional on status, so two clicks (or two people) racing
+// for the same unit can only move it once. Anything the update did not touch
+// was taken first, or this login cannot change stock (RLS returns no rows).
+function notMoved(list, moved, verb) {
+  const done = new Set((moved || []).map(m => m.serial));
+  const lost = list.filter(s => !done.has(s));
+  if (!lost.length) return null;
+  return new Error(`Could not ${verb} ${lost.join(', ')}: someone else moved ${lost.length === 1 ? 'it' : 'them'} first, or your login cannot change stock.`);
 }
 
 // ── Stock In: receive units straight into a warehouse ───────────────────────
@@ -72,33 +141,94 @@ export async function stockIn({ warehouse, products, byName, actorId, supplierNa
 }
 
 // ── Stock Out: dispatch serials to a customer (CRM company/location) ────────
-export async function stockOut({ serials, companyId, locationId, customerName, ref, byName, actorId }) {
-  if (!serials?.length) throw new Error('Add at least one serial.');
-  if (!companyId && !customerName?.trim()) throw new Error('Pick a customer (or enter a name).');
-  const { data: rows } = await supabase.from('inv_serials').select('*').in('serial', serials.map(norm));
+// `from` is the status the units must be in: 'in_stock' for a dispatch,
+// 'staged' when confirming kit staged earlier. Confirming used to flip staged
+// units back to in_stock first, which let a double click dispatch everything
+// twice (16 Oct: six Barnsley units, two 'out' lines each).
+export async function stockOut({ serials, companyId, locationId, customerName, ref, byName, actorId, from = ['in_stock'] }) {
+  const list = uniqueSerials(serials);
+  if (!list.length) throw new Error('Add at least one serial.');
+  const target = await resolveTarget({ companyId, locationId, customerName });
+  const { data: rows, error: readErr } = await supabase.from('inv_serials').select('serial, product_name, status').in('serial', list);
+  if (readErr) throw readErr;
   const found = new Map((rows || []).map(r => [r.serial, r]));
-  const missing = serials.map(norm).filter(s => !found.has(s));
+  const missing = list.filter(s => !found.has(s));
   if (missing.length) throw new Error('Not in the system: ' + missing.join(', '));
-  const notInStock = [...found.values()].filter(r => r.status !== 'in_stock');
-  if (notInStock.length) throw new Error('Not in stock: ' + notInStock.map(r => `${r.serial} (${r.status.replace('_', ' ')})`).join(', '));
+  const wrong = [...found.values()].filter(r => !from.includes(r.status));
+  if (wrong.length) {
+    const what = from.includes('staged') && !from.includes('in_stock') ? 'Not staged' : 'Not in stock';
+    throw new Error(`${what}: ` + wrong.map(r => `${r.serial} (${r.status.replace('_', ' ')})`).join(', '));
+  }
 
-  const now = new Date().toISOString();
-  const { error } = await supabase.from('inv_serials').update({
-    status: 'deployed', company_id: companyId || null, location_id: locationId || null,
-    customer_name: customerName || null, deployed_at: now, dispatch_ref: ref || null, warehouse_id: null,
-  }).in('serial', serials.map(norm));
+  const { data: moved, error } = await supabase.from('inv_serials').update({
+    status: 'deployed', ...target, deployed_at: new Date().toISOString(), dispatch_ref: ref || null, warehouse_id: null,
+  }).in('serial', list).in('status', from).select('serial, product_name');
   if (error) throw error;
 
-  // ledger per product group
-  const byProduct = {};
-  [...found.values()].forEach(r => { (byProduct[r.product_name] = byProduct[r.product_name] || []).push(r.serial); });
-  for (const [product, ss] of Object.entries(byProduct)) {
-    await ledger({
-      type: 'out', product_name: product, serials: ss, qty: ss.length,
-      company_id: companyId || null, location_id: locationId || null,
-      customer_name: customerName || null, ref: ref || null, by_name: byName || null, actor_id: actorId,
-    });
+  // Only what this call actually moved gets a ledger line.
+  await ledgerByProduct(moved, {
+    type: 'out', ...target, ref: ref || null, by_name: byName || null, actor_id: actorId || null,
+  });
+  const lost = notMoved(list, moved, 'dispatch');
+  if (lost) throw lost;
+  return moved;
+}
+
+// ── Stage: hold in-stock units against a customer for a later install ───────
+export async function stageUnits({ serials, companyId, locationId, customerName, ref }) {
+  const list = uniqueSerials(serials);
+  if (!list.length) throw new Error('Enter at least one serial number.');
+  const target = await resolveTarget({ companyId, locationId, customerName });
+  const { data: moved, error } = await supabase.from('inv_serials').update({
+    status: 'staged', ...target, dispatch_ref: ref || null,
+  }).in('serial', list).eq('status', 'in_stock').select('serial');
+  if (error) throw error;
+  const lost = notMoved(list, moved, 'stage');
+  if (lost) throw lost;
+  return moved;
+}
+
+// ── Move: kit already out with a customer goes to another company or site ──
+// Fixes a wrong customer without the recall, restock, dispatch dance, and
+// keeps the install date. One 'transfer' line per product records where from.
+// `ref` undefined keeps each unit's own reference; a string replaces it
+// (blank clears it).
+export async function moveUnits({ serials, companyId, locationId, customerName, ref, byName, actorId }) {
+  const list = uniqueSerials(serials);
+  if (!list.length) throw new Error('Pick at least one unit to move.');
+  const target = await resolveTarget({ companyId, locationId, customerName });
+  const { data: rows, error: readErr } = await supabase.from('inv_serials')
+    .select('serial, product_name, category, status, company_id, location_id, customer_name, dispatch_ref, company:companies(name), location:locations(name)')
+    .in('serial', list);
+  if (readErr) throw readErr;
+  // Snapshot where each unit is now, as plain values, before anything changes.
+  const found = new Map((rows || []).map(r => [r.serial, {
+    serial: r.serial, product_name: r.product_name, category: r.category, status: r.status,
+    dispatch_ref: r.dispatch_ref, from: whereLabel(r),
+  }]));
+  const missing = list.filter(s => !found.has(s));
+  if (missing.length) throw new Error('Not in the system: ' + missing.join(', '));
+  const inHand = [...found.values()].filter(r => !MOVABLE.includes(r.status));
+  if (inHand.length) {
+    throw new Error('Only kit that is out with a customer can be moved: ' + inHand.map(r => `${r.serial} (${r.status.replace('_', ' ')})`).join(', '));
   }
+
+  const patch = { ...target };
+  if (ref !== undefined) patch.dispatch_ref = String(ref ?? '').trim() || null;
+  const { data: moved, error } = await supabase.from('inv_serials').update(patch)
+    .in('serial', list).in('status', MOVABLE).select('serial, product_name');
+  if (error) throw error;
+
+  await ledgerByProduct((moved || []).map(m => found.get(m.serial) || m), (rs) => ({
+    type: 'transfer', category: rs[0].category || null,
+    company_id: target.company_id, location_id: target.location_id, customer_name: target.customer_name,
+    ref: patch.dispatch_ref !== undefined ? patch.dispatch_ref : (rs[0].dispatch_ref || null),
+    by_name: byName || null, actor_id: actorId || null,
+    notes: `Moved from ${[...new Set(rs.map(r => r.from || '—'))].join('; ')}`,
+  }));
+  const lost = notMoved(list, moved, 'move');
+  if (lost) throw lost;
+  return moved;
 }
 
 // ── Recall a deployed serial back for servicing ──────────────────────────────

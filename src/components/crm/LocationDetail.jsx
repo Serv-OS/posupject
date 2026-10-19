@@ -311,7 +311,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
                 </div>
               ))}
             </WorkCard>
-            <HardwareCard locationId={locationId} profile={profile} alwaysShow />
+            <HardwareCard locationId={locationId} companyId={location?.company_id || null} profile={profile} alwaysShow />
             {canWrite && (
               <WorkCard>
                 <div className="px-[15px] py-3 border-b text-[14px] font-bold text-paper" style={{ borderColor: 'var(--hair)' }}>Record while you are here</div>
@@ -507,7 +507,7 @@ export default function LocationDetail({ locationId, profile, onClose, onNavigat
 
               <ProcessingRatesCard locationId={locationId} companyId={location.company_id} onNavigate={onNavigate} />
 
-              <HardwareCard locationId={locationId} profile={profile} alwaysShow />
+              <HardwareCard locationId={locationId} companyId={location?.company_id || null} profile={profile} alwaysShow />
 
               <InvoicesCard locationId={locationId} profile={profile} onNavigate={onNavigate} />
             </div>

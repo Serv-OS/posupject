@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Boxes, Search, X, Undo2, Send, Pencil, Trash2, PoundSterling } from 'lucide-react';
-import { CONDITIONS, recallToServicing, resolveServicing, dispatchRmaTl, thresholdFor, fmtGBP, csvExport, norm, setProductCost, renameSerial, deleteSerial } from '../../lib/inventoryOps';
+import { Boxes, Search, X, Undo2, Send, Pencil, Trash2, PoundSterling, ArrowRightLeft } from 'lucide-react';
+import { CONDITIONS, recallToServicing, resolveServicing, dispatchRmaTl, thresholdFor, fmtGBP, csvExport, norm, setProductCost, renameSerial, deleteSerial, companyLabel, siteLabel, whereLabel, MOVABLE } from '../../lib/inventoryOps';
+import MoveUnitsDialog from './MoveUnitsDialog';
 import { toDayISO } from '../../lib/day';
 
 const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
@@ -12,6 +13,14 @@ const STATUS_BADGE = {
   total_loss: 'bg-red-200 text-red-800', written_off: 'bg-slate-200 text-slate-500',
 };
 const condLabel = (c) => (CONDITIONS.find(([k]) => k === c)?.[1]) || c || 'Good';
+const MOVE_BADGE = {
+  in: 'bg-emerald-100 text-emerald-700', out: 'bg-purple-100 text-purple-700', recall: 'bg-orange-100 text-orange-700',
+  rma_out: 'bg-red-100 text-red-700', transfer: 'bg-sky-100 text-sky-700',
+};
+const MOVE_TYPES = ['in', 'out', 'transfer', 'recall', 'rma_out', 'writeoff'];
+const moveTypeLabel = (t) => t === 'transfer' ? 'moved' : t.replace('_', ' ');
+// Where a movement sent the kit: the company and site it names, else free text.
+const movementWhere = (m) => [m.company?.name || m.customer_name, m.location?.name].filter(Boolean).join(' · ') || m.supplier_name || m.warehouse_name || '';
 
 export default function StockView({ profile, onNavigate }) {
   const [tab, setTab] = useState('holding');
@@ -26,6 +35,8 @@ export default function StockView({ profile, onNavigate }) {
   const [histType, setHistType] = useState('all');
   const [histFrom, setHistFrom] = useState('');
   const [histTo, setHistTo] = useState('');
+  const [selected, setSelected] = useState(() => new Set());
+  const [moving, setMoving] = useState(null); // units in the Move dialog
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
   useEffect(() => { load(); }, []);
@@ -35,10 +46,11 @@ export default function StockView({ profile, onNavigate }) {
       supabase.from('inv_warehouses').select('*'),
       supabase.from('inv_thresholds').select('*'),
       supabase.from('products').select('id, name, default_threshold').order('name'),
-      supabase.from('inv_movements').select('*').order('occurred_at', { ascending: false }).limit(500),
+      supabase.from('inv_movements').select('*, company:companies(name), location:locations(name)').order('occurred_at', { ascending: false }).limit(500),
     ]);
     setSerialRows(s.data || []); setWarehouses(w.data || []); setThresholds(t.data || []);
     setProducts(p.data || []); setMovements(m.data || []);
+    return s.data || [];
   };
 
   const cats = useMemo(() => [...new Set(serialRows.map(r => r.category).filter(Boolean))].sort(), [serialRows]);
@@ -69,11 +81,29 @@ export default function StockView({ profile, onNavigate }) {
       .sort((a, b) => a.product.localeCompare(b.product));
   }, [serialRows, thresholds, products]);
 
-  const openLookup = async (serial) => {
+  const openLookup = async (serial, rows = serialRows) => {
     const s = norm(serial);
-    const row = serialRows.find(r => r.serial === s);
-    const { data: hist } = await supabase.from('inv_movements').select('*').contains('serials', [s]).order('occurred_at', { ascending: false });
+    const row = rows.find(r => r.serial === s);
+    const { data: hist } = await supabase.from('inv_movements').select('*, company:companies(name), location:locations(name)').contains('serials', [s]).order('occurred_at', { ascending: false });
     setLookup({ row: row || { serial: s, status: 'unknown' }, history: hist || [] });
+  };
+
+  const toggle = (serial) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(serial)) next.delete(serial); else next.add(serial);
+    return next;
+  });
+  const toggleAll = (rows) => setSelected(prev => {
+    const all = rows.length > 0 && rows.every(r => prev.has(r.serial));
+    const next = new Set(prev);
+    rows.forEach(r => { if (all) next.delete(r.serial); else next.add(r.serial); });
+    return next;
+  });
+  const afterMove = async () => {
+    const open = lookup?.row?.serial;
+    setMoving(null); setSelected(new Set());
+    const rows = await load();
+    if (open) openLookup(open, rows);
   };
 
   const setThreshold = async (productName, warehouseId, value) => {
@@ -85,7 +115,7 @@ export default function StockView({ profile, onNavigate }) {
 
   const doRecall = async (r) => {
     const wh = warehouses[0]?.id;
-    if (!confirm(`Recall ${r.serial} from ${r.location?.name || r.company?.name || r.customer_name || 'site'} for servicing?`)) return;
+    if (!confirm(`Recall ${r.serial} from ${whereLabel(r)} for servicing?`)) return;
     try { await recallToServicing({ serial: r.serial, warehouse: wh, byName: profile.display_name || profile.email, actorId: profile.id }); load(); }
     catch (e) { alert(e.message); }
   };
@@ -119,7 +149,7 @@ export default function StockView({ profile, onNavigate }) {
   const exportCsv = () => {
     const rows = (tab === 'holding' ? holding : tab === 'deployed' ? deployed : tab === 'service' ? [...servicing, ...rmaRows, ...writtenOff] : []).map(r => ({
       serial: r.serial, product: r.product_name, category: r.category || '', status: r.status,
-      warehouse: r.warehouse?.name || '', customer: r.location?.name || r.company?.name || r.customer_name || '',
+      warehouse: r.warehouse?.name || '', customer: companyLabel(r), site: siteLabel(r), ref: r.dispatch_ref || '',
       condition: r.condition || '', used: r.used ? 'yes' : '', cost: r.cost ?? '', po: r.po_number || '',
     }));
     csvExport(rows, `stock-${tab}-${toDayISO()}.csv`);
@@ -183,16 +213,41 @@ export default function StockView({ profile, onNavigate }) {
             </>
           )}
 
-          {tab === 'deployed' && (
-            <SerialTable rows={deployed} onLookup={openLookup} cols={['customer', 'deployed', 'ref', 'cost']}
-              onNavigate={onNavigate}
-              actions={canWrite ? [(r) => <button key="r" onClick={() => doRecall(r)} title="Recall for servicing" className="text-dim hover:text-ember"><Undo2 size={14} /></button>] : []} />
-          )}
+          {tab === 'deployed' && (() => {
+            const picked = deployed.filter(r => selected.has(r.serial));
+            const noSite = deployed.filter(r => r.company_id && !r.location_id).length;
+            return (
+              <>
+                {(picked.length > 0 || noSite > 0) && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {picked.length > 0 && canWrite && (
+                      <>
+                        <span className="text-sm text-paper font-semibold">{picked.length} selected</span>
+                        <button onClick={() => setMoving(picked)} className="btn-glass px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5">
+                          <ArrowRightLeft size={13} /> Move to another site</button>
+                        <button onClick={() => setSelected(new Set())} className="btn-ghost px-3 py-1.5 rounded-xl text-xs">Clear</button>
+                      </>
+                    )}
+                    {noSite > 0 && (
+                      <span className="ml-auto text-xs text-amber-700">{noSite} unit{noSite === 1 ? ' has' : 's have'} a company but no site. Tick and move {noSite === 1 ? 'it' : 'them'} to the right site.</span>
+                    )}
+                  </div>
+                )}
+                <SerialTable rows={deployed} onLookup={openLookup} cols={['customer', 'site', 'deployed', 'ref', 'cost']}
+                  onNavigate={onNavigate}
+                  selectable={canWrite} selected={selected} onToggle={toggle} onToggleAll={toggleAll}
+                  actions={canWrite ? [
+                    (r) => <button key="m" onClick={() => setMoving([r])} title="Move to another site or company" aria-label={`Move ${r.serial}`} className="text-dim hover:text-ember"><ArrowRightLeft size={14} /></button>,
+                    (r) => <button key="r" onClick={() => doRecall(r)} title="Recall for servicing" aria-label={`Recall ${r.serial}`} className="text-dim hover:text-ember"><Undo2 size={14} /></button>,
+                  ] : []} />
+              </>
+            );
+          })()}
 
           {tab === 'service' && (
             <>
               <Section title={`Servicing queue (${servicing.length})`}>
-                <SerialTable rows={servicing} onLookup={openLookup} cols={['warehouse', 'condition', 'customer']}
+                <SerialTable rows={servicing} onLookup={openLookup} cols={['warehouse', 'condition', 'customer', 'site']} onNavigate={onNavigate}
                   actions={canWrite ? [
                     (r) => <button key="p" onClick={() => doResolve(r, 'pass')} className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-700 text-[11px] font-semibold">Pass → stock</button>,
                     (r) => <button key="f" onClick={() => doResolve(r, 'rma')} className="px-2 py-1 rounded-lg bg-red-500/10 text-red-600 text-[11px] font-semibold">Fail → RMA</button>,
@@ -215,34 +270,34 @@ export default function StockView({ profile, onNavigate }) {
               if (histFrom && m.occurred_at.slice(0, 10) < histFrom) return false;
               if (histTo && m.occurred_at.slice(0, 10) > histTo) return false;
               if (!search) return true;
-              return m.serials.some(x => x.includes(norm(search))) || m.product_name.toLowerCase().includes(search.toLowerCase()) || (m.customer_name || '').toLowerCase().includes(search.toLowerCase());
+              const q = search.toLowerCase();
+              return m.serials.some(x => x.includes(norm(search))) || m.product_name.toLowerCase().includes(q) || movementWhere(m).toLowerCase().includes(q);
             });
             return (
             <div className="glass-card rounded-2xl overflow-hidden">
               <div className="px-5 py-3 border-b border-bdr flex items-center gap-2 flex-wrap">
                 <select className={input} value={histType} onChange={e => setHistType(e.target.value)}>
                   <option value="all">All types</option>
-                  {['in', 'out', 'recall', 'rma_out', 'writeoff'].map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+                  {MOVE_TYPES.map(t => <option key={t} value={t}>{moveTypeLabel(t)}</option>)}
                 </select>
                 <input type="date" className={input} value={histFrom} onChange={e => setHistFrom(e.target.value)} />
                 <span className="text-dim text-xs">to</span>
                 <input type="date" className={input} value={histTo} onChange={e => setHistTo(e.target.value)} />
                 <button onClick={() => csvExport(histRows.map(m => ({
                   date: m.occurred_at, type: m.type, product: m.product_name, qty: m.qty,
-                  serials: m.serials.join(' '), customer: m.customer_name || '', supplier: m.supplier_name || '', po: m.po_number || '', by: m.by_name || '',
+                  serials: m.serials.join(' '), customer: m.company?.name || m.customer_name || '', site: m.location?.name || '', supplier: m.supplier_name || '', po: m.po_number || '', notes: m.notes || '', by: m.by_name || '',
                 })), 'movement-history.csv')} className="btn-ghost px-3 py-1.5 rounded-xl text-xs ml-auto">CSV ({histRows.length})</button>
               </div>
               <div className="divide-y divide-bdr">
                 {histRows.map(m => (
                   <div key={m.id} className="px-5 py-2.5 flex items-center gap-3 text-sm">
-                    <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${
-                      m.type === 'in' ? 'bg-emerald-100 text-emerald-700' : m.type === 'out' ? 'bg-purple-100 text-purple-700'
-                      : m.type === 'recall' ? 'bg-orange-100 text-orange-700' : m.type === 'rma_out' ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>{m.type.replace('_', ' ')}</span>
+                    <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${MOVE_BADGE[m.type] || 'bg-slate-200 text-slate-600'}`}>{moveTypeLabel(m.type)}</span>
                     <div className="flex-1 min-w-0">
                       <span className="text-paper">{m.product_name}</span>
                       <span className="text-muted"> × {m.qty}</span>
-                      {m.customer_name || m.supplier_name ? <span className="text-dim"> · {m.customer_name || m.supplier_name}</span> : null}
+                      {movementWhere(m) ? <span className="text-dim"> · {m.type === 'transfer' ? 'to ' : ''}{movementWhere(m)}</span> : null}
                       {m.po_number && <span className="text-dim"> · {m.po_number}</span>}
+                      {m.type === 'transfer' && m.notes && <div className="text-[11px] text-dim truncate">{m.notes}</div>}
                       <div className="text-[11px] text-dim font-mono truncate">{m.serials.slice(0, 6).join(' ')}{m.serials.length > 6 ? ` +${m.serials.length - 6}` : ''}</div>
                     </div>
                     <span className="text-xs text-dim shrink-0">{m.by_name || ''}</span>
@@ -272,19 +327,31 @@ export default function StockView({ profile, onNavigate }) {
                 <div className="glass-inner rounded-xl p-3 text-sm space-y-1">
                   <div className="text-paper font-medium">{lookup.row.product_name}</div>
                   <div className="text-xs text-muted">{lookup.row.category || ''}{lookup.row.used ? ' · used' : ''}{lookup.row.condition ? ` · ${condLabel(lookup.row.condition)}` : ''}</div>
-                  {(lookup.row.location?.name || lookup.row.company?.name || lookup.row.customer_name) && (
-                    <div className="text-xs text-muted">At: <button className="text-ember" onClick={() => lookup.row.location_id ? onNavigate?.('location', lookup.row.location_id) : lookup.row.company_id && onNavigate?.('company', lookup.row.company_id)}>
-                      {lookup.row.location?.name || lookup.row.company?.name || lookup.row.customer_name}</button></div>
+                  {companyLabel(lookup.row) && (
+                    <div className="text-xs text-muted">Company: {lookup.row.company_id
+                      ? <button className="text-ember" onClick={() => onNavigate?.('company', lookup.row.company_id)}>{companyLabel(lookup.row)}</button>
+                      : <span className="text-paper">{companyLabel(lookup.row)}</span>}</div>
                   )}
+                  {MOVABLE.includes(lookup.row.status) && (
+                    <div className="text-xs text-muted">Site: {lookup.row.location_id
+                      ? <button className="text-ember" onClick={() => onNavigate?.('location', lookup.row.location_id)}>{siteLabel(lookup.row)}</button>
+                      : <span className="text-amber-700">No site</span>}</div>
+                  )}
+                  {lookup.row.dispatch_ref && <div className="text-xs text-muted">Ref: <span className="text-paper">{lookup.row.dispatch_ref}</span></div>}
                   <div className="text-xs text-dim">{lookup.row.po_number ? `PO ${lookup.row.po_number} · ` : ''}{lookup.row.cost != null ? fmtGBP(lookup.row.cost) : 'No cost'}</div>
+                  {canWrite && MOVABLE.includes(lookup.row.status) && (
+                    <button onClick={() => setMoving([lookup.row])} className="mt-2 btn-ghost px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5">
+                      <ArrowRightLeft size={13} /> Move to another site</button>
+                  )}
                 </div>
               )}
               <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim">Movement history</div>
               <div className="space-y-2">
                 {lookup.history.map(m => (
                   <div key={m.id} className="text-xs flex items-center gap-2 py-1.5 border-b border-bdr/40 last:border-0">
-                    <span className="font-bold uppercase text-[9px] text-muted w-14">{m.type.replace('_', ' ')}</span>
-                    <span className="text-paper flex-1">{m.customer_name || m.supplier_name || m.warehouse_name || m.product_name}</span>
+                    <span className="font-bold uppercase text-[9px] text-muted w-14 shrink-0">{moveTypeLabel(m.type)}</span>
+                    <span className="text-paper flex-1 min-w-0">{movementWhere(m) || m.product_name}
+                      {m.type === 'transfer' && m.notes && <span className="block text-[10px] text-dim">{m.notes}</span>}</span>
                     <span className="text-dim">{new Date(m.occurred_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })}</span>
                   </div>
                 ))}
@@ -294,6 +361,10 @@ export default function StockView({ profile, onNavigate }) {
           </div>
         </div>
       )}
+
+      {moving && (
+        <MoveUnitsDialog units={moving} profile={profile} onClose={() => setMoving(null)} onMoved={afterMove} />
+      )}
     </div>
   );
 }
@@ -302,16 +373,20 @@ function Section({ title, children }) {
   return <div><div className="text-[11px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-2">{title}</div>{children}</div>;
 }
 
-function SerialTable({ rows, cols, onLookup, actions = [], onNavigate }) {
+function SerialTable({ rows, cols, onLookup, actions = [], onNavigate, selectable = false, selected, onToggle, onToggleAll }) {
+  const allOn = selectable && rows.length > 0 && rows.every(r => selected?.has(r.serial));
+  const span = 2 + cols.length + (actions.length > 0 ? 1 : 0) + (selectable ? 1 : 0);
   return (
     <div className="glass-card rounded-2xl overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[700px]">
           <thead><tr className="text-[10px] font-mono font-bold uppercase tracking-[0.12em] text-dim border-b border-bdr">
-            <th className="text-left px-5 py-2 font-bold">Serial</th>
+            {selectable && <th className="pl-5 pr-1 py-2 w-6"><input type="checkbox" aria-label="Select all" checked={allOn} onChange={() => onToggleAll?.(rows)} /></th>}
+            <th className={`text-left ${selectable ? 'px-2' : 'px-5'} py-2 font-bold`}>Serial</th>
             <th className="text-left px-3 py-2 font-bold">Product</th>
             {cols.includes('warehouse') && <th className="text-left px-3 py-2 font-bold">Warehouse</th>}
             {cols.includes('customer') && <th className="text-left px-3 py-2 font-bold">Customer</th>}
+            {cols.includes('site') && <th className="text-left px-3 py-2 font-bold">Site</th>}
             {cols.includes('supplier') && <th className="text-left px-3 py-2 font-bold">Supplier</th>}
             {cols.includes('deployed') && <th className="text-left px-3 py-2 font-bold">Deployed</th>}
             {cols.includes('ref') && <th className="text-left px-3 py-2 font-bold">Ref</th>}
@@ -322,8 +397,9 @@ function SerialTable({ rows, cols, onLookup, actions = [], onNavigate }) {
           </tr></thead>
           <tbody>
             {rows.map(r => (
-              <tr key={r.serial} className="border-b border-bdr/50 hover:bg-card/40">
-                <td className="px-5 py-2">
+              <tr key={r.serial} className={`border-b border-bdr/50 hover:bg-card/40 ${selectable && selected?.has(r.serial) ? 'bg-ember/5' : ''}`}>
+                {selectable && <td className="pl-5 pr-1 py-2"><input type="checkbox" aria-label={`Select ${r.serial}`} checked={!!selected?.has(r.serial)} onChange={() => onToggle?.(r.serial)} /></td>}
+                <td className={`${selectable ? 'px-2' : 'px-5'} py-2`}>
                   <button onClick={() => onLookup(r.serial)} className="font-mono text-xs text-paper hover:text-ember">{r.serial}</button>
                   {r.status !== 'in_stock' && <span className={`ml-1.5 text-[8px] font-bold uppercase px-1 py-0.5 rounded ${STATUS_BADGE[r.status]}`}>{r.status.replace('_', ' ')}</span>}
                   {r.used && <span className="ml-1 text-[8px] font-bold uppercase px-1 py-0.5 rounded bg-slate-200 text-slate-600">used</span>}
@@ -331,8 +407,16 @@ function SerialTable({ rows, cols, onLookup, actions = [], onNavigate }) {
                 <td className="px-3 py-2 text-paper">{r.product_name}<div className="text-[10px] text-dim">{r.category || ''}</div></td>
                 {cols.includes('warehouse') && <td className="px-3 py-2 text-muted">{r.warehouse?.name || '—'}</td>}
                 {cols.includes('customer') && <td className="px-3 py-2">
-                  <button onClick={() => r.location_id ? onNavigate?.('location', r.location_id) : r.company_id && onNavigate?.('company', r.company_id)}
-                    className="text-muted hover:text-ember text-left">{r.location?.name || r.company?.name || r.customer_name || '—'}</button>
+                  {r.company_id
+                    ? <button onClick={() => onNavigate?.('company', r.company_id)} className="text-muted hover:text-ember text-left">{companyLabel(r)}</button>
+                    : <span className="text-muted">{companyLabel(r) || '—'}</span>}
+                </td>}
+                {cols.includes('site') && <td className="px-3 py-2">
+                  {r.location_id
+                    ? <button onClick={() => onNavigate?.('location', r.location_id)} className="text-muted hover:text-ember text-left">{siteLabel(r)}</button>
+                    : MOVABLE.includes(r.status) && r.company_id
+                      ? <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">No site</span>
+                      : <span className="text-dim">—</span>}
                 </td>}
                 {cols.includes('supplier') && <td className="px-3 py-2 text-muted">{r.supplier_name || '—'}</td>}
                 {cols.includes('deployed') && <td className="px-3 py-2 text-muted">{r.deployed_at ? new Date(r.deployed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—'}</td>}
@@ -343,7 +427,7 @@ function SerialTable({ rows, cols, onLookup, actions = [], onNavigate }) {
                 {actions.length > 0 && <td className="px-3 py-2"><div className="flex gap-1.5 justify-end">{actions.map(fn => fn(r))}</div></td>}
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={9} className="px-5 py-6 text-center text-dim text-sm italic">Nothing here.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={span} className="px-5 py-6 text-center text-dim text-sm italic">Nothing here.</td></tr>}
           </tbody>
         </table>
       </div>

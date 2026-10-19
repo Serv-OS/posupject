@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { BarChart3 } from 'lucide-react';
-import { fmtGBP, csvExport } from '../../lib/inventoryOps';
+import { fmtGBP, csvExport, whereLabel } from '../../lib/inventoryOps';
 
 const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -45,7 +45,9 @@ export default function InvReportsView() {
   };
   const byCategory = group(serials.filter(r => r.status === 'in_stock'), r => r.category);
   const byProduct = group(serials.filter(r => r.status === 'in_stock'), r => r.product_name);
-  const deployedByCustomer = group(serials.filter(r => r.status === 'deployed'), r => r.location?.name || r.company?.name || r.customer_name);
+  // Company and site together: two sites of one company are two bars, and kit
+  // with no site still names its company.
+  const deployedByCustomer = group(serials.filter(r => r.status === 'deployed'), r => whereLabel(r));
   const byWarehouse = group(serials.filter(r => r.status === 'in_stock'), r => r.warehouse?.name);
 
   return (

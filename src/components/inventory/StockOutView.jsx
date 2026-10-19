@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { PackageMinus, CheckCircle2, XCircle } from 'lucide-react';
-import { parseSerials, stockOut, norm } from '../../lib/inventoryOps';
+import { parseSerials, stockOut, stageUnits, missingSite } from '../../lib/inventoryOps';
+import TargetPicker from './TargetPicker';
 
 const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
 const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
@@ -18,6 +19,8 @@ export default function StockOutView({ profile, onNavigate }) {
   const [serialText, setSerialText] = useState('');
   const [mode, setMode] = useState('dispatch'); // dispatch | stage
   const [saving, setSaving] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const working = useRef(false); // set at once, before React redraws
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
 
@@ -35,10 +38,10 @@ export default function StockOutView({ profile, onNavigate }) {
   const serials = parseSerials(serialText);
   const stockSet = new Set(inStock.map(r => r.serial));
   const invalid = serials.filter(s => !stockSet.has(s));
-  const locs = locations.filter(l => l.company_id === companyId);
 
   const submit = async () => {
-    setSaving(true); setError(''); setDone('');
+    if (working.current) return;
+    working.current = true; setSaving(true); setError(''); setDone('');
     try {
       if (!serials.length) throw new Error('Enter at least one serial number.');
       if (invalid.length) throw new Error('Not in stock: ' + invalid.join(', '));
@@ -46,42 +49,45 @@ export default function StockOutView({ profile, onNavigate }) {
         await stockOut({ serials, companyId, locationId, customerName, ref, byName: profile.display_name || profile.email, actorId: profile.id });
         setDone(`Dispatched ${serials.length} unit${serials.length !== 1 ? 's' : ''}.`);
       } else {
-        if (!companyId && !customerName.trim()) throw new Error('Pick a customer to stage against.');
-        await supabase.from('inv_serials').update({
-          status: 'staged', company_id: companyId || null, location_id: locationId || null,
-          customer_name: customerName || null, dispatch_ref: ref || null,
-        }).in('serial', serials.map(norm));
+        await stageUnits({ serials, companyId, locationId, customerName, ref });
         setDone(`Staged ${serials.length} unit${serials.length !== 1 ? 's' : ''} for deployment.`);
       }
       setSerialText(''); setRef('');
       load();
     } catch (e) { setError(e.message); }
-    setSaving(false);
+    working.current = false; setSaving(false);
   };
 
+  // Staged units go out straight from 'staged'. They are never put back to
+  // in_stock first: that is what let a double click dispatch them twice.
   const confirmStaged = async (rows) => {
-    setError('');
+    if (working.current) return;
+    working.current = true; setConfirming(true); setError(''); setDone('');
     try {
-      // group rows by their staged target and dispatch each group
-      const bySerial = rows.map(r => r.serial);
-      // first revert to in_stock so stockOut validation passes, then dispatch with stored target
-      for (const r of rows) {
-        await supabase.from('inv_serials').update({ status: 'in_stock' }).eq('serial', r.serial);
+      const byRef = {};
+      rows.forEach(r => { (byRef[r.dispatch_ref || ''] = byRef[r.dispatch_ref || ''] || []).push(r); });
+      for (const rs of Object.values(byRef)) {
+        const r0 = rs[0];
         await stockOut({
-          serials: [r.serial], companyId: r.company_id, locationId: r.location_id,
-          customerName: r.customer_name, ref: r.dispatch_ref,
+          serials: rs.map(r => r.serial), companyId: r0.company_id, locationId: r0.location_id,
+          customerName: r0.customer_name, ref: r0.dispatch_ref, from: ['staged'],
           byName: profile.display_name || profile.email, actorId: profile.id,
         });
       }
-      setDone(`Confirmed ${bySerial.length} deployment${bySerial.length !== 1 ? 's' : ''}.`);
-      load();
-    } catch (e) { setError(e.message); load(); }
+      setDone(`Confirmed ${rows.length} deployment${rows.length !== 1 ? 's' : ''}.`);
+    } catch (e) { setError(e.message); }
+    working.current = false; setConfirming(false);
+    load();
   };
 
-  const cancelStaged = async (r) => {
-    await supabase.from('inv_serials').update({
+  const cancelStaged = async (rows) => {
+    if (working.current) return;
+    working.current = true; setConfirming(true); setError('');
+    const { error: err } = await supabase.from('inv_serials').update({
       status: 'in_stock', company_id: null, location_id: null, customer_name: null, dispatch_ref: null,
-    }).eq('serial', r.serial);
+    }).in('serial', rows.map(r => r.serial)).eq('status', 'staged');
+    if (err) setError(err.message);
+    working.current = false; setConfirming(false);
     load();
   };
 
@@ -111,20 +117,18 @@ export default function StockOutView({ profile, onNavigate }) {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div><label className={label}>Customer (company)</label>
-                <select className={input} value={companyId} onChange={e => { setCompanyId(e.target.value); setLocationId(''); }}>
-                  <option value="">— Free text below —</option>
-                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select></div>
-              <div><label className={label}>Location (site)</label>
-                <select className={input} value={locationId} onChange={e => setLocationId(e.target.value)} disabled={!companyId}>
-                  <option value="">{companyId ? 'Whole company / not site-specific' : 'Pick a company first'}</option>
-                  {locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select></div>
+              <TargetPicker companies={companies} locations={locations} companyId={companyId} locationId={locationId}
+                inputClass={input} labelClass={label} freeText
+                onChange={({ companyId: c, locationId: l }) => { setCompanyId(c); setLocationId(l); }} />
               <div><label className={label}>Ref (job / order #)</label>
                 <input className={input} value={ref} onChange={e => setRef(e.target.value)} placeholder="Optional reference" /></div>
             </div>
-            {!companyId && (
+            {missingSite(locations, companyId, locationId) && (
+              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                No site picked. This kit will show on the company but not on any of its sites.
+              </div>
+            )}
+            {!companyId && !locationId && (
               <div><label className={label}>Customer name (free text fallback)</label>
                 <input className={input} value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="One-off customer not in the CRM" /></div>
             )}
@@ -166,9 +170,9 @@ export default function StockOutView({ profile, onNavigate }) {
                       {r0.company?.name && r0.location?.name && <span className="text-xs text-muted">· {r0.company.name}</span>}
                       <span className="text-xs text-dim">· {rows.length} unit{rows.length !== 1 ? 's' : ''}</span>
                       <div className="ml-auto flex gap-2">
-                        <button onClick={() => confirmStaged(rows)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 text-xs font-semibold hover:bg-emerald-500/25">
-                          <CheckCircle2 size={13} /> Confirm dispatch</button>
-                        <button onClick={() => rows.forEach(cancelStaged)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-red-600 border border-red-200 text-xs font-semibold hover:bg-red-50">
+                        <button onClick={() => confirmStaged(rows)} disabled={confirming} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 text-xs font-semibold hover:bg-emerald-500/25 disabled:opacity-50">
+                          <CheckCircle2 size={13} /> {confirming ? 'Working…' : 'Confirm dispatch'}</button>
+                        <button onClick={() => cancelStaged(rows)} disabled={confirming} className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-red-600 border border-red-200 text-xs font-semibold hover:bg-red-50 disabled:opacity-50">
                           <XCircle size={13} /> Unstage</button>
                       </div>
                     </div>
