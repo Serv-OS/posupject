@@ -60,6 +60,7 @@ vi.mock('./supabase', () => {
 
 import {
   stockOut, stageUnits, moveUnits, targetFor, whereLabel, companyLabel, siteLabel, sitesOf, missingSite,
+  recallToServicing, resolveServicing, dispatchRmaTl, notMoved, siteFirstLabel, movementWhere, moveTypeLabel,
 } from './inventoryOps';
 
 const COFFEE_BOY = 'co-coffeeboy';
@@ -210,11 +211,56 @@ describe('moving kit that is out on site', () => {
     expect(db.inv_movements[0].notes).toBe('Moved from Coffee Boy Retail · Coffee Boy - Leeds');
   });
 
-  it('keeps each unit its own ref when no ref is given', async () => {
+  it('keeps each unit its own ref when no ref is given, and history says so per unit', async () => {
     seed([unit('K1', 'Router', at), unit('K2', 'Router', { ...at, dispatch_ref: 'Job 7' })]);
     await moveUnits({ serials: ['K1', 'K2'], locationId: STATION, ...BY });
     expect(serial('K1').dispatch_ref).toBe('Barnsley STN');
     expect(serial('K2').dispatch_ref).toBe('Job 7');
+    const lines = db.inv_movements.map(m => [m.serials.join(), m.ref]).sort();
+    expect(lines).toEqual([['K1', 'Barnsley STN'], ['K2', 'Job 7']]);
+  });
+
+  it('writes nothing for units already where they are going', async () => {
+    seed([unit('A1', 'TV Menu Stick', at), unit('A2', 'TV Menu Stick', { ...at, company_id: TDNZ, location_id: STATION })]);
+    await moveUnits({ serials: ['A1', 'A2'], locationId: STATION, ...BY });
+    expect(db.inv_movements).toHaveLength(1);
+    expect(db.inv_movements[0]).toMatchObject({ serials: ['A1'], qty: 1, notes: 'Moved from Coffee Boy Retail' });
+  });
+
+  it('is a quiet no-op when every unit is already there', async () => {
+    seed([unit('A2', 'TV Menu Stick', { ...at, company_id: TDNZ, location_id: STATION })]);
+    await expect(moveUnits({ serials: ['A2'], locationId: STATION, ...BY })).resolves.toEqual([]);
+    expect(db.inv_movements).toHaveLength(0);
+  });
+
+  it('splits history by where each unit came from', async () => {
+    seed([unit('P1', 'Router', at), unit('P2', 'Router', { ...at, location_id: LEEDS })]);
+    await moveUnits({ serials: ['P1', 'P2'], locationId: STATION, ref: 'Job 9', ...BY });
+    expect(db.inv_movements.map(m => m.notes).sort())
+      .toEqual(['Moved from Coffee Boy Retail', 'Moved from Coffee Boy Retail · Coffee Boy - Leeds']);
+  });
+
+  it('leaves a unit alone that someone else moved since the screen loaded', async () => {
+    // The site page still lists U1 as having no site, but another page has
+    // just put it on Leeds. Put it here must not take it off Leeds.
+    seed([unit('U1', 'Router', { ...at, location_id: LEEDS }), unit('U2', 'Router', at)]);
+    const expected = { U1: { company_id: COFFEE_BOY, location_id: null }, U2: { company_id: COFFEE_BOY, location_id: null } };
+    const err = await moveUnits({ serials: ['U1', 'U2'], locationId: STATION, expected, ...BY }).catch(e => e);
+    expect(err.message).toMatch(/^Moved 1 of 2\. Could not move U1: someone else moved it first/);
+    expect(err.moved.map(m => m.serial)).toEqual(['U2']);
+    expect(serial('U1').location_id).toBe(LEEDS);
+    expect(serial('U2').location_id).toBe(STATION);
+  });
+
+  it('lets only one of two racing moves win', async () => {
+    seed([unit('R1', 'Router', at)]);
+    const results = await Promise.allSettled([
+      moveUnits({ serials: ['R1'], locationId: STATION, ...BY }),
+      moveUnits({ serials: ['R1'], locationId: LEEDS, ...BY }),
+    ]);
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(db.inv_movements).toHaveLength(1);
+    expect(db.inv_movements[0].location_id).toBe(serial('R1').location_id);
   });
 
   it('clears the ref when an empty one is given', async () => {
@@ -244,5 +290,55 @@ describe('moving kit that is out on site', () => {
   it('needs somewhere to move to', async () => {
     seed([unit('W2', 'Router', at)]);
     await expect(moveUnits({ serials: ['W2'], ...BY })).rejects.toThrow(/Pick a site or a customer/);
+  });
+});
+
+describe('the other stock changes only act once', () => {
+  it('recalls a unit once, however many times recall is pressed', async () => {
+    seed([unit('C1', 'Card Reader', { status: 'deployed', company_id: TDNZ, location_id: STATION })]);
+    const go = () => recallToServicing({ serial: 'C1', warehouse: 'wh1', ...BY });
+    const results = await Promise.allSettled([go(), go()]);
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(db.inv_movements.filter(m => m.type === 'recall')).toHaveLength(1);
+    expect(serial('C1').status).toBe('servicing');
+  });
+
+  it('resolves a servicing unit once', async () => {
+    seed([unit('C2', 'Card Reader', { status: 'servicing' })]);
+    const results = await Promise.allSettled([
+      resolveServicing({ serial: 'C2', outcome: 'pass', warehouse: 'wh1' }),
+      resolveServicing({ serial: 'C2', outcome: 'rma' }),
+    ]);
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+  });
+
+  it('only sends RMA or total loss kit back to the supplier', async () => {
+    seed([unit('C3', 'Card Reader', { status: 'deployed', company_id: TDNZ })]);
+    await expect(dispatchRmaTl({ serial: 'C3', type: 'rma', ...BY })).rejects.toThrow(/not waiting to go back/);
+    expect(serial('C3').status).toBe('deployed');
+    expect(db.inv_movements).toHaveLength(0);
+  });
+});
+
+describe('messages and labels', () => {
+  it('says what did happen when only some units changed', () => {
+    const err = notMoved(['A', 'B', 'C'], [{ serial: 'A' }], 'dispatch');
+    expect(err.message).toBe('Dispatched 1 of 3. Could not dispatch B, C: someone else moved them first, or your login cannot change stock.');
+    expect(err.moved).toEqual([{ serial: 'A' }]);
+    expect(notMoved(['A'], [{ serial: 'A' }], 'move')).toBeNull();
+    expect(notMoved(['A', 'B'], [], 'move', ['B']).message).toMatch(/^Moved 1 of 2\. Could not move A:/);
+  });
+
+  it('puts the site first where labels get cut off', () => {
+    expect(siteFirstLabel({ company: { name: 'TDNZ COFFEE LTD' }, location: { name: 'Barnsley Train Station' } }))
+      .toBe('Barnsley Train Station · TDNZ COFFEE LTD');
+    expect(siteFirstLabel({ company: { name: 'TDNZ COFFEE LTD' } })).toBe('TDNZ COFFEE LTD');
+  });
+
+  it('names where a movement went, and calls a transfer a move', () => {
+    expect(movementWhere({ company: { name: 'TDNZ COFFEE LTD' }, location: { name: 'Station' } })).toBe('TDNZ COFFEE LTD · Station');
+    expect(movementWhere({ supplier_name: 'Sunmi' })).toBe('Sunmi');
+    expect(moveTypeLabel('transfer')).toBe('moved');
+    expect(moveTypeLabel('rma_out')).toBe('rma out');
   });
 });

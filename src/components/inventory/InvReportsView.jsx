@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { BarChart3 } from 'lucide-react';
-import { fmtGBP, csvExport, whereLabel } from '../../lib/inventoryOps';
+import { fmtGBP, csvExport, siteFirstLabel, MOVEMENT_SELECT } from '../../lib/inventoryOps';
 
 const input = "px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember";
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -18,7 +18,7 @@ export default function InvReportsView() {
     (async () => {
       const [s, m, o] = await Promise.all([
         supabase.from('inv_serials').select('serial, product_name, category, status, cost, customer_name, deployed_at, company:companies(name), location:locations(name), warehouse:inv_warehouses(name)'),
-        supabase.from('inv_movements').select('*').order('occurred_at', { ascending: false }),
+        supabase.from('inv_movements').select(MOVEMENT_SELECT).order('occurred_at', { ascending: false }),
         supabase.from('inv_orders').select('*'),
       ]);
       setSerials(s.data || []); setMovements(m.data || []); setOrders(o.data || []);
@@ -45,9 +45,9 @@ export default function InvReportsView() {
   };
   const byCategory = group(serials.filter(r => r.status === 'in_stock'), r => r.category);
   const byProduct = group(serials.filter(r => r.status === 'in_stock'), r => r.product_name);
-  // Company and site together: two sites of one company are two bars, and kit
-  // with no site still names its company.
-  const deployedByCustomer = group(serials.filter(r => r.status === 'deployed'), r => whereLabel(r));
+  // Site and company together, site first so a cut off label still tells two
+  // sites of one company apart. Kit with no site still names its company.
+  const deployedByCustomer = group(serials.filter(r => r.status === 'deployed'), r => siteFirstLabel(r));
   const byWarehouse = group(serials.filter(r => r.status === 'in_stock'), r => r.warehouse?.name);
 
   return (
@@ -60,7 +60,7 @@ export default function InvReportsView() {
         <input type="date" className={input} value={to} onChange={e => setTo(e.target.value)} />
         <button onClick={() => csvExport(rangeMv.map(m => ({
           date: m.occurred_at, type: m.type, product: m.product_name, qty: m.qty,
-          serials: m.serials.join(' '), customer: m.customer_name || '', supplier: m.supplier_name || '', po: m.po_number || '', by: m.by_name || '',
+          serials: m.serials.join(' '), customer: m.company?.name || m.customer_name || '', site: m.location?.name || '', supplier: m.supplier_name || '', po: m.po_number || '', notes: m.notes || '', by: m.by_name || '',
         })), `inventory-movements-${from}-${to}.csv`)} className="btn-ghost px-3 py-2 rounded-xl text-xs ml-auto">Export movements CSV</button>
       </div>
 

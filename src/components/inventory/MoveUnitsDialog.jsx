@@ -19,11 +19,15 @@ const shared = (rows, pick) => {
  * or many. `units` are inv_serials rows with company:companies(name) and
  * location:locations(name) embedded.
  */
-export default function MoveUnitsDialog({ units, profile, onClose, onMoved }) {
+export default function MoveUnitsDialog({ units, profile, onClose, onMoved, onRefresh }) {
   const [companies, setCompanies] = useState([]);
   const [locations, setLocations] = useState([]);
   const [companyId, setCompanyId] = useState(shared(units, u => u.company_id || '') ?? '');
   const [locationId, setLocationId] = useState(shared(units, u => u.location_id || '') ?? '');
+  // Units on different sites open on "No site". Saving that untouched would
+  // take every one of them off its site, so a mixed set needs a real pick.
+  const mixedSites = shared(units, u => u.location_id || '') === undefined;
+  const [touched, setTouched] = useState(false);
   // One shared ref is shown and can be edited or cleared. Mixed refs start
   // blank, and blank then means "keep each unit's own".
   const sameRef = shared(units, u => u.dispatch_ref || '');
@@ -58,6 +62,7 @@ export default function MoveUnitsDialog({ units, profile, onClose, onMoved }) {
     (u.company_id || '') === companyId && (u.location_id || '') === locationId
     && (refToSave === undefined || (u.dispatch_ref || '') === ref.trim()));
   const noTarget = !companyId && !locationId;
+  const needsPick = mixedSites && !touched;
   const froms = [...new Set(units.map(whereLabel))];
   const n = units.length;
 
@@ -66,12 +71,14 @@ export default function MoveUnitsDialog({ units, profile, onClose, onMoved }) {
     try {
       await moveUnits({
         serials: units.map(u => u.serial), companyId, locationId, ref: refToSave,
+        expected: Object.fromEntries(units.map(u => [u.serial, { company_id: u.company_id, location_id: u.location_id }])),
         byName: profile?.display_name || profile?.email, actorId: profile?.id,
       });
       onMoved?.(n);
     } catch (e) {
       setError(e.message || 'The move did not save.');
       setBusy(false);
+      if (e.moved?.length) onRefresh?.(); // some did move: the list behind must show it
     }
   };
 
@@ -107,9 +114,14 @@ export default function MoveUnitsDialog({ units, profile, onClose, onMoved }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <TargetPicker companies={companies} locations={locations} companyId={companyId} locationId={locationId}
               inputClass={field} labelClass={label} disabled={busy}
-              onChange={({ companyId: c, locationId: l }) => { setCompanyId(c); setLocationId(l); setError(''); }} />
+              onChange={({ companyId: c, locationId: l }) => { setCompanyId(c); setLocationId(l); setTouched(true); setError(''); }} />
           </div>
-          {missingSite(locations, companyId, locationId) && (
+          {needsPick && (
+            <div className="text-xs text-muted bg-card border border-bdr rounded-xl px-3 py-2">
+              These units are on different sites. Pick where they are all going.
+            </div>
+          )}
+          {!needsPick && missingSite(locations, companyId, locationId) && (
             <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
               No site picked. This kit will show on the company but not on any of its sites.
             </div>
@@ -125,10 +137,11 @@ export default function MoveUnitsDialog({ units, profile, onClose, onMoved }) {
           {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2" role="alert">{error}</div>}
         </div>
 
-        <div className="px-4 sm:px-5 py-3 border-t border-bdr flex items-center gap-2 shrink-0">
+        <div className="px-4 sm:px-5 pt-3 border-t border-bdr flex items-center gap-2 shrink-0"
+          style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
           <div className="text-[11px] text-dim mr-auto">The install date stays the same. History records the move.</div>
           <button type="button" onClick={onClose} disabled={busy} className="btn-ghost px-4 py-2 rounded-xl text-sm">Cancel</button>
-          <button type="button" onClick={save} disabled={busy || unchanged || noTarget}
+          <button type="button" onClick={save} disabled={busy || unchanged || noTarget || needsPick}
             className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50">
             {busy ? 'Moving…' : 'Move'}
           </button>

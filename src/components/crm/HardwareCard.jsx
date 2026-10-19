@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Cpu, Undo2, ArrowRightLeft, MapPin } from 'lucide-react';
 import { recallToServicing, moveUnits, fmtGBP, CONDITIONS, MOVABLE } from '../../lib/inventoryOps';
@@ -25,8 +25,13 @@ export default function HardwareCard({ companyId, locationId, profile, alwaysSho
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const canWrite = profile && (profile.role === 'owner' || profile.role === 'editor');
+  // Only the newest load may set state. Moving from one site page to another
+  // can leave the previous site's answer arriving last, which would list (and
+  // offer to move) another company's units.
+  const latest = useRef(0);
 
   const load = async () => {
+    const mine = ++latest.current;
     let q = supabase.from('inv_serials').select(SELECT).in('status', ['deployed', 'staged', 'servicing']);
     if (locationId) q = q.eq('location_id', locationId);
     else if (companyId) q = q.eq('company_id', companyId);
@@ -38,6 +43,7 @@ export default function HardwareCard({ companyId, locationId, profile, alwaysSho
           .in('status', MOVABLE).order('deployed_at', { ascending: false, nullsFirst: false })
         : Promise.resolve({ data: [] }),
     ]);
+    if (mine !== latest.current) return;
     setRows(main.data || []);
     setUnsited(loose.data || []);
   };
@@ -63,9 +69,15 @@ export default function HardwareCard({ companyId, locationId, profile, alwaysSho
   // Put the company's unsited kit on this site. Each unit keeps its own ref.
   const assignHere = async (units) => {
     if (busy) return;
+    if (units.length > 1 && !confirm(`Put ${units.length} units on this site?`)) return;
     setBusy(true); setError('');
     try {
-      await moveUnits({ serials: units.map(u => u.serial), companyId, locationId, ...by() });
+      // Only units still with no site: one another page has just put on a
+      // site stays where it was put.
+      await moveUnits({
+        serials: units.map(u => u.serial), companyId, locationId, ...by(),
+        expected: Object.fromEntries(units.map(u => [u.serial, { company_id: u.company_id, location_id: null }])),
+      });
     } catch (e) { setError(e.message); }
     setBusy(false);
     load();
@@ -107,7 +119,7 @@ export default function HardwareCard({ companyId, locationId, profile, alwaysSho
         <span className="text-xs text-dim font-mono">({rows.length})</span>
         {value > 0 && <span className="ml-auto text-xs text-muted">{fmtGBP(value)} value</span>}
       </div>
-      {rows.length === 0 && (
+      {rows.length === 0 && unsited.length === 0 && (
         <div className="p-4 text-xs text-dim italic">
           No hardware on site yet. Book kit out to this location from <b>Inventory → Stock Out</b> and it will appear here with serials, install dates and value.
         </div>
@@ -149,7 +161,7 @@ export default function HardwareCard({ companyId, locationId, profile, alwaysSho
                 {u.dispatch_ref && <span className="text-dim">· ref {u.dispatch_ref}</span>}
                 {canWrite && (
                   <button onClick={() => assignHere([u])} disabled={busy}
-                    className="ml-auto text-[11px] font-semibold text-amber-800 hover:underline disabled:opacity-50">This site</button>
+                    className="ml-auto px-2.5 py-1.5 min-h-[32px] rounded-lg text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50">This site</button>
                 )}
               </div>
             ))}
@@ -160,7 +172,7 @@ export default function HardwareCard({ companyId, locationId, profile, alwaysSho
 
       {moving && (
         <MoveUnitsDialog units={moving} profile={profile} onClose={() => setMoving(null)}
-          onMoved={() => { setMoving(null); load(); }} />
+          onMoved={() => { setMoving(null); load(); }} onRefresh={load} />
       )}
     </div>
   );

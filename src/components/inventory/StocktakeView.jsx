@@ -66,8 +66,15 @@ export default function StocktakeView({ profile }) {
 
   const writeOff = async (record, serialsToWrite) => {
     if (!confirm(`Write off ${serialsToWrite.length} missing serial${serialsToWrite.length !== 1 ? 's' : ''}? They will leave stock permanently.`)) return;
-    await supabase.from('inv_serials').update({ status: 'written_off' }).in('serial', serialsToWrite);
-    for (const s of serialsToWrite) {
+    // Only units still sitting in stock: one dispatched or moved since the
+    // count is not missing, and writing it off would lose live kit.
+    const { data: gone, error } = await supabase.from('inv_serials').update({ status: 'written_off' })
+      .in('serial', serialsToWrite).eq('status', 'in_stock').select('serial');
+    if (error) { alert(error.message); return; }
+    const done = (gone || []).map(r => r.serial);
+    const skipped = serialsToWrite.filter(s => !done.includes(s));
+    if (skipped.length) alert(`Not written off, because they are no longer in stock: ${skipped.join(', ')}`);
+    for (const s of done) {
       const m = (record.result?.missing || []).find(x => x.serial === s);
       await supabase.from('inv_movements').insert({
         type: 'writeoff', product_name: m?.product || 'Unknown', serials: [s], qty: 1,
@@ -75,7 +82,7 @@ export default function StocktakeView({ profile }) {
         notes: 'Stocktake write-off',
       });
     }
-    const result = { ...record.result, writtenOff: [...(record.result?.writtenOff || []), ...serialsToWrite] };
+    const result = { ...record.result, writtenOff: [...(record.result?.writtenOff || []), ...done] };
     await supabase.from('inv_stocktakes').update({ result }).eq('id', record.id);
     setReviewing(null); load();
   };

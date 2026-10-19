@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Boxes, Search, X, Undo2, Send, Pencil, Trash2, PoundSterling, ArrowRightLeft } from 'lucide-react';
-import { CONDITIONS, recallToServicing, resolveServicing, dispatchRmaTl, thresholdFor, fmtGBP, csvExport, norm, setProductCost, renameSerial, deleteSerial, companyLabel, siteLabel, whereLabel, MOVABLE } from '../../lib/inventoryOps';
+import { CONDITIONS, recallToServicing, resolveServicing, dispatchRmaTl, thresholdFor, fmtGBP, csvExport, norm, setProductCost, renameSerial, deleteSerial, companyLabel, siteLabel, whereLabel, MOVABLE, movementWhere, moveTypeLabel, MOVEMENT_SELECT } from '../../lib/inventoryOps';
 import MoveUnitsDialog from './MoveUnitsDialog';
 import { toDayISO } from '../../lib/day';
 
@@ -17,10 +17,8 @@ const MOVE_BADGE = {
   in: 'bg-emerald-100 text-emerald-700', out: 'bg-purple-100 text-purple-700', recall: 'bg-orange-100 text-orange-700',
   rma_out: 'bg-red-100 text-red-700', transfer: 'bg-sky-100 text-sky-700',
 };
-const MOVE_TYPES = ['in', 'out', 'transfer', 'recall', 'rma_out', 'writeoff'];
-const moveTypeLabel = (t) => t === 'transfer' ? 'moved' : t.replace('_', ' ');
-// Where a movement sent the kit: the company and site it names, else free text.
-const movementWhere = (m) => [m.company?.name || m.customer_name, m.location?.name].filter(Boolean).join(' · ') || m.supplier_name || m.warehouse_name || '';
+const MOVE_TYPES = ['in', 'out', 'transfer', 'recall', 'rma_out', 'writeoff', 'adjust'];
+
 
 export default function StockView({ profile, onNavigate }) {
   const [tab, setTab] = useState('holding');
@@ -46,7 +44,7 @@ export default function StockView({ profile, onNavigate }) {
       supabase.from('inv_warehouses').select('*'),
       supabase.from('inv_thresholds').select('*'),
       supabase.from('products').select('id, name, default_threshold').order('name'),
-      supabase.from('inv_movements').select('*, company:companies(name), location:locations(name)').order('occurred_at', { ascending: false }).limit(500),
+      supabase.from('inv_movements').select(MOVEMENT_SELECT).order('occurred_at', { ascending: false }).limit(500),
     ]);
     setSerialRows(s.data || []); setWarehouses(w.data || []); setThresholds(t.data || []);
     setProducts(p.data || []); setMovements(m.data || []);
@@ -84,7 +82,7 @@ export default function StockView({ profile, onNavigate }) {
   const openLookup = async (serial, rows = serialRows) => {
     const s = norm(serial);
     const row = rows.find(r => r.serial === s);
-    const { data: hist } = await supabase.from('inv_movements').select('*, company:companies(name), location:locations(name)').contains('serials', [s]).order('occurred_at', { ascending: false });
+    const { data: hist } = await supabase.from('inv_movements').select(MOVEMENT_SELECT).contains('serials', [s]).order('occurred_at', { ascending: false });
     setLookup({ row: row || { serial: s, status: 'unknown' }, history: hist || [] });
   };
 
@@ -229,7 +227,7 @@ export default function StockView({ profile, onNavigate }) {
                       </>
                     )}
                     {noSite > 0 && (
-                      <span className="ml-auto text-xs text-amber-700">{noSite} unit{noSite === 1 ? ' has' : 's have'} a company but no site. Tick and move {noSite === 1 ? 'it' : 'them'} to the right site.</span>
+                      <span className="ml-auto text-xs text-amber-700">{noSite} unit{noSite === 1 ? ' has' : 's have'} a company but no site.{canWrite ? ` Tick and move ${noSite === 1 ? 'it' : 'them'} to the right site.` : ''}</span>
                     )}
                   </div>
                 )}
@@ -332,7 +330,7 @@ export default function StockView({ profile, onNavigate }) {
                       ? <button className="text-ember" onClick={() => onNavigate?.('company', lookup.row.company_id)}>{companyLabel(lookup.row)}</button>
                       : <span className="text-paper">{companyLabel(lookup.row)}</span>}</div>
                   )}
-                  {MOVABLE.includes(lookup.row.status) && (
+                  {(lookup.row.location_id || MOVABLE.includes(lookup.row.status)) && (
                     <div className="text-xs text-muted">Site: {lookup.row.location_id
                       ? <button className="text-ember" onClick={() => onNavigate?.('location', lookup.row.location_id)}>{siteLabel(lookup.row)}</button>
                       : <span className="text-amber-700">No site</span>}</div>
@@ -363,7 +361,7 @@ export default function StockView({ profile, onNavigate }) {
       )}
 
       {moving && (
-        <MoveUnitsDialog units={moving} profile={profile} onClose={() => setMoving(null)} onMoved={afterMove} />
+        <MoveUnitsDialog units={moving} profile={profile} onClose={() => setMoving(null)} onMoved={afterMove} onRefresh={load} />
       )}
     </div>
   );

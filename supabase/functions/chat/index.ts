@@ -515,7 +515,8 @@ serve(async (req) => {
       liveModules = live;
       // What hardware is actually deployed there, so it can talk about the real kit.
       const { data: kit } = await supabase.from("inv_serials")
-        .select("product_name, category, serial").eq("location_id", location.id).limit(40);
+        .select("product_name, category, serial").eq("location_id", location.id)
+        .in("status", ["deployed", "staged"]).limit(40);  // kit recalled or written off is not on site
       const kitLine = (kit || []).length
         ? ` Hardware on site: ${[...new Set((kit || []).map((k: any) => k.product_name).filter(Boolean))].join(", ")}.`
         : "";

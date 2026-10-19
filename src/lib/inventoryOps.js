@@ -45,13 +45,19 @@ async function ledger(row) {
   if (error) console.error('inv_movements: audit line not written', error.message, row);
 }
 
-// One ledger line per product, the shape every movement already uses.
-async function ledgerByProduct(rows, base) {
-  const byProduct = {};
-  (rows || []).forEach(r => { (byProduct[r.product_name] = byProduct[r.product_name] || []).push(r); });
-  for (const [product, rs] of Object.entries(byProduct)) {
+// One ledger line per product, the shape every movement already uses. `keyOf`
+// splits a product further when the units on one line would otherwise carry
+// different facts (a move keeping each unit's own ref, from different places).
+async function ledgerByProduct(rows, base, keyOf = (r) => r.product_name) {
+  const groups = new Map();
+  (rows || []).forEach(r => {
+    const k = keyOf(r);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  });
+  for (const rs of groups.values()) {
     const extra = typeof base === 'function' ? base(rs) : base;
-    await ledger({ product_name: product, serials: rs.map(r => r.serial), qty: rs.length, ...extra });
+    await ledger({ product_name: rs[0].product_name, serials: rs.map(r => r.serial), qty: rs.length, ...extra });
   }
 }
 
@@ -62,6 +68,16 @@ async function ledgerByProduct(rows, base) {
 export const companyLabel = (r) => r?.company?.name || r?.customer_name || '';
 export const siteLabel = (r) => r?.location?.name || '';
 export const whereLabel = (r) => [companyLabel(r), siteLabel(r)].filter(Boolean).join(' · ') || '—';
+// Site first, for short labels that get cut off (two sites of one company
+// would otherwise both read as the company name).
+export const siteFirstLabel = (r) => siteLabel(r) ? [siteLabel(r), companyLabel(r)].filter(Boolean).join(' · ') : (companyLabel(r) || '—');
+
+// A movement line: where it sent the kit (company and site), else the
+// supplier or warehouse it names. Needs the same two embeds as a unit row.
+export const movementWhere = (m) => [m?.company?.name || m?.customer_name, m?.location?.name].filter(Boolean).join(' · ')
+  || m?.supplier_name || m?.warehouse_name || '';
+export const moveTypeLabel = (t) => (t === 'transfer' ? 'moved' : String(t || '').replace('_', ' '));
+export const MOVEMENT_SELECT = '*, company:companies(name), location:locations(name)';
 
 // Kit that is out with a customer, as opposed to kit in our hands.
 export const MOVABLE = ['deployed', 'staged'];
@@ -101,15 +117,26 @@ async function resolveTarget(input) {
 
 const uniqueSerials = (serials) => [...new Set((serials || []).map(norm).filter(Boolean))];
 
-// The update is conditional on status, so two clicks (or two people) racing
-// for the same unit can only move it once. Anything the update did not touch
-// was taken first, or this login cannot change stock (RLS returns no rows).
-function notMoved(list, moved, verb) {
-  const done = new Set((moved || []).map(m => m.serial));
+// The update is conditional on where the unit is, so two clicks (or two
+// people) racing for the same unit can only move it once. Anything the update
+// did not touch was taken first, or this login cannot change stock (RLS
+// returns no rows and no error). The error says what DID happen, and carries
+// the rows that changed so the screen can refresh.
+const PAST = { dispatch: 'Dispatched', stage: 'Staged', move: 'Moved', recall: 'Recalled', 'write off': 'Wrote off' };
+export function notMoved(list, moved, verb, alsoDone = []) {
+  const done = new Set([...(moved || []).map(m => m.serial), ...alsoDone]);
   const lost = list.filter(s => !done.has(s));
   if (!lost.length) return null;
-  return new Error(`Could not ${verb} ${lost.join(', ')}: someone else moved ${lost.length === 1 ? 'it' : 'them'} first, or your login cannot change stock.`);
+  const changed = list.length - lost.length;
+  const head = changed > 0 ? `${PAST[verb] || 'Done'} ${changed} of ${list.length}. ` : '';
+  const err = new Error(`${head}Could not ${verb} ${lost.join(', ')}: someone else moved ${lost.length === 1 ? 'it' : 'them'} first, or your login cannot change stock.`);
+  err.moved = moved || [];
+  return err;
 }
+
+// .eq for a value, .is for null: PostgREST never matches null with eq.
+const sameAs = (q, col, v) => (v == null ? q.is(col, null) : q.eq(col, v));
+const placeKey = (r) => [r.company_id || '', r.location_id || '', r.customer_name || ''].join('|');
 
 // ── Stock In: receive units straight into a warehouse ───────────────────────
 // products: [{ product_id, product_name, category, serials[], condition, used, unit_cost, po_number, supplier_name }]
@@ -190,10 +217,13 @@ export async function stageUnits({ serials, companyId, locationId, customerName,
 
 // ── Move: kit already out with a customer goes to another company or site ──
 // Fixes a wrong customer without the recall, restock, dispatch dance, and
-// keeps the install date. One 'transfer' line per product records where from.
+// keeps the install date. 'transfer' lines record where each unit came from.
 // `ref` undefined keeps each unit's own reference; a string replaces it
 // (blank clears it).
-export async function moveUnits({ serials, companyId, locationId, customerName, ref, byName, actorId }) {
+// `expected` is where the caller last saw each unit ({ [serial]: { company_id,
+// location_id } }). A unit someone else has moved since is left alone and
+// reported, rather than taken off the site it was just put on.
+export async function moveUnits({ serials, companyId, locationId, customerName, ref, byName, actorId, expected }) {
   const list = uniqueSerials(serials);
   if (!list.length) throw new Error('Pick at least one unit to move.');
   const target = await resolveTarget({ companyId, locationId, customerName });
@@ -204,7 +234,8 @@ export async function moveUnits({ serials, companyId, locationId, customerName, 
   // Snapshot where each unit is now, as plain values, before anything changes.
   const found = new Map((rows || []).map(r => [r.serial, {
     serial: r.serial, product_name: r.product_name, category: r.category, status: r.status,
-    dispatch_ref: r.dispatch_ref, from: whereLabel(r),
+    company_id: r.company_id || null, location_id: r.location_id || null, customer_name: r.customer_name || null,
+    dispatch_ref: r.dispatch_ref || null, from: whereLabel(r),
   }]));
   const missing = list.filter(s => !found.has(s));
   if (missing.length) throw new Error('Not in the system: ' + missing.join(', '));
@@ -215,18 +246,56 @@ export async function moveUnits({ serials, companyId, locationId, customerName, 
 
   const patch = { ...target };
   if (ref !== undefined) patch.dispatch_ref = String(ref ?? '').trim() || null;
-  const { data: moved, error } = await supabase.from('inv_serials').update(patch)
-    .in('serial', list).in('status', MOVABLE).select('serial, product_name');
-  if (error) throw error;
 
-  await ledgerByProduct((moved || []).map(m => found.get(m.serial) || m), (rs) => ({
+  // Moved by someone else since the caller looked: not ours to move.
+  const stale = new Set(list.filter(s => {
+    const e = expected?.[s];
+    const r = found.get(s);
+    return e && ((e.company_id || null) !== r.company_id || (e.location_id || null) !== r.location_id);
+  }));
+  // Already exactly where they are going: nothing to change, nothing to record.
+  const already = list.filter(s => {
+    const r = found.get(s);
+    return !stale.has(s) && placeKey(r) === placeKey(target)
+      && (patch.dispatch_ref === undefined || r.dispatch_ref === patch.dispatch_ref);
+  });
+  const todo = list.filter(s => !stale.has(s) && !already.includes(s));
+
+  // One update per place the units are coming from, each conditional on the
+  // unit still being there, so a move that lost a race changes nothing.
+  const byPlace = new Map();
+  todo.forEach(s => {
+    const r = found.get(s);
+    const k = placeKey(r);
+    if (!byPlace.has(k)) byPlace.set(k, { r, serials: [] });
+    byPlace.get(k).serials.push(s);
+  });
+  const moved = [];
+  for (const { r, serials: ss } of byPlace.values()) {
+    let q = supabase.from('inv_serials').update(patch).in('serial', ss).in('status', MOVABLE);
+    q = sameAs(q, 'company_id', r.company_id);
+    q = sameAs(q, 'location_id', r.location_id);
+    q = sameAs(q, 'customer_name', r.customer_name);
+    const { data, error } = await q.select('serial, product_name');
+    if (error) {
+      const err = notMoved(list, moved, 'move', already) || error;
+      err.message = `${err.message} (${error.message})`;
+      throw err;
+    }
+    moved.push(...(data || []));
+  }
+
+  // A line per product, place it came from, and kept ref, so every serial on
+  // a line really shares the line's ref and its "Moved from".
+  const keptRef = patch.dispatch_ref === undefined;
+  await ledgerByProduct(moved.map(m => found.get(m.serial) || m), (rs) => ({
     type: 'transfer', category: rs[0].category || null,
     company_id: target.company_id, location_id: target.location_id, customer_name: target.customer_name,
-    ref: patch.dispatch_ref !== undefined ? patch.dispatch_ref : (rs[0].dispatch_ref || null),
+    ref: keptRef ? (rs[0].dispatch_ref || null) : patch.dispatch_ref,
     by_name: byName || null, actor_id: actorId || null,
-    notes: `Moved from ${[...new Set(rs.map(r => r.from || '—'))].join('; ')}`,
-  }));
-  const lost = notMoved(list, moved, 'move');
+    notes: `Moved from ${rs[0].from || '—'}`,
+  }), (r) => [r.product_name, r.from, keptRef ? (r.dispatch_ref || '') : ''].join('|'));
+  const lost = notMoved(list, moved, 'move', already);
   if (lost) throw lost;
   return moved;
 }
@@ -237,9 +306,12 @@ export async function recallToServicing({ serial, warehouse, condition, byName, 
   const { data: row } = await supabase.from('inv_serials').select('*').eq('serial', s).maybeSingle();
   if (!row) throw new Error('Serial not found.');
   if (row.status !== 'deployed') throw new Error(`${s} is not deployed (status: ${row.status}).`);
-  await supabase.from('inv_serials').update({
+  const { data: moved, error } = await supabase.from('inv_serials').update({
     status: 'servicing', warehouse_id: warehouse || null, condition: condition || 'needs-testing',
-  }).eq('serial', s);
+  }).eq('serial', s).eq('status', 'deployed').select('serial');
+  if (error) throw error;
+  const lost = notMoved([s], moved, 'recall');
+  if (lost) throw lost;
   await ledger({
     type: 'recall', product_name: row.product_name, serials: [s], qty: 1,
     company_id: row.company_id, location_id: row.location_id, customer_name: row.customer_name,
@@ -257,7 +329,12 @@ export async function resolveServicing({ serial, outcome, warehouse, testedBy, n
   else if (outcome === 'rma') Object.assign(patch, { status: 'rma', condition: 'fail' });
   else if (outcome === 'total_loss') Object.assign(patch, { status: 'total_loss', condition: 'fail-tl' });
   else throw new Error('Unknown outcome.');
-  await supabase.from('inv_serials').update(patch).eq('serial', s);
+  // Only from the state it was read in: a second tap, or a second person, must
+  // not resolve a unit that has already moved on.
+  const { data: moved, error } = await supabase.from('inv_serials').update(patch).eq('serial', s).eq('status', row.status).select('serial');
+  if (error) throw error;
+  const lost = notMoved([s], moved, 'move');
+  if (lost) throw lost;
 }
 
 // Dispatch an RMA/TL unit back to the supplier (leaves the building)
@@ -265,7 +342,12 @@ export async function dispatchRmaTl({ serial, type, ref, byName, actorId }) {
   const s = norm(serial);
   const { data: row } = await supabase.from('inv_serials').select('*').eq('serial', s).maybeSingle();
   if (!row) throw new Error('Serial not found.');
-  await supabase.from('inv_serials').update({ status: 'written_off', rma_type: type }).eq('serial', s);
+  if (!['rma', 'total_loss'].includes(row.status)) throw new Error(`${s} is not waiting to go back to the supplier (status: ${row.status.replace('_', ' ')}).`);
+  const { data: moved, error } = await supabase.from('inv_serials').update({ status: 'written_off', rma_type: type })
+    .eq('serial', s).in('status', ['rma', 'total_loss']).select('serial');
+  if (error) throw error;
+  const lost = notMoved([s], moved, 'write off');
+  if (lost) throw lost;
   await ledger({
     type: 'rma_out', product_name: row.product_name, serials: [s], qty: 1,
     supplier_name: row.supplier_name, ref: ref || null, condition: row.condition,

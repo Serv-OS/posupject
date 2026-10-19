@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { PackageMinus, CheckCircle2, XCircle } from 'lucide-react';
-import { parseSerials, stockOut, stageUnits, missingSite } from '../../lib/inventoryOps';
+import { parseSerials, stockOut, stageUnits, missingSite, notMoved } from '../../lib/inventoryOps';
 import TargetPicker from './TargetPicker';
 
 const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
@@ -21,6 +21,7 @@ export default function StockOutView({ profile, onNavigate }) {
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const working = useRef(false); // set at once, before React redraws
+  const canWrite = profile?.role === 'owner' || profile?.role === 'editor';
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
 
@@ -53,9 +54,9 @@ export default function StockOutView({ profile, onNavigate }) {
         setDone(`Staged ${serials.length} unit${serials.length !== 1 ? 's' : ''} for deployment.`);
       }
       setSerialText(''); setRef('');
-      load();
     } catch (e) { setError(e.message); }
     working.current = false; setSaving(false);
+    load(); // a partial dispatch changed some units, so the lists must catch up
   };
 
   // Staged units go out straight from 'staged'. They are never put back to
@@ -83,10 +84,12 @@ export default function StockOutView({ profile, onNavigate }) {
   const cancelStaged = async (rows) => {
     if (working.current) return;
     working.current = true; setConfirming(true); setError('');
-    const { error: err } = await supabase.from('inv_serials').update({
+    const list = rows.map(r => r.serial);
+    const { data: back, error: err } = await supabase.from('inv_serials').update({
       status: 'in_stock', company_id: null, location_id: null, customer_name: null, dispatch_ref: null,
-    }).in('serial', rows.map(r => r.serial)).eq('status', 'staged');
+    }).in('serial', list).eq('status', 'staged').select('serial');
     if (err) setError(err.message);
+    else { const lost = notMoved(list, back, 'move'); if (lost) setError(lost.message); }
     working.current = false; setConfirming(false);
     load();
   };
@@ -148,7 +151,8 @@ export default function StockOutView({ profile, onNavigate }) {
               )}
             </div>
 
-            <button onClick={submit} disabled={saving || !serials.length}
+            {!canWrite && <div className="text-xs text-muted">Your login can view stock but not dispatch it.</div>}
+            <button onClick={submit} disabled={!canWrite || saving || !serials.length}
               className="btn-glass px-6 py-2.5 rounded-xl text-sm font-semibold disabled:opacity-50">
               {saving ? 'Working…' : mode === 'dispatch' ? `Dispatch ${serials.length || ''}` : `Stage ${serials.length || ''}`}
             </button>
@@ -169,12 +173,12 @@ export default function StockOutView({ profile, onNavigate }) {
                       <span className="text-sm font-semibold text-paper">{target}</span>
                       {r0.company?.name && r0.location?.name && <span className="text-xs text-muted">· {r0.company.name}</span>}
                       <span className="text-xs text-dim">· {rows.length} unit{rows.length !== 1 ? 's' : ''}</span>
-                      <div className="ml-auto flex gap-2">
+                      {canWrite && <div className="ml-auto flex gap-2">
                         <button onClick={() => confirmStaged(rows)} disabled={confirming} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 text-xs font-semibold hover:bg-emerald-500/25 disabled:opacity-50">
                           <CheckCircle2 size={13} /> {confirming ? 'Working…' : 'Confirm dispatch'}</button>
                         <button onClick={() => cancelStaged(rows)} disabled={confirming} className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-red-600 border border-red-200 text-xs font-semibold hover:bg-red-50 disabled:opacity-50">
                           <XCircle size={13} /> Unstage</button>
-                      </div>
+                      </div>}
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {rows.map(r => <span key={r.serial} className="px-1.5 py-0.5 rounded bg-card font-mono text-[11px] text-muted">{r.serial} <span className="text-dim">· {r.product_name}</span></span>)}

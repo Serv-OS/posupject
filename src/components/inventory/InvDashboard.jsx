@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Warehouse, AlertTriangle } from 'lucide-react';
-import { thresholdFor, fmtGBP } from '../../lib/inventoryOps';
+import { thresholdFor, fmtGBP, movementWhere, moveTypeLabel, MOVEMENT_SELECT } from '../../lib/inventoryOps';
 
 export default function InvDashboard({ profile, onNavigate }) {
   const [serials, setSerials] = useState([]);
@@ -14,7 +14,7 @@ export default function InvDashboard({ profile, onNavigate }) {
     (async () => {
       const [s, m, t, p, sh] = await Promise.all([
         supabase.from('inv_serials').select('serial, product_name, status, warehouse_id, cost, warehouse:inv_warehouses(name)'),
-        supabase.from('inv_movements').select('*').order('occurred_at', { ascending: false }).limit(12),
+        supabase.from('inv_movements').select(MOVEMENT_SELECT).order('occurred_at', { ascending: false }).limit(12),
         supabase.from('inv_thresholds').select('*'),
         supabase.from('products').select('id, name, default_threshold'),
         supabase.from('inv_shipments').select('id, status').eq('status', 'in_transit'),
@@ -154,8 +154,8 @@ export default function InvDashboard({ profile, onNavigate }) {
             <div className="divide-y divide-bdr">
               {movements.map(m => (
                 <div key={m.id} className="px-5 py-2.5 flex items-center gap-3 text-sm">
-                  <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${m.type === 'in' ? 'bg-emerald-100 text-emerald-700' : m.type === 'out' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>{m.type.replace('_', ' ')}</span>
-                  <span className="text-paper flex-1 min-w-0 truncate">{m.product_name} × {m.qty}{m.customer_name ? ` → ${m.customer_name}` : m.supplier_name ? ` ← ${m.supplier_name}` : ''}</span>
+                  <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${m.type === 'in' ? 'bg-emerald-100 text-emerald-700' : m.type === 'out' ? 'bg-purple-100 text-purple-700' : m.type === 'transfer' ? 'bg-sky-100 text-sky-700' : 'bg-orange-100 text-orange-700'}`}>{moveTypeLabel(m.type)}</span>
+                  <span className="text-paper flex-1 min-w-0 truncate">{m.product_name} × {m.qty}{movementWhere(m) ? ` ${m.type === 'in' || m.type === 'rma_out' ? '←' : '→'} ${movementWhere(m)}` : ''}</span>
                   <span className="text-xs text-dim shrink-0">{new Date(m.occurred_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
               ))}
