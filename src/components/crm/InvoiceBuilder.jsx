@@ -342,7 +342,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
   const copyLink = async () => {
     await save();
     const url = `${window.location.origin}/i/${inv.public_token}`;
-    try { await navigator.clipboard.writeText(url); notify('Link copied'); } catch { prompt('Invoice link:', url); }
+    try { await navigator.clipboard.writeText(url); notify(canMarkPaid ? 'Pay link copied: the customer can pay by card from it' : 'Link copied'); } catch { prompt('Invoice link:', url); }
   };
 
   // The seller and customer blocks, shared by the invoice and credit note PDFs.
@@ -624,7 +624,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
         {canWrite && (
           <div className="flex gap-2 ml-auto flex-wrap">
             {!locked && <button onClick={() => save().then(ok => ok && notify('Saved'))} disabled={saving} className="btn-ghost px-4 py-2 rounded-xl text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>}
-            <button onClick={copyLink} className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5"><Link2 size={14} /> Copy link</button>
+            <button onClick={copyLink} title={canMarkPaid ? 'Copies a link to this invoice. The customer opens it and pays by card. Paste it in a text or email.' : 'Copies a link to this invoice'} className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5"><Link2 size={14} /> {canMarkPaid ? 'Copy pay link' : 'Copy link'}</button>
             <button onClick={downloadPdf} disabled={pdfBusy} title="Download this invoice as a PDF" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 disabled:opacity-50"><FileDown size={14} /> {pdfBusy ? 'Preparing…' : 'PDF'}</button>
             {canCredit && <button onClick={openCredit} disabled={saving} title="Reduce this invoice with a credit note" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"><FileMinus size={14} /> Raise credit note</button>}
             {!locked && <button onClick={sendInvoice} disabled={sending} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50"><Send size={14} /> {sending ? 'Sending…' : inv.sent_at ? 'Resend' : 'Send'}</button>}

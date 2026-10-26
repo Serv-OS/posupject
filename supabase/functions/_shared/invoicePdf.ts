@@ -172,23 +172,33 @@ export async function buildInvoicePdfBytes({ inv = {} as any, lines = [] as any[
   // Notes + terms
   const block = (title: string, text: string) => {
     if (!text) return;
-    if (y > doc.internal.pageSize.getHeight() - 90) { doc.addPage(); y = M; }
+    // Line by line, stopping above the footer (long terms ran through it).
+    const limit = doc.internal.pageSize.getHeight() - 60;
+    if (y > limit - 30) { doc.addPage(); y = M; }
     doc.setFont("helvetica", "bold").setFontSize(8.5).setTextColor(150, 150, 150).text(title, M, y);
     y += 13;
     doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(80, 80, 80);
-    const wrapped = doc.splitTextToSize(String(text), W - 2 * M);
-    doc.text(wrapped, M, y);
-    y += wrapped.length * 12 + 10;
+    for (const line of doc.splitTextToSize(String(text), W - 2 * M)) {
+      if (y > limit) { doc.addPage(); y = M; doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(80, 80, 80); }
+      doc.text(line, M, y);
+      y += 12;
+    }
+    y += 10;
   };
   block("NOTES", inv.notes);
   block("TERMS", inv.terms);
 
   // Footer
   const fy = doc.internal.pageSize.getHeight() - 36;
-  doc.setDrawColor(238).line(M, fy - 12, W - M, fy - 12);
-  doc.setFont("helvetica", "normal").setFontSize(8.5).setTextColor(160, 160, 160);
-  doc.text([seller.name, seller.email, seller.phone].filter(Boolean).join("   ·   ") || "Thank you for your business", M, fy);
-  doc.text(`INV-${number}`, W - M, fy, { align: "right" });
+  const pages = doc.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    doc.setDrawColor(238).line(M, fy - 12, W - M, fy - 12);
+    doc.setFont("helvetica", "normal").setFontSize(8.5).setTextColor(160, 160, 160);
+    doc.text([seller.name, seller.email, seller.phone].filter(Boolean).join("   ·   ") || "Thank you for your business", M, fy);
+    doc.text(pages > 1 ? `INV-${number}   ·   page ${p} of ${pages}` : `INV-${number}`, W - M, fy, { align: "right" });
+  }
+  doc.setPage(pages);
 
   return new Uint8Array(doc.output("arraybuffer"));
 }

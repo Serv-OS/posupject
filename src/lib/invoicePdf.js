@@ -199,22 +199,34 @@ function drawTotals(ctx, rows, money) {
 function drawBlock(ctx, title, text) {
   if (!text) return
   const { doc, W, M } = ctx
-  if (ctx.y > doc.internal.pageSize.getHeight() - 90) { doc.addPage(); ctx.y = M }
+  // Lines stop above the footer rule (page height - 48). Long terms used to be
+  // drawn in one go and ran straight through the footer.
+  const limit = doc.internal.pageSize.getHeight() - 60
+  if (ctx.y > limit - 30) { doc.addPage(); ctx.y = M }
   doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(150, 150, 150).text(title, M, ctx.y)
   ctx.y += 13
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(80, 80, 80)
-  const wrapped = doc.splitTextToSize(String(text), W - 2 * M)
-  doc.text(wrapped, M, ctx.y)
-  ctx.y += wrapped.length * 12 + 10
+  for (const line of doc.splitTextToSize(String(text), W - 2 * M)) {
+    if (ctx.y > limit) { doc.addPage(); ctx.y = M; doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(80, 80, 80) }
+    doc.text(line, M, ctx.y)
+    ctx.y += 12
+  }
+  ctx.y += 10
 }
 
 function drawFooter(ctx, seller = {}, label) {
   const { doc, W, M } = ctx
   const fy = doc.internal.pageSize.getHeight() - 36
-  doc.setDrawColor(238).line(M, fy - 12, W - M, fy - 12)
-  doc.setFont('helvetica', 'normal').setFontSize(8.5).setTextColor(160, 160, 160)
-  doc.text([seller.name, seller.email, seller.phone].filter(Boolean).join('   ·   ') || 'Thank you for your business', M, fy)
-  doc.text(label, W - M, fy, { align: 'right' })
+  const pages = doc.getNumberOfPages()
+  // Every page, not just the last, with "page 1 of 2" when there is more than one.
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p)
+    doc.setDrawColor(238).line(M, fy - 12, W - M, fy - 12)
+    doc.setFont('helvetica', 'normal').setFontSize(8.5).setTextColor(160, 160, 160)
+    doc.text([seller.name, seller.email, seller.phone].filter(Boolean).join('   ·   ') || 'Thank you for your business', M, fy)
+    doc.text(pages > 1 ? `${label}   ·   page ${p} of ${pages}` : label, W - M, fy, { align: 'right' })
+  }
+  doc.setPage(pages)
 }
 
 // ── Invoice ──────────────────────────────────────────────────────────────────
