@@ -439,6 +439,8 @@ function App() {
   if (v === 'invoice-credits' || v === 'invoice-paid') return <InvoiceView id={v === 'invoice-paid' ? 'inv1046' : 'inv1045'} />;
   if (v === 'allocate') return <AllocateView />;
   if (v === 'invoice-allocated') return <InvoiceView id="inv1049" />;
+  // #invoice-stages: INV-1050, unpaid with no credit, so Bill in stages shows.
+  if (v === 'invoice-stages') return <InvoiceView id="inv1050" />;
   if (v === 'received') return <ReceivedView />;
   if (v === 'publicquote') return <PublicQuote token="harness-quote" />;
   if (v === 'stock') return <div className="work" style={{ height: '100vh' }}><StockView profile={P} onNavigate={nav} /></div>;

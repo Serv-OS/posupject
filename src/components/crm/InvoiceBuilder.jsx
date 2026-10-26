@@ -1,15 +1,17 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { ArrowLeft, Send, Link2, Trash2, Plus, Check, Ban, Repeat, FileDown, FileMinus, Mail, Wallet } from 'lucide-react';
+import { ArrowLeft, Send, Link2, Trash2, Plus, Check, Ban, Repeat, FileDown, FileMinus, Mail, Wallet, Layers } from 'lucide-react';
 import { money, invStatus, INV_BADGE, creditMarker, CN_BADGE } from './InvoicesPanel.jsx';
 import CreditNoteModal, { plainError, regionToday, loadCreditBasis } from './CreditNoteModal.jsx';
 import ApplyCreditModal, { allocError } from './ApplyCreditModal.jsx';
 import AmountReceivedModal from './AmountReceivedModal.jsx';
+import BillInStagesModal from './BillInStagesModal.jsx';
 import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
 import { round2, taxLabelFor, defaultTaxRateFor, currencySymbol, currencyLocale } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { downloadInvoicePdf, creditNotePdf } from '../../lib/invoicePdf';
 import { savableLines, namelessWithValue, invoiceTotals } from '../../lib/invoiceLines';
+import { stageLines } from '../../lib/invoiceStages';
 import {
   canRaiseCredit, balanceDue, amountPaid, creditState, creditNoteLabel, creditNoteStatusLabel, creditNoteStatusKind,
   cancelCreditEffect, overpaidAdvice, overpaidNotOnCredit, REFUND_METHODS, REASON_MIN, REASON_MAX, CREDITABLE_STATUSES,
@@ -63,6 +65,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
   // The amount received sheet: { kind: 'correction' } from Change, { kind:
   // 'payment' } from Mark paid, with the invoice as last read.
   const [receiving, setReceiving] = useState(null);
+  const [staging, setStaging] = useState(false);
   // Every change to the amount received (invoice_payment_adjustments), oldest
   // first, with who made it. historyReady stays false when the table is not
   // there yet (the amount received migration not applied): then Change and
@@ -260,6 +263,13 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
   const canMarkPaid = !!savedInv && ALLOCATABLE_STATUSES.includes(savedInv.status)
     && balanceDue(linesLocked ? savedInv : { ...savedInv, total }) > 0;
 
+  // Bill in stages: only before any money or credit has touched the invoice,
+  // never on a recurring one (its next run would bill the full amount), and
+  // never on a stage that has already been split off.
+  const canStage = canWrite && !!savedInv && ['draft', 'sent', 'viewed'].includes(savedInv.status)
+    && !linesLocked && !inv.recurring_id && amountPaid(savedInv) === 0 && total > 0
+    && !/^Stage \d+ of \d+/.test(savedInv.notes || '');
+
   const notify = (msg) => { setFlash(msg); setTimeout(() => setFlash(''), 2500); };
 
   // Resolves to true once saved, false when the save failed. The amount
@@ -337,6 +347,61 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       load();
     } catch (e) { alert('Send failed: ' + e.message); }
     setSending(false);
+  };
+
+  // This invoice becomes stage 1 and the later stages are new drafts. The new
+  // invoices are written first, so a failure leaves this one as it was.
+  const splitIntoStages = async (stages) => {
+    if (!(await save())) return false;
+    const { data: fresh } = await supabase.from('invoices').select('*').eq('id', invoiceId).single();
+    if (!fresh || amountPaid(fresh) > 0 || !['draft', 'sent', 'viewed'].includes(fresh.status)) {
+      alert('This invoice has changed (a payment may have come in). Nothing has been split.');
+      load();
+      return false;
+    }
+    const perStage = stageLines(lines, stages, m);
+    const n = stages.length;
+    const label = `INV-${inv.invoice_number}`;
+    const made = [];
+    const undo = async () => { if (made.length) await supabase.from('invoices').delete().in('id', made.map(x => x.id)); };
+    for (let i = 1; i < n; i++) {
+      const t = invoiceTotals(perStage[i]);
+      const { data: row, error } = await supabase.from('invoices').insert({
+        status: 'draft', company_id: fresh.company_id, location_id: fresh.location_id, contact_id: fresh.contact_id,
+        currency: fresh.currency, email_to: fresh.email_to, po_number: fresh.po_number, terms: fresh.terms,
+        issue_date: fresh.issue_date, due_date: null, created_by: profile.id,
+        subtotal: round2(t.subtotal), tax_amount: round2(t.taxAmount), total: round2(t.total),
+        notes: [`Stage ${i + 1} of ${n} of ${label}.`, fresh.notes].filter(Boolean).join('\n'),
+      }).select('id, invoice_number').single();
+      if (error || !row) { await undo(); alert(`Could not create stage ${i + 1}: ${error?.message || 'no invoice returned'}. Nothing has been split.`); return false; }
+      made.push(row);
+      const { error: lErr } = await supabase.from('invoice_line_items').insert(perStage[i].map((l, j) => ({ ...l, invoice_id: row.id, sort: j })));
+      if (lErr) { await undo(); alert(`Could not write stage ${i + 1}: ${lErr.message}. Nothing has been split.`); return false; }
+    }
+    const first = invoiceTotals(perStage[0]);
+    const later = made.map(x => `INV-${x.invoice_number}`).join(', ');
+    let { error } = await supabase.from('invoices').update({
+      subtotal: round2(first.subtotal), tax_amount: round2(first.taxAmount), total: round2(first.total),
+      notes: [`Stage 1 of ${n}. Later stages: ${later}.`, fresh.notes].filter(Boolean).join('\n'),
+    }).eq('id', invoiceId);
+    if (!error) ({ error } = await supabase.from('invoice_line_items').delete().eq('invoice_id', invoiceId));
+    if (!error) ({ error } = await supabase.from('invoice_line_items').insert(perStage[0].map((l, j) => ({ ...l, invoice_id: invoiceId, sort: j }))));
+    if (error) {
+      // Put the original lines back before removing the new drafts.
+      await supabase.from('invoices').update({ subtotal: fresh.subtotal, tax_amount: fresh.tax_amount, total: fresh.total, notes: fresh.notes }).eq('id', invoiceId);
+      await supabase.from('invoice_line_items').delete().eq('invoice_id', invoiceId);
+      await supabase.from('invoice_line_items').insert(savableLines(lines).map((l, j) => ({
+        invoice_id: invoiceId, name: l.name.trim(), description: (l.description || '').trim() || null,
+        qty: Number(l.qty) || 1, unit_price: Number(l.unit_price) || 0, tax_rate: Number(l.tax_rate) || 0, sort: j,
+      })));
+      await undo();
+      alert(`Could not split the invoice: ${error.message}. Nothing has been changed.`);
+      load();
+      return false;
+    }
+    load();
+    notify(`Split into ${n}: ${label} is stage 1, then ${later} (drafts)`);
+    return true;
   };
 
   const copyLink = async () => {
@@ -626,6 +691,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
             {!locked && <button onClick={() => save().then(ok => ok && notify('Saved'))} disabled={saving} className="btn-ghost px-4 py-2 rounded-xl text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>}
             <button onClick={copyLink} title={canMarkPaid ? 'Copies a link to this invoice. The customer opens it and pays by card. Paste it in a text or email.' : 'Copies a link to this invoice'} className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5"><Link2 size={14} /> {canMarkPaid ? 'Copy pay link' : 'Copy link'}</button>
             <button onClick={downloadPdf} disabled={pdfBusy} title="Download this invoice as a PDF" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 disabled:opacity-50"><FileDown size={14} /> {pdfBusy ? 'Preparing…' : 'PDF'}</button>
+            {canStage && <button onClick={() => setStaging(true)} disabled={saving} title="Split this invoice into stages by percentage, each with its own pay link" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"><Layers size={14} /> Bill in stages</button>}
             {canCredit && <button onClick={openCredit} disabled={saving} title="Reduce this invoice with a credit note" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"><FileMinus size={14} /> Raise credit note</button>}
             {!locked && <button onClick={sendInvoice} disabled={sending} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50"><Send size={14} /> {sending ? 'Sending…' : inv.sent_at ? 'Resend' : 'Send'}</button>}
             {canMarkPaid && <button onClick={markPaid} disabled={saving} className="px-3 py-2 rounded-xl text-sm font-semibold bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 flex items-center gap-1.5 disabled:opacity-50"><Check size={14} /> Mark paid</button>}
@@ -971,6 +1037,10 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       {applying && (
         <ApplyCreditModal note={applying.note || null} invoice={applying.invoice || null}
           onClose={() => setApplying(null)} onApplied={onApplied} />
+      )}
+      {staging && (
+        <BillInStagesModal invoiceLabel={`INV-${inv.invoice_number}`} lines={lines} fmt={m}
+          onClose={() => setStaging(false)} onSplit={splitIntoStages} />
       )}
       {receiving && (
         <AmountReceivedModal invoice={receiving.invoice} kind={receiving.kind}
