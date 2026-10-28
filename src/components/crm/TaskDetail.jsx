@@ -4,7 +4,7 @@ import AttachmentsCard from './AttachmentsCard.jsx';
 import { getRunning, startTimer, stopTimer, fmtClock, fmtDuration } from '../../lib/timer';
 import { PRIORITY_LABEL, PRIORITY_SLA } from '../../lib/priority';
 import { isSendShortcut, sendShortcutLabel } from '../../lib/conversation';
-import {
+import { AssigneePicker,
   Avatar, Check, LinkChip, SectionLabel, Mono, PageTitle, PrimaryBtn, GhostBtn, SolidChipBtn, Card, SkeletonList, MobileDock, MobileSheet, SheetRow,
   hair, dueLabel, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL, initialsOf,
 } from './ui.jsx';
@@ -348,7 +348,8 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
                     <div key={s.id} className={`flex items-center gap-[11px] py-[9px] ${i < subtasks.length - 1 || canWrite ? 'border-b' : ''}`} style={hair}>
                       <Check size={18} done={s.status === 'done'} onClick={() => canWrite && toggleSub(s)} disabled={!canWrite} />
                       <span className={`flex-1 text-[14px] cursor-pointer ${s.status === 'done' ? 'text-dim line-through' : 'text-paper'}`} onClick={() => onNavigate?.('task', s.id)}>{s.title}</span>
-                      {s.owner_id && <Avatar id={s.owner_id} name={nameOf(s.owner_id)} size={22} />}
+                      <AssigneePicker ownerId={s.owner_id} members={members} size={22} disabled={!canWrite}
+                        onPick={(id) => supabase.from('tasks').update({ owner_id: id }).eq('id', s.id).then(({ error }) => { if (error) alert(error.message); load(); })} />
                     </div>
                   ))}
                   {canWrite && (

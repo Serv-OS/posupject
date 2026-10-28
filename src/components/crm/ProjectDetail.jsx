@@ -5,7 +5,7 @@ import { getRunning, startTimer, stopTimer, fmtClock } from '../../lib/timer';
 import { parseQuickAdd, quickAddRow } from '../../lib/quickAdd';
 import { PRIORITY_LABEL } from '../../lib/priority';
 import {
-  Avatar, Check, Pill, StatusPill, LinkChip, SectionLabel, Mono, PageTitle,
+  Avatar, AssigneePicker, Check, Pill, StatusPill, LinkChip, SectionLabel, Mono, PageTitle,
   PrimaryBtn, GhostBtn, SolidChipBtn, Card, DashedAdd, SkeletonList, MobileDock, DockField, hair, dueLabel, MetaLabel, Segmented, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL,
 } from './ui.jsx';
 import { weekColumns, rangeLabel, spanPercent, phaseSpans, addDays, startOfWeek } from '../../lib/planning';
@@ -415,7 +415,7 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                               {statusMenu === t.id && <StatusMenu task={t} onPick={(s) => setStatus(t, s)} onClose={() => setStatusMenu(null)} />}
                             </span>
                           )}
-                          <Avatar id={t.owner_id} name={nameOf(t.owner_id)} />
+                          <AssigneePicker ownerId={t.owner_id} members={members} disabled={!canWrite} onPick={(id) => patchTask(t.id, { owner_id: id })} />
                         </div>
                       );
                     })}

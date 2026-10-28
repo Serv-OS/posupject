@@ -4,7 +4,7 @@ import { groupTasks, dueBucket } from '../../lib/taskGrouping';
 import { useStickyState } from '../../lib/stickyState';
 import { parseQuickAdd, quickAddRow } from '../../lib/quickAdd';
 import {
-  Avatar, Check, StatusPill, PriorityPill, Tag, LinkChip, SectionLabel, MetaLabel, Mono, PageTitle,
+  Avatar, AssigneePicker, PeopleMenu, Check, StatusPill, PriorityPill, Tag, LinkChip, SectionLabel, MetaLabel, Mono, PageTitle,
   PrimaryBtn, GhostBtn, Segmented, LabelledPill, FilterPill, Card, DashedAdd, DarkBar, SkeletonList, EmptyState,
   StatusMenu, MobileSheet, SheetRow, STATUS_LABEL, STATUS_ORDER, useLongPress, hair, dueLabel, fmtShort, fmtHM,
 } from './ui.jsx';
@@ -188,7 +188,8 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
     if (error) { setErr(error.message); return; }
     setSel(new Set()); load();
   };
-  const bulkAssign = () => { const name = prompt('Assign to (name):'); if (name === null) return; const m = members.find(x => (x.display_name || x.email).toLowerCase().startsWith(name.toLowerCase())); if (!m && name.trim()) { alert('No one by that name.'); return; } bulk({ owner_id: m?.id || null }); };
+  const [bulkPeople, setBulkPeople] = useState(false);
+  const bulkAssign = () => setBulkPeople(true);
   const bulkDue = () => { const d = prompt('Due date (YYYY-MM-DD), blank to clear:'); if (d === null) return; bulk({ due_date: d.trim() || null }); };
   const bulkPhase = () => { const ph = prompt('Move to phase (name), blank to clear:'); if (ph === null) return; bulk({ phase: ph.trim() || null }); };
   const bulkStatus = () => { const s = prompt('Status: todo, in_progress, blocked, done'); if (!s) return; if (!['todo', 'in_progress', 'blocked', 'done'].includes(s.trim())) return; bulk({ status: s.trim(), completed_at: s.trim() === 'done' ? new Date().toISOString() : null }); };
@@ -343,13 +344,14 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
                     <StatusPill status={t.status} onClick={canWrite ? () => setMenuFor(menuFor === t.id ? null : t.id) : undefined} />
                     {menuFor === t.id && <StatusMenu current={t.status} onPick={(s) => setStatus(t, s)} onClose={() => setMenuFor(null)} />}
                   </span>
-                  <Avatar id={t.owner_id} name={nameOf(t.owner_id)} />
+                  <AssigneePicker ownerId={t.owner_id} members={members} disabled={!canWrite} onPick={(id) => patch(t.id, { owner_id: id })} />
                 </div>
                 {kids.filter(k => (f.status === 'all' ? true : f.status === 'open' ? k.status !== 'done' : k.status === f.status)).map(k => (
                   <div key={k.id} className="flex items-center gap-3 pl-[46px] pr-4 py-2 border-b" style={{ borderColor: 'var(--ink-soft)' }}>
                     <Check size={16} done={k.status === 'done'} onClick={() => canWrite && toggleDone(k)} disabled={!canWrite} />
                     <span className={`flex-1 text-[13px] cursor-pointer ${k.status === 'done' ? 'text-dim line-through' : 'text-paper-soft'}`} onClick={() => onSelect?.(k.id)}>{k.title}</span>
                     <Mono size={10}>Subtask</Mono>
+                    <AssigneePicker ownerId={k.owner_id} members={members} size={22} disabled={!canWrite} onPick={(id) => patch(k.id, { owner_id: id })} />
                   </div>
                 ))}
               </div>
@@ -417,6 +419,9 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
       )}
       {sel.size > 0 && canWrite && (
         <div className="px-[14px] lg:px-6 pb-4 sticky z-30" style={{ bottom: 'calc(var(--tabbar-h) + env(safe-area-inset-bottom))' }}>
+          {bulkPeople && <PeopleMenu members={members} onClose={() => setBulkPeople(false)}
+            onPick={(id) => { setBulkPeople(false); bulk({ owner_id: id }); }}
+            className="absolute left-[14px] lg:left-6 bottom-full mb-2 z-50 w-[240px] menu-surface rounded-[10px] py-1" />}
           <DarkBar count={sel.size} onClear={() => setSel(new Set())}
             actions={[['Assign', bulkAssign], ['Due date', bulkDue], ['Move to phase', bulkPhase], ['Status', bulkStatus], ['Delete', bulkDelete, true]]} />
         </div>

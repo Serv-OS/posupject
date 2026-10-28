@@ -696,3 +696,78 @@ export function EditSheet({ title, sections, values, onChange, onCancel, onSave,
     document.body
   );
 }
+
+// ── Assigning people ────────────────────────────────────────────────────────
+// Peter, 28 Oct: assigning meant typing a name into a prompt, so every task
+// and subtask was a guess at spelling. Everywhere a task gets an owner now uses
+// this list of the team instead: click the avatar, pick a person.
+const personName = (m) => m.display_name || (m.email || '').split('@')[0];
+
+/** The list of people. Searchable once the team is long enough to scroll. */
+export function PeopleMenu({ members, current, onPick, onClose, align = 'right', className = '', style }) {
+  const ref = _useRef(null);
+  const [q, setQ] = _useState('');
+  _useEffect(() => {
+    const away = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    const esc = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', away); document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [onClose]);
+  const sorted = [...(members || [])].sort((a, b) => personName(a).localeCompare(personName(b)));
+  const shown = q.trim() ? sorted.filter(m => `${personName(m)} ${m.email || ''}`.toLowerCase().includes(q.trim().toLowerCase())) : sorted;
+  const row = 'w-full px-3 py-2 text-left text-[13px] text-paper hover:bg-ember/10 flex items-center gap-2';
+  return (
+    <div ref={ref} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()} style={style}
+      className={className || `absolute ${align === 'right' ? 'right-0' : 'left-0'} top-full mt-1 z-50 w-[230px] menu-surface rounded-[10px] py-1`}>
+      {sorted.length > 6 && (
+        <div className="px-2 pb-1">
+          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search people"
+            onKeyDown={e => { if (e.key === 'Enter' && shown.length === 1) onPick(shown[0].id); }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-[13px] text-paper bg-transparent border" style={{ borderColor: 'var(--hair)' }} />
+        </div>
+      )}
+      <div className="max-h-[280px] overflow-y-auto">
+        <button type="button" onClick={() => onPick(null)} className={row}>
+          <Avatar id={null} size={20} /><span className={!current ? 'font-semibold' : 'text-muted'}>Unassigned</span>
+        </button>
+        {shown.map(m => (
+          <button key={m.id} type="button" onClick={() => onPick(m.id)} className={row}>
+            <Avatar id={m.id} name={personName(m)} size={20} />
+            <span className={`truncate ${m.id === current ? 'font-semibold' : ''}`}>{personName(m)}</span>
+            {m.id === current && <span className="ml-auto text-[11px]" style={{ color: 'rgb(var(--c-primary-deep))' }}>✓</span>}
+          </button>
+        ))}
+        {!shown.length && <div className="px-3 py-2 text-[12px] text-dim">No one matches</div>}
+      </div>
+    </div>
+  );
+}
+
+/** A task's avatar that opens the people list. Unassigned shows an empty circle to click. */
+export function AssigneePicker({ ownerId, members, onPick, disabled, size = 26, align = 'right' }) {
+  // Where to draw the list. It floats above the page (portalled to <body>)
+  // because task cards clip anything that hangs out of them.
+  const [open, setOpen] = _useState(null);
+  const m = (members || []).find(x => x.id === ownerId);
+  const name = m ? personName(m) : '';
+  if (disabled) return <Avatar id={ownerId} name={name} size={size} />;
+  return (
+    <span className="relative inline-flex shrink-0" onClick={e => e.stopPropagation()}>
+      <button type="button" onClick={(e) => {
+        if (open) { setOpen(null); return; }
+        const r = e.currentTarget.getBoundingClientRect();
+        const below = window.innerHeight - r.bottom > 330;
+        const left = align === 'right' ? Math.max(8, r.right - 230) : Math.min(r.left, window.innerWidth - 238);
+        setOpen(below ? { top: r.bottom + 4, left } : { bottom: window.innerHeight - r.top + 4, left });
+      }} title={ownerId ? `${name}: click to change` : 'Assign someone'}
+        className="rounded-full hover:ring-2 hover:ring-[rgb(var(--c-primary)/.45)] transition">
+        <Avatar id={ownerId} name={name} size={size} title="" />
+      </button>
+      {open && _createPortal(
+        <PeopleMenu members={members} current={ownerId} style={{ position: 'fixed', ...open }}
+          className="z-[70] w-[230px] menu-surface rounded-[10px] py-1"
+          onPick={(id) => { setOpen(null); if (id !== (ownerId || null)) onPick(id); }} onClose={() => setOpen(null)} />,
+        document.body)}
+    </span>
+  );
+}

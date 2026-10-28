@@ -6,7 +6,7 @@ import { dueBucket } from '../../lib/taskGrouping';
 import { PRIORITY_LABEL } from '../../lib/priority';
 import { startOfWeek, addDays, dayKey } from '../../lib/planning';
 import {
-  Avatar, Tag, Pill, MetaLabel, Mono, PageTitle, Segmented, LabelledPill, LensPill, Card, SkeletonList, EmptyState, hair, dueLabel, fmtHM,
+  Avatar, AssigneePicker, PeopleMenu, Tag, Pill, MetaLabel, Mono, PageTitle, Segmented, LabelledPill, LensPill, Card, SkeletonList, EmptyState, hair, dueLabel, fmtHM,
 } from './ui.jsx';
 import { MobileSheet, SheetRow, useLongPress } from './ui.jsx';
 
@@ -124,11 +124,10 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
     alert('Nudged.');
     load();
   };
-  const assignUnassigned = async (list) => {
-    const name = prompt('Assign to (name):'); if (!name?.trim()) return;
-    const m = members.find(x => (x.display_name || x.email).toLowerCase().startsWith(name.trim().toLowerCase()));
-    if (!m) { alert('No one by that name.'); return; }
-    const { error } = await supabase.from('tasks').update({ owner_id: m.id }).in('id', list.map(t => t.id));
+  const [assignAll, setAssignAll] = useState(false);
+  const assignUnassigned = async (list, ownerId) => {
+    if (!ownerId) return;
+    const { error } = await supabase.from('tasks').update({ owner_id: ownerId }).in('id', list.map(t => t.id));
     if (error) { setErr(error.message); return; }
     load();
   };
@@ -317,7 +316,7 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
                   <div className="flex items-center gap-2">
                     <Pill tone="primary">Task</Pill>
                     {tr > 0 ? <Mono tone="primary" bold>{fmtHM(tr)}</Mono> : t.due_date ? <Mono tone={due.tone === 'coral' ? 'coral' : 'dim'} bold={due.tone === 'coral'}>{due.text}</Mono> : null}
-                    <span className="ml-auto"><Avatar id={t.owner_id} name={nameOf(t.owner_id)} size={20} /></span>
+                    <span className="ml-auto"><AssigneePicker ownerId={t.owner_id} members={members} size={20} disabled={!canWrite} onPick={(id) => reassign(t, id)} /></span>
                   </div>
                   <div className="text-[15px] font-medium text-paper mt-1">{t.title}</div>
                   {sub && <div className="text-[12px] text-muted mt-0.5 truncate">{sub}</div>}
@@ -409,7 +408,7 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
                                   {t.priority && <Pill tone={t.priority === 'P0' || t.priority === 'P1' ? 'coral' : 'ink'} className="!px-[7px] !py-[2px] !rounded-[5px] !border-0">{PRIORITY_LABEL[t.priority]}</Pill>}
                                   {tr > 0 ? <Mono size={10} tone="primary">{fmtHM(tr)}</Mono>
                                     : t.due_date ? <Mono size={10} tone={due.tone === 'coral' ? 'coral' : 'dim'}>{due.tone === 'coral' ? `-${due.text.replace(/ days? late/, '')}d` : due.text}</Mono> : null}
-                                  <span className="ml-auto"><Avatar id={t.owner_id} name={nameOf(t.owner_id)} size={20} /></span>
+                                  <span className="ml-auto"><AssigneePicker ownerId={t.owner_id} members={members} size={20} disabled={!canWrite} onPick={(id) => reassign(t, id)} /></span>
                                 </div>
                               )}
                             </div>
@@ -473,7 +472,8 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
                   <div><div className="text-[15px] font-semibold text-paper">Unassigned</div><div className="text-[11px] text-dim">Needs an owner</div></div>
                 </div>
                 <div className="text-[13px] text-paper-soft truncate">{u?.items?.length ? u.items.map(i => i.title).join(' · ') : 'Nothing waiting for an owner.'}</div>
-                <div>{u?.items?.length > 0 && canWrite && <button onClick={() => assignUnassigned(u.items)} className="text-[12px] font-semibold" style={{ color: 'rgb(var(--c-primary-deep))' }}>Assign {u.items.length === 2 ? 'both' : 'all'}</button>}</div>
+                <div className="relative">{u?.items?.length > 0 && canWrite && <button onClick={() => setAssignAll(true)} className="text-[12px] font-semibold" style={{ color: 'rgb(var(--c-primary-deep))' }}>Assign {u.items.length === 2 ? 'both' : 'all'}</button>}
+                  {assignAll && <PeopleMenu members={members} align="left" onClose={() => setAssignAll(false)} onPick={(id) => { setAssignAll(false); assignUnassigned(u.items, id); }} />}</div>
               </Card>
             );
           })()}
@@ -486,7 +486,7 @@ export default function WorkBoard({ profile, onNavigate, initialTab }) {
                 const p = projects.find(x => x.id === t.project_id);
                 return (
                   <div key={t.id} className="flex items-center gap-2.5 text-[14px]">
-                    <Avatar id={t.owner_id} name={nameOf(t.owner_id)} size={22} />
+                    <AssigneePicker ownerId={t.owner_id} members={members} size={22} align="left" disabled={!canWrite} onPick={(id) => reassign(t, id)} />
                     <span className="text-paper truncate cursor-pointer" onClick={() => onNavigate?.('task', t.id)}>{t.title}</span>
                     {t.status === 'blocked' ? <Tag tone="coral">Blocked</Tag> : p ? <Tag tone="uv">{p.name}</Tag> : null}
                     <Mono tone="coral" bold>{days} days</Mono>
