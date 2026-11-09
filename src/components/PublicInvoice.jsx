@@ -156,7 +156,7 @@ export default function PublicInvoice({ token }) {
                 <tr key={it.id} className="border-b border-slate-50">
                   <td className="py-2.5">
                     <div className="text-slate-800 font-medium">{it.name}</div>
-                    {it.description && <div className="text-xs text-slate-500">{it.description}</div>}
+                    {it.description && <div className="text-xs text-slate-500 whitespace-pre-line">{it.description}</div>}
                   </td>
                   <td className="py-2.5 text-right text-slate-600 tabular-nums">{Number(it.qty)}</td>
                   <td className="py-2.5 text-right text-slate-600 tabular-nums">{money(it.unit_price, currency)}</td>

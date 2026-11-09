@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { MobileTable, MobileDock, DockField, Mono, Segmented } from './ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download, FileMinus, Wallet } from 'lucide-react';
-import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
+import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT } from '../../lib/catalogue';
 import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, currencyLocale, defaultTaxRateFor } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { useStickyState } from '../../lib/stickyState';
@@ -90,6 +90,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const [locations, setLocations] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [products, setProducts] = useState([]);
+  const [bundleRows, setBundleRows] = useState([]);
   // Credit notes for the Credit notes tab. creditsReady stays false when the
   // table is not there yet (the migration not applied), so the tab hides
   // rather than sitting there empty.
@@ -128,7 +129,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
       supabase.from('companies').select('id, name, country').order('name'),
       supabase.from('locations').select('id, name, company_id, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
-      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd').eq('active', true).order('name'),
+      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, is_bundle').eq('active', true).order('name'),
       // Newest first. An error (the credit notes migration not applied yet)
       // just leaves the tab empty rather than breaking the invoice list.
       supabase.from('credit_notes').select('*, invoice:invoices(invoice_number), company:companies(name), location:locations(name)')
@@ -137,6 +138,8 @@ export default function InvoicesPanel({ profile, onNavigate }) {
     ]);
     setInvoices(i.data || []); setSchedules(r.data || []); setCompanies(c.data || []);
     setLocations(l.data || []); setContacts(ct.data || []); setProducts(pr.data || []);
+    // Bundle parts, for the "Includes:" text under a bundle line. Staff only.
+    supabase.from('product_bundle_items').select(BUNDLE_SELECT).then(r => setBundleRows(r.data || []));
     setCredits(cn.error ? [] : (cn.data || [])); setCreditsReady(!cn.error);
     setAllocs(al.error ? [] : (al.data || [])); setAllocReady(!al.error);
     setLoading(false);
@@ -766,7 +769,11 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
     // The schedule bills these lines every month, so a pound figure left on a
     // dollar schedule would be a wrong invoice twelve times a year. Catalogue
     // lines take their price in the new currency, typed lines reset to 0.
-    setLines(ls => ls.map(l => ({ ...l, unit_price: l.product_id ? unitPriceFor(products.find(x => x.id === l.product_id), next) : 0 })));
+    setLines(ls => ls.map(l => {
+      const p = l.product_id ? products.find(x => x.id === l.product_id) : null;
+      // A bundle's parts differ by market, so its parts list follows the money.
+      return { ...l, ...(p?.is_bundle ? { description: lineDescriptionFor(p, bundleRows, products, next) } : {}), unit_price: p ? unitPriceFor(p, next) : 0 };
+    }));
   };
   // A NEW schedule follows its customer: site country first, then company,
   // else it stays GBP. An existing one keeps the currency its invoices already
@@ -853,7 +860,7 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
                       const p = products.find(x => x.id === e.target.value);
                       if (p) setLines(prev => {
                         const blank = prev.length === 1 && !(prev[0].name || '').trim();
-                        const line = { product_id: p.id, name: p.name, description: p.description || '', qty: 1, unit_price: unitPriceFor(p, f.currency) };
+                        const line = { product_id: p.id, name: p.name, description: lineDescriptionFor(p, bundleRows, products, f.currency), qty: 1, unit_price: unitPriceFor(p, f.currency) };
                         return blank ? [line] : [...prev, line];
                       });
                     }}>
@@ -874,7 +881,7 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
                   <input className={input + ' flex-1'} value={l.name} onChange={e => setLine(i, 'name', e.target.value)} placeholder="Item name — e.g. Monthly subscription" />
                   <button onClick={() => setLines(p => p.filter((_, j) => j !== i))} title="Remove line" className="text-red-500 hover:text-red-600 text-lg leading-none shrink-0 px-1">&times;</button>
                 </div>
-                <input className={input + ' text-xs'} value={l.description || ''} onChange={e => setLine(i, 'description', e.target.value)} placeholder="Description (optional, shown on the invoice)" />
+                <textarea className={input + ' text-xs resize-none'} rows={Math.max(1, String(l.description || '').split('\n').length)} value={l.description || ''} onChange={e => setLine(i, 'description', e.target.value)} placeholder="Description (optional, shown on the invoice)" />
                 <div className="grid grid-cols-2 gap-2">
                   <div><span className="text-[9px] text-muted block mb-0.5">Qty</span>
                     <input type="number" className={input} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} placeholder="1" /></div>

@@ -6,7 +6,7 @@ import CreditNoteModal, { plainError, regionToday, loadCreditBasis } from './Cre
 import ApplyCreditModal, { allocError } from './ApplyCreditModal.jsx';
 import AmountReceivedModal from './AmountReceivedModal.jsx';
 import BillInStagesModal from './BillInStagesModal.jsx';
-import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
+import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT } from '../../lib/catalogue';
 import { round2, taxLabelFor, defaultTaxRateFor, currencySymbol, currencyLocale } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { downloadInvoicePdf, creditNotePdf } from '../../lib/invoicePdf';
@@ -29,6 +29,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
   const [locations, setLocations] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [products, setProducts] = useState([]);
+  const [bundleRows, setBundleRows] = useState([]);
   const [stockCounts, setStockCounts] = useState({});
   const [globalTerms, setGlobalTerms] = useState('');
   const [saving, setSaving] = useState(false);
@@ -137,7 +138,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       supabase.from('locations').select('id, name, company_id, address, city, postcode, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
       supabase.from('support_settings').select('invoice_terms, business_name, business_address, business_email, business_phone, logo_url, quote_accent').eq('id', 1).maybeSingle(),
-      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, category').eq('active', true).order('name'),
+      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, category, is_bundle').eq('active', true).order('name'),
       supabase.from('inv_serials').select('product_id').eq('status', 'in_stock'),
       // Newest first. An error (the credit notes migration not applied yet)
       // reads as no credit notes, so the invoice still opens.
@@ -149,6 +150,8 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
     setLines((li.data || []).length ? li.data : [{ _new: true, name: '', description: '', qty: 1, unit_price: 0, tax_rate: defaultTaxRateFor(i.data?.currency) }]);
     setCompanies(c.data || []); setLocations(l.data || []); setContacts(ct.data || []);
     setProducts(pr.data || []);
+    // Bundle parts, for the "Includes:" text under a bundle line. Staff only.
+    supabase.from('product_bundle_items').select(BUNDLE_SELECT).then(r => setBundleRows(r.data || []));
     const counts = {};
     (sk.data || []).forEach(r => { counts[r.product_id] = (counts[r.product_id] || 0) + 1; });
     setStockCounts(counts);
@@ -202,6 +205,8 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       ...l,
       tax_rate: Number(l.tax_rate ?? oldDef) === oldDef ? newDef : l.tax_rate,
       unit_price: l.product_id ? unitPriceFor(products.find(x => x.id === l.product_id), next) : 0,
+      // A bundle's parts differ by market, so its parts list follows the money.
+      ...(() => { const p = l.product_id && products.find(x => x.id === l.product_id); return p?.is_bundle ? { description: lineDescriptionFor(p, bundleRows, products, next) } : {}; })(),
     })));
     setFlipNote(`Currency changed to ${currencySymbol(next)}. Catalogue lines took their ${currencySymbol(next)} price; typed lines reset to 0.`);
     set('currency', next);
@@ -772,7 +777,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
                         const p = products.find(x => x.id === e.target.value);
                         if (p) setLines(prev => {
                           const blank = prev.length === 1 && !(prev[0].name || '').trim();
-                          const line = { _new: true, product_id: p.id, name: p.name, description: p.description || '', qty: 1, unit_price: unitPriceFor(p, cur), tax_rate: defaultTaxRateFor(cur) };
+                          const line = { _new: true, product_id: p.id, name: p.name, description: lineDescriptionFor(p, bundleRows, products, cur), qty: 1, unit_price: unitPriceFor(p, cur), tax_rate: defaultTaxRateFor(cur) };
                           return blank ? [line] : [...prev, line];
                         });
                       }}>
@@ -806,7 +811,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
                   <input className={cell + ' flex-1'} disabled={linesLocked} value={l.name} onChange={e => setLine(i, 'name', e.target.value)} placeholder="Item name — e.g. Card terminal" />
                   {!linesLocked && <button onClick={() => setLines(p => p.filter((_, j) => j !== i))} title="Remove line" className="text-red-500 hover:text-red-600 text-sm shrink-0">&times;</button>}
                 </div>
-                <input className={cell + ' w-full text-xs'} disabled={linesLocked} value={l.description || ''} onChange={e => setLine(i, 'description', e.target.value)} placeholder="Description (shown on the invoice)" />
+                <textarea className={cell + ' w-full text-xs resize-none'} rows={Math.max(1, String(l.description || '').split('\n').length)} disabled={linesLocked} value={l.description || ''} onChange={e => setLine(i, 'description', e.target.value)} placeholder="Description (shown on the invoice)" />
                 <div className="grid grid-cols-3 gap-2">
                   <div><span className="text-[9px] text-dim block">Qty</span>
                     <input type="number" className={cell + ' w-full'} disabled={linesLocked} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} placeholder="1" /></div>

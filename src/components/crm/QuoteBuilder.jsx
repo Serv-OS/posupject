@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import { AccountModal, accountSavings, ccyOf, moneyFor, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
-import { listPrice, unitPriceFor, isPricedIn } from '../../lib/catalogue';
+import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT } from '../../lib/catalogue';
 import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor, round2, lineNet } from '../../lib/money';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
 import { sortQuoteLines, saasStartText, customerRecurring } from '../../lib/quoteLines';
@@ -68,6 +68,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const [quote, setQuote] = useState(null);
   const [items, setItems] = useState([]);
   const [products, setProducts] = useState([]);
+  const [bundleRows, setBundleRows] = useState([]);
   const [company, setCompany] = useState(null);
   const [contact, setContact] = useState(null);
   const [locations, setLocations] = useState([]);
@@ -103,7 +104,10 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     setItems(p => p.map(it => {
       const prod = it.product_id ? products.find(x => x.id === it.product_id) : null;
       const l = Number(it.tax_rate ?? oldDef) === oldDef ? { ...it, tax_rate: newDef } : { ...it };
-      return prod ? { ...l, unit_price: unitPriceFor(prod, next) } : l;
+      if (!prod) return l;
+      // A bundle's parts differ by market, so its parts list follows the money.
+      const desc = prod.is_bundle ? { description: lineDescriptionFor(prod, bundleRows, products, next) } : {};
+      return { ...l, ...desc, unit_price: unitPriceFor(prod, next) };
     }));
     setQ('currency', next);
   };
@@ -124,6 +128,8 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
     setQuote(q.data);
     setItems(sortQuoteLines((li.data || []).map(x => ({ ...x }))));
     setProducts(pr.data || []);
+    // Bundle parts, for the "Includes:" text under a bundle line. Staff only.
+    supabase.from('product_bundle_items').select(BUNDLE_SELECT).then(r => setBundleRows(r.data || []));
     if (q.data?.deal_id) supabase.from('deals').select('id, name, stage').eq('id', q.data.deal_id).maybeSingle().then(r => setDeal(r.data || null));
     else setDeal(null);
     supabase.from('companies').select('id, name, country').order('name').then(r => setCompanies(r.data || []));
@@ -202,7 +208,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
   const removeItem = (idx) => setItems(items.filter((_, i) => i !== idx));
   const addCustom = () => setItems([...items, { product_id: null, name: '', description: '', category: 'hardware', billing_type: 'one_off', qty: 1, unit_price: 0, discount: 0, tax_rate: defaultTaxRateFor(cur) }]);
   const addProduct = (p) => setItems([...items, {
-    product_id: p.id, name: p.name, description: p.description || '', category: p.category,
+    product_id: p.id, name: p.name, description: lineDescriptionFor(p, bundleRows, products, cur), category: p.category,
     billing_type: p.billing_type, qty: 1, unit_price: unitPriceFor(p, cur), discount: 0, tax_rate: defaultTaxRateFor(cur),
   }]);
 
@@ -631,7 +637,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                       <input className={cell + ' flex-1'} value={it.name} onChange={e => updateItem(idx, { name: e.target.value })} placeholder="Item name" />
                       <button onClick={() => removeItem(idx)} className="text-red-500 hover:text-red-600 text-sm shrink-0">×</button>
                     </div>
-                    <input className={cell + ' w-full text-xs'} value={it.description || ''} onChange={e => updateItem(idx, { description: e.target.value })} placeholder="Description (shown on the quote)" />
+                    <textarea className={cell + ' w-full text-xs resize-none'} rows={Math.max(1, String(it.description || '').split('\n').length)} value={it.description || ''} onChange={e => updateItem(idx, { description: e.target.value })} placeholder="Description (shown on the quote)" />
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                       <div><span className="text-[9px] text-dim block">Category</span>
                         <select className={cell + ' w-full text-xs'} value={it.category} onChange={e => updateItem(idx, { category: e.target.value })}>

@@ -31,3 +31,54 @@ export const marginFor = (p, ccy) => {
   if (sell === null || cost === null || sell <= 0) return null;
   return { amount: sell - cost, pct: Math.round(((sell - cost) / sell) * 100) };
 };
+
+/* SKUs and bundles (migration 123).
+ *
+ * A product has a UK SKU (sku) and a US SKU (sku_us); one is never copied into
+ * the other. A bundle ("Kiosk - Counter mounted") has its own price and is made
+ * of parts that differ by market, so a pound document lists the UK parts and a
+ * dollar document the US ones.
+ */
+const SKU = { GBP: 'sku', USD: 'sku_us' };
+/** The SKU for a market, or null. */
+export const skuFor = (p, ccy) => (p?.[SKU[ccyOf(ccy)]] || '').trim() || null;
+
+/**
+ * A bundle's parts for one market, in order, each joined to its product. A row
+ * loaded with its part embedded (component) still resolves when the part is not
+ * in the active list, so a switched off part is never silently left out.
+ */
+export const bundleParts = (bundleId, parts, products, ccy) => {
+  const byId = new Map((products || []).map(p => [p.id, p]));
+  return (parts || [])
+    .filter(r => r.bundle_id === bundleId && r.region === ccyOf(ccy))
+    .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+    .map(r => ({ qty: Math.max(1, Number(r.qty) || 1), product: byId.get(r.component_id) || r.component || null }))
+    .filter(x => x.product);
+};
+
+/** What the quote and invoice builders load: every bundle row with its part's name and prices. */
+export const BUNDLE_SELECT = 'bundle_id, component_id, region, qty, sort, component:products!component_id(id, name, default_price, default_price_usd)';
+
+/** "Includes: 1 x Sunmi 22 Inch Kiosk, 2 x Counter bracket", or '' when there are no parts. */
+export const includesText = (list) =>
+  list.length ? 'Includes: ' + list.map(x => `${x.qty} x ${x.product.name}`).join(', ') : '';
+
+/**
+ * What a new quote or invoice line says under its name: the product's own
+ * description, then for a bundle the parts for that document's market.
+ */
+export const lineDescriptionFor = (p, parts, products, ccy) => {
+  const own = (p?.description || '').trim();
+  if (!p?.is_bundle) return own;
+  const inc = includesText(bundleParts(p.id, parts, products, ccy));
+  return [own, inc].filter(Boolean).join('\n');
+};
+
+/** The parts' list prices added up, as a guide next to the bundle price. Null when any part has no price in that money. */
+export const partsTotalFor = (list, ccy) => {
+  if (!list.length) return null;
+  let sum = 0;
+  for (const x of list) { const v = priceFor(x.product, ccy); if (v === null) return null; sum += v * x.qty; }
+  return Math.round(sum * 100) / 100;
+};

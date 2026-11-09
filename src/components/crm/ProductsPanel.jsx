@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { INV_CATEGORIES } from '../../lib/inventoryOps';
 import { supabase } from '../../lib/supabase';
-import { marginFor } from '../../lib/catalogue';
+import { marginFor, bundleParts, partsTotalFor } from '../../lib/catalogue';
 import { fmtMoney, fmtMoney0, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 
 const CATEGORIES = [
@@ -22,7 +22,8 @@ const CATALOGUE_CCY = 'GBP';
 const SYM = currencySymbol(CATALOGUE_CCY);
 const TAX = taxLabelFor(CATALOGUE_CCY);
 
-const blank = { name: '', description: '', sku: '', category: 'hardware', billing_type: 'one_off', default_price: '', cost_price: '', default_price_usd: '', cost_price_usd: '', cost_tax_rate: defaultTaxRateFor(CATALOGUE_CCY), unit: '', active: true, track_inventory: false, inv_category: '', default_threshold: '', supplier_id: '' };
+const blank = { name: '', description: '', sku: '', category: 'hardware', billing_type: 'one_off', default_price: '', cost_price: '', default_price_usd: '', cost_price_usd: '', cost_tax_rate: defaultTaxRateFor(CATALOGUE_CCY), unit: '', active: true, track_inventory: false, inv_category: '', default_threshold: '', supplier_id: '', sku_us: '', is_bundle: false, notes: '', parts: { GBP: [], USD: [] } };
+const REGIONS = [{ ccy: 'GBP', label: 'UK parts' }, { ccy: 'USD', label: 'US parts' }];
 
 export default function ProductsPanel({ profile }) {
   const [products, setProducts] = useState([]);
@@ -31,6 +32,8 @@ export default function ProductsPanel({ profile }) {
   const [draft, setDraft] = useState(blank);
   const [suppliers, setSuppliers] = useState([]);
   const [stockCounts, setStockCounts] = useState({});
+  const [notes, setNotes] = useState({});
+  const [bundleRows, setBundleRows] = useState([]);
 
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -49,17 +52,28 @@ export default function ProductsPanel({ profile }) {
       else if (r.status === 'deployed') counts[r.product_name].deployed++;
     });
     setStockCounts(counts);
+    // Internal notes and bundle parts live in their own staff only tables
+    // (migration 123); products itself is readable by the public quote pages.
+    const [{ data: nt }, { data: br }] = await Promise.all([
+      supabase.from('product_notes').select('product_id, notes'),
+      supabase.from('product_bundle_items').select('bundle_id, component_id, region, qty, sort'),
+    ]);
+    setNotes(Object.fromEntries((nt || []).map(n => [n.product_id, n.notes])));
+    setBundleRows(br || []);
     setProducts(data || []);
     setLoading(false);
   };
 
   const startNew = () => { setDraft(blank); setEditing('new'); };
-  const startEdit = (p) => { setDraft({ ...p, default_price: p.default_price ?? '', cost_price: p.cost_price ?? '', default_price_usd: p.default_price_usd ?? '', cost_price_usd: p.cost_price_usd ?? '', cost_tax_rate: p.cost_tax_rate ?? defaultTaxRateFor(CATALOGUE_CCY) }); setEditing(p.id); };
+  const partsOf = (id) => Object.fromEntries(REGIONS.map(({ ccy }) => [ccy,
+    bundleRows.filter(r => r.bundle_id === id && r.region === ccy).sort((a, b) => a.sort - b.sort).map(r => ({ component_id: r.component_id, qty: r.qty }))]));
+  const startEdit = (p) => { setDraft({ ...p, sku_us: p.sku_us ?? '', notes: notes[p.id] ?? '', parts: partsOf(p.id), default_price: p.default_price ?? '', cost_price: p.cost_price ?? '', default_price_usd: p.default_price_usd ?? '', cost_price_usd: p.cost_price_usd ?? '', cost_tax_rate: p.cost_tax_rate ?? defaultTaxRateFor(CATALOGUE_CCY) }); setEditing(p.id); };
 
   const save = async () => {
     if (!draft.name.trim()) { alert('Name is required.'); return; }
     const payload = {
       name: draft.name.trim(), description: draft.description?.trim() || null, sku: draft.sku?.trim() || null,
+      sku_us: draft.sku_us?.trim() || null, is_bundle: !!draft.is_bundle,
       category: draft.category, billing_type: draft.billing_type,
       // Empty is "not priced for the UK yet", not £0: a US-only product must not look priced at nothing on a pound quote.
       default_price: draft.default_price === '' || draft.default_price == null ? null : parseFloat(draft.default_price),
@@ -74,13 +88,44 @@ export default function ProductsPanel({ profile }) {
       default_threshold: draft.default_threshold === '' || draft.default_threshold == null ? null : parseInt(draft.default_threshold),
       supplier_id: draft.supplier_id || null,
     };
-    const { error } = editing === 'new'
-      ? await supabase.from('products').insert(payload)
-      : await supabase.from('products').update(payload).eq('id', editing);
-    if (error) { alert('Could not save product:\n\n' + error.message + '\n\nYour details are still here — fix the issue and try again.'); return; }
+    const { data: saved, error } = editing === 'new'
+      ? await supabase.from('products').insert(payload).select('id').single()
+      : await supabase.from('products').update(payload).eq('id', editing).select('id').single();
+    if (error) { alert('Could not save product:\n\n' + error.message + '\n\nYour details are still here, fix the issue and try again.'); return; }
+    const id = saved.id;
+    const fail = (what, e) => { alert(`The product saved, but its ${what} did not:\n\n${e.message}\n\nYour details are still here, press Save again.`); setEditing(id); };
+    const note = (draft.notes || '').trim();
+    if (note !== (notes[id] || '').trim()) {
+      const { error: ne } = note
+        ? await supabase.from('product_notes').upsert({ product_id: id, notes: note, updated_by: profile.id, updated_at: new Date().toISOString() })
+        : await supabase.from('product_notes').delete().eq('product_id', id);
+      if (ne) return fail('internal notes', ne);
+    }
+    // A bundle's parts are replaced as a set. A product that stops being a
+    // bundle keeps no parts, so nothing lists them by mistake.
+    const rows = draft.is_bundle ? REGIONS.flatMap(({ ccy }) => (draft.parts?.[ccy] || [])
+      .filter(x => x.component_id)
+      .map((x, i) => ({ bundle_id: id, component_id: x.component_id, region: ccy, qty: Math.max(1, parseInt(x.qty) || 1), sort: i }))) : [];
+    const had = bundleRows.some(r => r.bundle_id === id);
+    if (had || rows.length) {
+      const { error: de } = await supabase.from('product_bundle_items').delete().eq('bundle_id', id);
+      if (de) return fail('bundle parts', de);
+      if (rows.length) { const { error: ie } = await supabase.from('product_bundle_items').insert(rows); if (ie) return fail('bundle parts', ie); }
+    }
     setEditing(null); load();
   };
-  const remove = async (p) => { if (!confirm(`Delete product "${p.name}"?`)) return; const { error } = await supabase.from('products').delete().eq('id', p.id); if (error) { alert('Could not delete: ' + error.message); return; } load(); };
+  const usedIn = (id) => [...new Set(bundleRows.filter(r => r.component_id === id).map(r => r.bundle_id))].map(b => products.find(p => p.id === b)?.name).filter(Boolean);
+  const remove = async (p) => {
+    const inBundles = usedIn(p.id);
+    if (inBundles.length) { alert(`"${p.name}" is a part of ${inBundles.join(', ')}. Take it out of ${inBundles.length === 1 ? 'that bundle' : 'those bundles'} first, or set it Inactive.`); return; }
+    if (!confirm(`Delete product "${p.name}"?`)) return;
+    const { error } = await supabase.from('products').delete().eq('id', p.id);
+    if (error) { alert('Could not delete: ' + error.message); return; }
+    load();
+  };
+  const setParts = (ccy, list) => setDraft(d => ({ ...d, parts: { ...d.parts, [ccy]: list } }));
+  // Anything that is not itself a bundle can be a part.
+  const partChoices = products.filter(p => !p.is_bundle && p.id !== editing);
 
   // Whole pounds print whole (£299) and anything else at 2dp (£12.50); the old
   // hand-rolled formatter printed £12.5.
@@ -132,11 +177,48 @@ export default function ProductsPanel({ profile }) {
                     <div className="text-[11px] text-dim mt-1">Cost inc {TAX}: {fmtMoney(Number(draft.cost_price) * (1 + Number(draft.cost_tax_rate) / 100), CATALOGUE_CCY)}</div>
                   )}</div>
                 <div><label className={label}>Unit (optional)</label><input className={input} value={draft.unit || ''} onChange={e => setDraft({ ...draft, unit: e.target.value })} placeholder="per till, per location…" /></div>
-                <div><label className={label}>SKU (optional)</label><input className={input} value={draft.sku || ''} onChange={e => setDraft({ ...draft, sku: e.target.value })} /></div>
+                <div><label className={label}>UK SKU (optional)</label><input className={input} value={draft.sku || ''} onChange={e => setDraft({ ...draft, sku: e.target.value })} /></div>
+                <div><label className={label}>US SKU (optional)</label><input className={input} value={draft.sku_us || ''} onChange={e => setDraft({ ...draft, sku_us: e.target.value })} /></div>
               </div>
               <div className="text-[11px] text-dim italic">A pound quote takes the £ price, a dollar quote takes the $ price. Leave the $ price empty and a US line lands at 0 to be typed.</div>
               <div><label className={label}>Description</label><textarea className={input + ' resize-none'} rows={2} value={draft.description || ''} onChange={e => setDraft({ ...draft, description: e.target.value })} /></div>
+              <div><label className={label}>Internal notes (staff only, never on quotes or invoices)</label><textarea className={input + ' resize-none'} rows={2} value={draft.notes || ''} onChange={e => setDraft({ ...draft, notes: e.target.value })} placeholder="Supplier quirks, lead times, what to check before ordering…" /></div>
               <label className="flex items-center gap-2 text-sm text-paper cursor-pointer"><input type="checkbox" checked={draft.active} onChange={e => setDraft({ ...draft, active: e.target.checked })} /> Active (available on quotes)</label>
+
+              {/* A bundle is priced on its own; its parts differ by market and are
+                  listed under the line on a quote in that market's money. */}
+              <div className="glass-inner rounded-xl p-3 space-y-3">
+                <label className="flex items-center gap-2 text-sm text-paper cursor-pointer">
+                  <input type="checkbox" checked={!!draft.is_bundle} onChange={e => setDraft({ ...draft, is_bundle: e.target.checked })} className="accent-ember" />
+                  Bundle (made of other products, e.g. Kiosk - Counter mounted)
+                </label>
+                {draft.is_bundle && (
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    {REGIONS.map(({ ccy, label: title }) => {
+                      const list = draft.parts?.[ccy] || [];
+                      const total = partsTotalFor(list.map(x => ({ qty: Math.max(1, parseInt(x.qty) || 1), product: products.find(p => p.id === x.component_id) })).filter(x => x.product), ccy);
+                      return (
+                        <div key={ccy} className="space-y-2">
+                          <div className={label}>{title}</div>
+                          {list.map((x, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <input type="number" min="1" className={input + ' !w-16'} value={x.qty} onChange={e => setParts(ccy, list.map((y, j) => j === i ? { ...y, qty: e.target.value } : y))} />
+                              <div className="flex-1 text-sm text-paper truncate">{products.find(p => p.id === x.component_id)?.name || 'Unknown product'}</div>
+                              <button onClick={() => setParts(ccy, list.filter((_, j) => j !== i))} className="text-xs text-red-600">Remove</button>
+                            </div>
+                          ))}
+                          <select className={input + ' text-xs'} value="" onChange={e => { const id = e.target.value; if (id && !list.some(y => y.component_id === id)) setParts(ccy, [...list, { component_id: id, qty: 1 }]); }}>
+                            <option value="">+ Add a part…</option>
+                            {partChoices.map(p => <option key={p.id} value={p.id} disabled={list.some(y => y.component_id === p.id)}>{p.name}</option>)}
+                          </select>
+                          {list.length === 0 && <div className="text-[11px] text-dim italic">No {ccy === 'GBP' ? 'UK' : 'US'} parts yet.</div>}
+                          {total !== null && <div className="text-[11px] text-dim">Parts add up to {fmtMoney(total, ccy)} (guide only, the bundle uses its own price).</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
               {/* Inventory settings */}
               <div className="glass-inner rounded-xl p-3 space-y-3">
@@ -184,7 +266,14 @@ export default function ProductsPanel({ profile }) {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-bold text-paper">{p.name}</span>
                           {!p.active && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-slate-100 text-slate-500">Inactive</span>}
+                          {p.is_bundle && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-ember/10 text-ember">Bundle</span>}
                         </div>
+                        {(p.sku || p.sku_us) && <div className="text-[10px] font-mono text-dim">{p.sku && `UK ${p.sku}`}{p.sku && p.sku_us && ' · '}{p.sku_us && `US ${p.sku_us}`}</div>}
+                        {p.is_bundle && REGIONS.map(({ ccy }) => {
+                          const list = bundleParts(p.id, bundleRows, products, ccy);
+                          return <div key={ccy} className="text-[10px] text-dim truncate">{ccy === 'GBP' ? 'UK' : 'US'}: {list.length ? list.map(x => `${x.qty} x ${x.product.name}`).join(', ') : <span className="text-amber-600">no parts yet</span>}</div>;
+                        })}
+                        {notes[p.id] && <div className="text-[10px] text-dim italic line-clamp-1">Note: {notes[p.id]}</div>}
                         {p.description && <div className="text-xs text-muted line-clamp-1">{p.description}</div>}
                         {p.supplier_id && <div className="text-[10px] text-dim mt-0.5">Supplier: {suppliers.find(s => s.id === p.supplier_id)?.name || '—'}</div>}
                       </div>
