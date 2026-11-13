@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { priceFor, costFor, isPricedIn, listPrice, unitPriceFor, marginFor, skuFor, bundleParts, includesText, lineDescriptionFor, partsTotalFor } from './catalogue.js';
+import { priceFor, costFor, isPricedIn, listPrice, unitPriceFor, marginFor, skuFor, bundleParts, includesText, lineDescriptionFor, partsTotalFor, partsCostFor } from './catalogue.js';
 
 // Priced in both. The dollar price is deliberately NOT 1.27 x the pound one:
 // items sell for more in the US, and the point of the column is that nothing
@@ -110,5 +110,19 @@ describe('bundles', () => {
     expect(partsTotalFor(bundleParts('b', parts, products, 'USD'), 'USD')).toBe(954);
     expect(partsTotalFor([{ qty: 1, product: ukMount }], 'USD')).toBeNull();
     expect(partsTotalFor([], 'GBP')).toBeNull();
+  });
+});
+
+describe('partsCostFor', () => {
+  const a = { name: 'Kiosk', cost_price: 500, cost_price_usd: 610 };
+  const b = { name: 'Bracket', cost_price: 12.5 };
+  it('adds the parts cost prices in that money, qty included', () => {
+    expect(partsCostFor([{ qty: 1, product: a }, { qty: 2, product: b }], 'GBP')).toEqual({ total: 525, missing: [] });
+  });
+  it('gives no cost, and names the part, when a part has no cost in that money', () => {
+    expect(partsCostFor([{ qty: 1, product: a }, { qty: 1, product: b }], 'USD')).toEqual({ total: null, missing: ['Bracket'] });
+  });
+  it('gives no cost for a bundle with no parts', () => {
+    expect(partsCostFor([], 'GBP')).toEqual({ total: null, missing: [] });
   });
 });

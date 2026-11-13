@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { INV_CATEGORIES } from '../../lib/inventoryOps';
 import { supabase } from '../../lib/supabase';
-import { marginFor, bundleParts, partsTotalFor } from '../../lib/catalogue';
+import { marginFor, bundleParts, partsTotalFor, partsCostFor } from '../../lib/catalogue';
 import { fmtMoney, fmtMoney0, currencySymbol, taxLabelFor, defaultTaxRateFor } from '../../lib/money';
 
 const CATEGORIES = [
@@ -69,6 +69,14 @@ export default function ProductsPanel({ profile }) {
     bundleRows.filter(r => r.bundle_id === id && r.region === ccy).sort((a, b) => a.sort - b.sort).map(r => ({ component_id: r.component_id, qty: r.qty }))]));
   const startEdit = (p) => { setDraft({ ...p, sku_us: p.sku_us ?? '', notes: notes[p.id] ?? '', parts: partsOf(p.id), default_price: p.default_price ?? '', cost_price: p.cost_price ?? '', default_price_usd: p.default_price_usd ?? '', cost_price_usd: p.cost_price_usd ?? '', cost_tax_rate: p.cost_tax_rate ?? defaultTaxRateFor(CATALOGUE_CCY) }); setEditing(p.id); };
 
+  // A bundle's cost is its parts' costs added up, per market, never typed.
+  const partList = (parts, ccy, pool = products) => (parts?.[ccy] || [])
+    .map(x => ({ qty: Math.max(1, parseInt(x.qty) || 1), product: pool.find(p => p.id === x.component_id) })).filter(x => x.product);
+  const bundleCost = (parts, pool) => ({ GBP: partsCostFor(partList(parts, 'GBP', pool), 'GBP'), USD: partsCostFor(partList(parts, 'USD', pool), 'USD') });
+  const draftCost = draft.is_bundle ? bundleCost(draft.parts) : null;
+  // What the cost fields and margins show: typed for a product, summed for a bundle.
+  const eff = draftCost ? { ...draft, cost_price: draftCost.GBP.total ?? '', cost_price_usd: draftCost.USD.total ?? '' } : draft;
+
   const save = async () => {
     if (!draft.name.trim()) { alert('Name is required.'); return; }
     const payload = {
@@ -77,11 +85,11 @@ export default function ProductsPanel({ profile }) {
       category: draft.category, billing_type: draft.billing_type,
       // Empty is "not priced for the UK yet", not £0: a US-only product must not look priced at nothing on a pound quote.
       default_price: draft.default_price === '' || draft.default_price == null ? null : parseFloat(draft.default_price),
-      cost_price: draft.cost_price === '' ? null : parseFloat(draft.cost_price),
+      cost_price: draftCost ? draftCost.GBP.total : draft.cost_price === '' || draft.cost_price == null ? null : parseFloat(draft.cost_price),
       // Dollar prices are their own prices, never derived from the pound ones.
       // Empty means "not priced for the US yet", and a US document says so.
       default_price_usd: draft.default_price_usd === '' || draft.default_price_usd == null ? null : parseFloat(draft.default_price_usd),
-      cost_price_usd: draft.cost_price_usd === '' || draft.cost_price_usd == null ? null : parseFloat(draft.cost_price_usd),
+      cost_price_usd: draftCost ? draftCost.USD.total : draft.cost_price_usd === '' || draft.cost_price_usd == null ? null : parseFloat(draft.cost_price_usd),
       cost_tax_rate: draft.cost_tax_rate === '' || draft.cost_tax_rate == null ? null : parseFloat(draft.cost_tax_rate),
       unit: draft.unit?.trim() || null, active: draft.active,
       track_inventory: !!draft.track_inventory, inv_category: draft.inv_category || null,
@@ -111,6 +119,17 @@ export default function ProductsPanel({ profile }) {
       const { error: de } = await supabase.from('product_bundle_items').delete().eq('bundle_id', id);
       if (de) return fail('bundle parts', de);
       if (rows.length) { const { error: ie } = await supabase.from('product_bundle_items').insert(rows); if (ie) return fail('bundle parts', ie); }
+    }
+    // A part's cost just changed: every bundle using it takes the new total.
+    if (!draft.is_bundle) {
+      const pool = products.map(p => (p.id === id ? { ...p, ...payload } : p));
+      const bundleIds = [...new Set(bundleRows.filter(r => r.component_id === id).map(r => r.bundle_id))];
+      for (const b of bundleIds) {
+        const parts = partsOf(b);
+        const c = bundleCost(parts, pool);
+        const { error: be } = await supabase.from('products').update({ cost_price: c.GBP.total, cost_price_usd: c.USD.total }).eq('id', b);
+        if (be) alert(`Saved, but the cost of ${pool.find(p => p.id === b)?.name || 'a bundle'} did not update:\n\n${be.message}`);
+      }
     }
     setEditing(null); load();
   };
@@ -158,23 +177,25 @@ export default function ProductsPanel({ profile }) {
                 <div><label className={label}>Billing</label><select className={input} value={draft.billing_type} onChange={e => setDraft({ ...draft, billing_type: e.target.value })}>
                   {Object.entries(BILLING).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
                 <div><label className={label}>Selling price ({SYM} {CATALOGUE_CCY})</label><input type="number" className={input} value={draft.default_price ?? ''} onChange={e => setDraft({ ...draft, default_price: e.target.value })} placeholder="not priced for the UK yet" /></div>
-                <div><label className={label}>Cost price ({SYM} {CATALOGUE_CCY})</label><input type="number" className={input} value={draft.cost_price} onChange={e => setDraft({ ...draft, cost_price: e.target.value })} placeholder="0.00" />
-                  {draft.default_price !== '' && draft.cost_price !== '' && Number(draft.default_price) > 0 && (
+                <div><label className={label}>Cost price ({SYM} {CATALOGUE_CCY}){draftCost ? ', parts added up' : ''}</label><input type="number" className={input} disabled={!!draftCost} value={eff.cost_price ?? ''} onChange={e => setDraft({ ...draft, cost_price: e.target.value })} placeholder={draftCost ? 'from the UK parts' : '0.00'} />
+                  {draftCost?.GBP.missing.length > 0 && <div className="text-[11px] text-amber-600 mt-1">No {SYM} cost on: {draftCost.GBP.missing.join(', ')}</div>}
+                  {eff.default_price !== '' && eff.default_price != null && eff.cost_price !== '' && eff.cost_price != null && Number(eff.default_price) > 0 && (
                     <div className="text-[11px] text-emerald-600 font-semibold mt-1">
-                      Margin: {fmtMoney(Number(draft.default_price) - Number(draft.cost_price), CATALOGUE_CCY)} ({Math.round(((Number(draft.default_price) - Number(draft.cost_price)) / Number(draft.default_price)) * 100)}%)
+                      Margin: {fmtMoney(Number(eff.default_price) - Number(eff.cost_price), CATALOGUE_CCY)} ({Math.round(((Number(eff.default_price) - Number(eff.cost_price)) / Number(eff.default_price)) * 100)}%)
                     </div>
                   )}</div>
                 {/* A US price is a different price, not a conversion: items sell for
                     more there. Both fields optional; empty means the product is not
                     priced for the US yet and a dollar quote will say so. */}
                 <div><label className={label}>Selling price ($ USD)</label><input type="number" className={input} value={draft.default_price_usd ?? ''} onChange={e => setDraft({ ...draft, default_price_usd: e.target.value })} placeholder="not priced for the US yet" /></div>
-                <div><label className={label}>Cost price ($ USD)</label><input type="number" className={input} value={draft.cost_price_usd ?? ''} onChange={e => setDraft({ ...draft, cost_price_usd: e.target.value })} placeholder="0.00" />
-                  {(() => { const m = marginFor(draft, 'USD'); return m && (
+                <div><label className={label}>Cost price ($ USD){draftCost ? ', parts added up' : ''}</label><input type="number" className={input} disabled={!!draftCost} value={eff.cost_price_usd ?? ''} onChange={e => setDraft({ ...draft, cost_price_usd: e.target.value })} placeholder={draftCost ? 'from the US parts' : '0.00'} />
+                  {draftCost?.USD.missing.length > 0 && <div className="text-[11px] text-amber-600 mt-1">No $ cost on: {draftCost.USD.missing.join(', ')}</div>}
+                  {(() => { const m = marginFor(eff, 'USD'); return m && (
                     <div className="text-[11px] text-emerald-600 font-semibold mt-1">Margin: {fmtMoney(m.amount, 'USD')} ({m.pct}%)</div>
                   ); })()}</div>
                 <div><label className={label}>Purchase {TAX} %</label><input type="number" className={input} value={draft.cost_tax_rate ?? ''} onChange={e => setDraft({ ...draft, cost_tax_rate: e.target.value })} placeholder={String(defaultTaxRateFor(CATALOGUE_CCY))} />
-                  {draft.cost_price !== '' && draft.cost_price != null && draft.cost_tax_rate !== '' && draft.cost_tax_rate != null && (
-                    <div className="text-[11px] text-dim mt-1">Cost inc {TAX}: {fmtMoney(Number(draft.cost_price) * (1 + Number(draft.cost_tax_rate) / 100), CATALOGUE_CCY)}</div>
+                  {eff.cost_price !== '' && eff.cost_price != null && draft.cost_tax_rate !== '' && draft.cost_tax_rate != null && (
+                    <div className="text-[11px] text-dim mt-1">Cost inc {TAX}: {fmtMoney(Number(eff.cost_price) * (1 + Number(draft.cost_tax_rate) / 100), CATALOGUE_CCY)}</div>
                   )}</div>
                 <div><label className={label}>Unit (optional)</label><input className={input} value={draft.unit || ''} onChange={e => setDraft({ ...draft, unit: e.target.value })} placeholder="per till, per location…" /></div>
                 <div><label className={label}>UK SKU (optional)</label><input className={input} value={draft.sku || ''} onChange={e => setDraft({ ...draft, sku: e.target.value })} /></div>

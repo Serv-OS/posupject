@@ -82,3 +82,15 @@ export const partsTotalFor = (list, ccy) => {
   for (const x of list) { const v = priceFor(x.product, ccy); if (v === null) return null; sum += v * x.qty; }
   return Math.round(sum * 100) / 100;
 };
+
+/**
+ * A bundle's cost in one market: its parts' cost prices added up (qty x cost).
+ * total is null when there are no parts or any part has no cost in that money;
+ * missing names those parts, so the screen can say why.
+ */
+export const partsCostFor = (list, ccy) => {
+  if (!list.length) return { total: null, missing: [] };
+  const missing = list.filter(x => costFor(x.product, ccy) === null).map(x => x.product.name);
+  if (missing.length) return { total: null, missing };
+  return { total: Math.round(list.reduce((s, x) => s + costFor(x.product, ccy) * x.qty, 0) * 100) / 100, missing };
+};
