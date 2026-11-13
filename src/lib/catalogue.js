@@ -58,7 +58,7 @@ export const bundleParts = (bundleId, parts, products, ccy) => {
 };
 
 /** What the quote and invoice builders load: every bundle row with its part's name and prices. */
-export const BUNDLE_SELECT = 'bundle_id, component_id, region, qty, sort, component:products!component_id(id, name, default_price, default_price_usd)';
+export const BUNDLE_SELECT = 'bundle_id, component_id, region, qty, sort, component:products!component_id(id, name, default_price, default_price_usd, track_inventory)';
 
 /** "Includes: 1 x Sunmi 22 Inch Kiosk, 2 x Counter bracket", or '' when there are no parts. */
 export const includesText = (list) =>
@@ -93,4 +93,33 @@ export const partsCostFor = (list, ccy) => {
   const missing = list.filter(x => costFor(x.product, ccy) === null).map(x => x.product.name);
   if (missing.length) return { total: null, missing };
   return { total: Math.round(list.reduce((s, x) => s + costFor(x.product, ccy) * x.qty, 0) * 100) / 100, missing };
+};
+
+/**
+ * How many of a bundle can be built from stock: for every stock tracked part,
+ * units in stock / qty needed, rounded down; the lowest wins. Parts that are not
+ * stock tracked never hold a bundle back. Null when no part is tracked.
+ * inStock maps product id to units in stock.
+ */
+export const bundleBuildable = (list, inStock) => {
+  const tracked = list.filter(x => x.product.track_inventory);
+  if (!tracked.length) return null;
+  return Math.min(...tracked.map(x => Math.floor((Number(inStock?.[x.product.id]) || 0) / x.qty)));
+};
+
+/**
+ * Stock Out for a bundle: which scanned units cover which part. units are the
+ * scanned in stock units ({ serial, product_id }). Each tracked part needs qty
+ * units of its product; anything else scanned is extra.
+ */
+export const bundleScan = (list, units) => {
+  const left = [...(units || [])];
+  const parts = list.filter(x => x.product.track_inventory).map(x => {
+    const got = [];
+    for (let i = 0; i < left.length && got.length < x.qty;) {
+      if (left[i].product_id === x.product.id) got.push(left.splice(i, 1)[0].serial); else i++;
+    }
+    return { name: x.product.name, need: x.qty, got };
+  });
+  return { parts, extra: left.map(u => u.serial), complete: parts.every(p => p.got.length === p.need) && !left.length };
 };

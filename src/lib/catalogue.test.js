@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { priceFor, costFor, isPricedIn, listPrice, unitPriceFor, marginFor, skuFor, bundleParts, includesText, lineDescriptionFor, partsTotalFor, partsCostFor } from './catalogue.js';
+import { priceFor, costFor, isPricedIn, listPrice, unitPriceFor, marginFor, skuFor, bundleParts, includesText, lineDescriptionFor, partsTotalFor, partsCostFor, bundleBuildable, bundleScan } from './catalogue.js';
 
 // Priced in both. The dollar price is deliberately NOT 1.27 x the pound one:
 // items sell for more in the US, and the point of the column is that nothing
@@ -124,5 +124,30 @@ describe('partsCostFor', () => {
   });
   it('gives no cost for a bundle with no parts', () => {
     expect(partsCostFor([], 'GBP')).toEqual({ total: null, missing: [] });
+  });
+});
+
+describe('bundle stock', () => {
+  const screen = { id: 's', name: 'Screen', track_inventory: true };
+  const stand = { id: 't', name: 'Stand', track_inventory: true };
+  const screws = { id: 'x', name: 'Screws', track_inventory: false };
+  const list = [{ qty: 1, product: screen }, { qty: 2, product: stand }, { qty: 4, product: screws }];
+  it('builds as many as the scarcest tracked part allows', () => {
+    expect(bundleBuildable(list, { s: 4, t: 5 })).toBe(2);
+    expect(bundleBuildable(list, { s: 0, t: 9 })).toBe(0);
+    expect(bundleBuildable(list, {})).toBe(0);
+  });
+  it('ignores parts that are not stock tracked', () => {
+    expect(bundleBuildable([{ qty: 1, product: screws }], {})).toBeNull();
+  });
+  it('matches scanned units to parts and spots what is missing or extra', () => {
+    const half = bundleScan(list, [{ serial: 'A1', product_id: 's' }, { serial: 'B1', product_id: 't' }]);
+    expect(half.complete).toBe(false);
+    expect(half.parts).toEqual([{ name: 'Screen', need: 1, got: ['A1'] }, { name: 'Stand', need: 2, got: ['B1'] }]);
+    const full = bundleScan(list, [{ serial: 'A1', product_id: 's' }, { serial: 'B1', product_id: 't' }, { serial: 'B2', product_id: 't' }]);
+    expect(full.complete).toBe(true);
+    const extra = bundleScan(list, [{ serial: 'A1', product_id: 's' }, { serial: 'A2', product_id: 's' }, { serial: 'B1', product_id: 't' }, { serial: 'B2', product_id: 't' }]);
+    expect(extra.extra).toEqual(['A2']);
+    expect(extra.complete).toBe(false);
   });
 });

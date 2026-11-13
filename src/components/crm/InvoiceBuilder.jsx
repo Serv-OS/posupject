@@ -6,7 +6,7 @@ import CreditNoteModal, { plainError, regionToday, loadCreditBasis } from './Cre
 import ApplyCreditModal, { allocError } from './ApplyCreditModal.jsx';
 import AmountReceivedModal from './AmountReceivedModal.jsx';
 import BillInStagesModal from './BillInStagesModal.jsx';
-import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT } from '../../lib/catalogue';
+import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT, bundleParts, bundleBuildable } from '../../lib/catalogue';
 import { round2, taxLabelFor, defaultTaxRateFor, currencySymbol, currencyLocale } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { downloadInvoicePdf, creditNotePdf } from '../../lib/invoicePdf';
@@ -138,7 +138,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       supabase.from('locations').select('id, name, company_id, address, city, postcode, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
       supabase.from('support_settings').select('invoice_terms, business_name, business_address, business_email, business_phone, logo_url, quote_accent').eq('id', 1).maybeSingle(),
-      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, category, is_bundle').eq('active', true).order('name'),
+      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, category, is_bundle, track_inventory').eq('active', true).order('name'),
       supabase.from('inv_serials').select('product_id').eq('status', 'in_stock'),
       // Newest first. An error (the credit notes migration not applied yet)
       // reads as no credit notes, so the invoice still opens.
@@ -783,7 +783,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
                       }}>
                       <option value="">+ Add from products…</option>
                       {products.map(p => <option key={p.id} value={p.id}>
-                        {p.name} — {listPrice(p, cur)}{stockCounts[p.id] != null ? ` (${stockCounts[p.id]} in stock)` : ''}
+                        {p.name} — {listPrice(p, cur)}{(() => { const n = p.is_bundle ? bundleBuildable(bundleParts(p.id, bundleRows, products, cur), stockCounts) : stockCounts[p.id]; return n != null ? ` (${n} in stock)` : ''; })()}
                       </option>)}
                     </select>
                   ) : (

@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { PackageMinus, CheckCircle2, XCircle } from 'lucide-react';
 import { parseSerials, stockOut, stageUnits, missingSite, notMoved } from '../../lib/inventoryOps';
 import TargetPicker from './TargetPicker';
+import { bundleParts, bundleScan } from '../../lib/catalogue';
 
 const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
 const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
@@ -17,6 +18,12 @@ export default function StockOutView({ profile, onNavigate }) {
   const [customerName, setCustomerName] = useState('');
   const [ref, setRef] = useState('');
   const [serialText, setSerialText] = useState('');
+  // Sending out a bundle (e.g. Kiosk - Counter mounted): scan each part.
+  const [bundles, setBundles] = useState([]);
+  const [bundleRows, setBundleRows] = useState([]);
+  const [partProducts, setPartProducts] = useState([]);
+  const [bundleId, setBundleId] = useState('');
+  const [region, setRegion] = useState('GBP');
   const [mode, setMode] = useState('dispatch'); // dispatch | stage
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -27,18 +34,26 @@ export default function StockOutView({ profile, onNavigate }) {
 
   useEffect(() => { load(); }, []);
   const load = async () => {
-    const [c, l, s, st] = await Promise.all([
+    const [c, l, s, st, pr, br] = await Promise.all([
       supabase.from('companies').select('id, name').order('name'),
       supabase.from('locations').select('id, name, company_id').order('name'),
-      supabase.from('inv_serials').select('serial, product_name, status').in('status', ['in_stock']),
+      supabase.from('inv_serials').select('serial, product_id, product_name, status').in('status', ['in_stock']),
       supabase.from('inv_serials').select('*, company:companies(name), location:locations(name)').eq('status', 'staged').order('updated_at', { ascending: false }),
+      supabase.from('products').select('id, name, is_bundle, track_inventory').order('name'),
+      supabase.from('product_bundle_items').select('bundle_id, component_id, region, qty, sort'),
     ]);
+    setPartProducts(pr.data || []); setBundles((pr.data || []).filter(p => p.is_bundle)); setBundleRows(br.data || []);
     setCompanies(c.data || []); setLocations(l.data || []); setInStock(s.data || []); setStaged(st.data || []);
   };
 
   const serials = parseSerials(serialText);
   const stockSet = new Set(inStock.map(r => r.serial));
   const invalid = serials.filter(s => !stockSet.has(s));
+  const bundle = bundles.find(b => b.id === bundleId) || null;
+  const regions = bundle ? ['GBP', 'USD'].filter(r => bundleRows.some(x => x.bundle_id === bundle.id && x.region === r)) : [];
+  const bRegion = regions.includes(region) ? region : regions[0] || 'GBP';
+  const unitBySerial = new Map(inStock.map(r => [r.serial, r]));
+  const scan = bundle ? bundleScan(bundleParts(bundle.id, bundleRows, partProducts, bRegion), serials.filter(x => unitBySerial.has(x)).map(x => unitBySerial.get(x))) : null;
 
   const submit = async () => {
     if (working.current) return;
@@ -46,14 +61,17 @@ export default function StockOutView({ profile, onNavigate }) {
     try {
       if (!serials.length) throw new Error('Enter at least one serial number.');
       if (invalid.length) throw new Error('Not in stock: ' + invalid.join(', '));
+      if (scan && !scan.complete) throw new Error(`The ${bundle.name} is not complete yet: scan every part, and nothing else.`);
+      // A bundle's parts go out together under one reference.
+      const useRef = ref || (bundle ? bundle.name : '');
       if (mode === 'dispatch') {
-        await stockOut({ serials, companyId, locationId, customerName, ref, byName: profile.display_name || profile.email, actorId: profile.id });
+        await stockOut({ serials, companyId, locationId, customerName, ref: useRef, byName: profile.display_name || profile.email, actorId: profile.id });
         setDone(`Dispatched ${serials.length} unit${serials.length !== 1 ? 's' : ''}.`);
       } else {
-        await stageUnits({ serials, companyId, locationId, customerName, ref });
+        await stageUnits({ serials, companyId, locationId, customerName, ref: useRef });
         setDone(`Staged ${serials.length} unit${serials.length !== 1 ? 's' : ''} for deployment.`);
       }
-      setSerialText(''); setRef('');
+      setSerialText(''); setRef(''); setBundleId('');
     } catch (e) { setError(e.message); }
     working.current = false; setSaving(false);
     load(); // a partial dispatch changed some units, so the lists must catch up
@@ -136,6 +154,37 @@ export default function StockOutView({ profile, onNavigate }) {
                 <input className={input} value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="One-off customer not in the CRM" /></div>
             )}
 
+            {bundles.length > 0 && (
+              <div className="glass-inner rounded-xl p-3 space-y-2">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="flex-1 min-w-[220px]"><label className={label}>Sending a bundle? (optional)</label>
+                    <select className={input} value={bundleId} onChange={e => setBundleId(e.target.value)}>
+                      <option value="">No, single items</option>
+                      {bundles.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select></div>
+                  {regions.length > 1 && (
+                    <div className="flex gap-1 bg-card rounded-xl p-0.5">
+                      {regions.map(r => <button key={r} onClick={() => setRegion(r)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${bRegion === r ? 'bg-ember text-white' : 'text-muted'}`}>{r === 'GBP' ? 'UK parts' : 'US parts'}</button>)}
+                    </div>
+                  )}
+                </div>
+                {scan && (scan.parts.length ? (
+                  <div className="space-y-1">
+                    {scan.parts.map(p => (
+                      <div key={p.name} className="flex items-center gap-2 text-sm">
+                        <span className={p.got.length === p.need ? 'text-emerald-600' : 'text-dim'}>{p.got.length === p.need ? '✓' : '○'}</span>
+                        <span className="text-paper">{p.name}</span>
+                        <span className="text-xs text-muted">{p.got.length} of {p.need} scanned</span>
+                        {p.got.length > 0 && <span className="font-mono text-[11px] text-dim">{p.got.join(', ')}</span>}
+                      </div>
+                    ))}
+                    {scan.extra.length > 0 && <div className="text-xs text-red-600">Not part of this bundle: {scan.extra.join(', ')}</div>}
+                    {scan.complete && <div className="text-xs text-emerald-700 font-semibold">All parts scanned.</div>}
+                  </div>
+                ) : <div className="text-xs text-muted">None of this bundle's parts are stock tracked, so there is nothing to scan.</div>)}
+              </div>
+            )}
+
             <div>
               <label className={label}>Serial numbers ({serials.length}{invalid.length ? ` · ${invalid.length} not in stock` : ''})</label>
               <textarea className={input + ' font-mono resize-none'} rows={4} value={serialText} onChange={e => setSerialText(e.target.value)}
@@ -152,7 +201,7 @@ export default function StockOutView({ profile, onNavigate }) {
             </div>
 
             {!canWrite && <div className="text-xs text-muted">Your login can view stock but not dispatch it.</div>}
-            <button onClick={submit} disabled={!canWrite || saving || !serials.length}
+            <button onClick={submit} disabled={!canWrite || saving || !serials.length || (scan && !scan.complete)}
               className="btn-glass px-6 py-2.5 rounded-xl text-sm font-semibold disabled:opacity-50">
               {saving ? 'Working…' : mode === 'dispatch' ? `Dispatch ${serials.length || ''}` : `Stage ${serials.length || ''}`}
             </button>

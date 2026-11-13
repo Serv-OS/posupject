@@ -72,7 +72,7 @@ const QLINES = [
   { id: 'ql3', quote_id: 'q1', name: 'Install & training', category: 'services', billing_type: 'one_off', qty: 4, unit_price: 60, discount: 10, tax_rate: 20, sort: 2 },
   { id: 'ql4', quote_id: 'q1', name: 'ServOS Growth', category: 'saas', billing_type: 'monthly', qty: 1, unit_price: 149, discount: 0, tax_rate: 20, line_total: 149, sort: 3 },
 ];
-const PRODUCTS = [{ id: 'pr1', name: 'Lightspeed terminal', category: 'hardware', billing_type: 'one_off', default_price: 390, default_price_usd: 549, cost_price: 260, cost_price_usd: 340, active: true }, { id: 'pr2', name: 'Card reader', category: 'hardware', billing_type: 'one_off', default_price: 149, active: true }, { id: 'pr3', name: 'ServOS Growth', category: 'saas', billing_type: 'monthly', default_price: 149, default_price_usd: 199, active: true }, { id: 'pr4', name: 'Kiosk stand (US only)', category: 'hardware', billing_type: 'one_off', default_price: null, default_price_usd: 899, cost_price_usd: 610, active: true }, { id: 'pr5', name: 'Kiosk - Counter mounted', description: 'Kiosk fitted to the counter, ready to take orders.', sku: 'KIO-CM-UK', sku_us: 'KIO-CM-US', is_bundle: true, category: 'hardware', billing_type: 'one_off', default_price: 899, default_price_usd: 1299, active: true }];
+const PRODUCTS = [{ id: 'pr1', name: 'Lightspeed terminal', track_inventory: true, category: 'hardware', billing_type: 'one_off', default_price: 390, default_price_usd: 549, cost_price: 260, cost_price_usd: 340, active: true }, { id: 'pr2', name: 'Card reader', track_inventory: true, category: 'hardware', billing_type: 'one_off', default_price: 149, active: true }, { id: 'pr3', name: 'ServOS Growth', category: 'saas', billing_type: 'monthly', default_price: 149, default_price_usd: 199, active: true }, { id: 'pr4', name: 'Kiosk stand (US only)', category: 'hardware', billing_type: 'one_off', default_price: null, default_price_usd: 899, cost_price_usd: 610, active: true }, { id: 'pr5', name: 'Kiosk - Counter mounted', description: 'Kiosk fitted to the counter, ready to take orders.', sku: 'KIO-CM-UK', sku_us: 'KIO-CM-US', is_bundle: true, category: 'hardware', billing_type: 'one_off', default_price: 899, default_price_usd: 1299, active: true }];
 // Kiosk - Counter mounted: different parts in each market (migration 123).
 const BUNDLE_ROWS = [
   { bundle_id: 'pr5', component_id: 'pr1', region: 'GBP', qty: 1, sort: 0, component: { id: 'pr1', name: 'Lightspeed terminal', default_price: 390, default_price_usd: 549 } },
@@ -97,6 +97,10 @@ const SERIALS = [
   unitRow('sn10', 'DP01264210762', 'Sunmi D3 Pro', 'POS Terminal', { company_id: 'c5', cost: 323.6 }),
   unitRow('sn11', 'DP01264210999', 'Sunmi D3 Pro', 'POS Terminal', { status: 'in_stock', deployed_at: null, warehouse_id: 'wh1', cost: 323.6 }),
   unitRow('sn12', 'X88C3000600300', 'TV Menu Stick', 'Menu Board', { status: 'in_stock', deployed_at: null, warehouse_id: 'wh1', cost: 55 }),
+  // In the store for the Kiosk - Counter mounted bundle (pr5: 1 terminal + 2 card readers, UK).
+  unitRow('sn13', 'LS-90001', 'Lightspeed terminal', 'POS Terminal', { product_id: 'pr1', status: 'in_stock', deployed_at: null, warehouse_id: 'wh1' }),
+  unitRow('sn14', 'CR-2001', 'Card reader', 'Payment Terminal', { product_id: 'pr2', status: 'in_stock', deployed_at: null, warehouse_id: 'wh1' }),
+  unitRow('sn15', 'CR-2002', 'Card reader', 'Payment Terminal', { product_id: 'pr2', status: 'in_stock', deployed_at: null, warehouse_id: 'wh1' }),
 ];
 const MOVEMENTS = [{ id: 'mv1', type: 'out', product_name: 'TV Menu Stick', serials: ['X88C3000600024'], qty: 1, company_id: 'c5', location_id: null, ref: 'Barnsley STN', by_name: 'duncan', occurred_at: ts(-3) }];
 const ACTIVITIES = [
