@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { MobileTable, MobileDock, DockField, Mono, Segmented } from './ui.jsx';
 import { supabase } from '../../lib/supabase';
 import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download, FileMinus, Wallet } from 'lucide-react';
-import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT } from '../../lib/catalogue';
+import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT, isSellable } from '../../lib/catalogue';
 import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, currencyLocale, defaultTaxRateFor } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { useStickyState } from '../../lib/stickyState';
@@ -129,7 +129,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
       supabase.from('companies').select('id, name, country').order('name'),
       supabase.from('locations').select('id, name, company_id, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
-      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, is_bundle').eq('active', true).order('name'),
+      supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, is_bundle, sold_separately').eq('active', true).order('name'),
       // Newest first. An error (the credit notes migration not applied yet)
       // just leaves the tab empty rather than breaking the invoice list.
       supabase.from('credit_notes').select('*, invoice:invoices(invoice_number), company:companies(name), location:locations(name)')
@@ -865,7 +865,7 @@ function ScheduleModal({ schedule, companies, locations, contacts, products = []
                       });
                     }}>
                     <option value="">+ From products…</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name} — {listPrice(p, f.currency)}</option>)}
+                    {products.filter(isSellable).map(p => <option key={p.id} value={p.id}>{p.name} — {listPrice(p, f.currency)}</option>)}
                   </select>
                 )}
                 <button onClick={() => setLines(p => [...p, { name: '', description: '', qty: 1, unit_price: 0 }])}

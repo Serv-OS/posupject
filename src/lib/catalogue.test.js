@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { priceFor, costFor, isPricedIn, listPrice, unitPriceFor, marginFor, skuFor, bundleParts, includesText, lineDescriptionFor, partsTotalFor, partsCostFor, bundleBuildable, bundleScan } from './catalogue.js';
+import { priceFor, costFor, isPricedIn, listPrice, unitPriceFor, marginFor, skuFor, bundleParts, includesText, lineDescriptionFor, partsTotalFor, partsCostFor, bundleBuildable, bundleScan, isSellable } from './catalogue.js';
 
 // Priced in both. The dollar price is deliberately NOT 1.27 x the pound one:
 // items sell for more in the US, and the point of the column is that nothing
@@ -149,5 +149,13 @@ describe('bundle stock', () => {
     const extra = bundleScan(list, [{ serial: 'A1', product_id: 's' }, { serial: 'A2', product_id: 's' }, { serial: 'B1', product_id: 't' }, { serial: 'B2', product_id: 't' }]);
     expect(extra.extra).toEqual(['A2']);
     expect(extra.complete).toBe(false);
+  });
+});
+
+describe('isSellable', () => {
+  it('offers everything except a part only product', () => {
+    expect(isSellable({ sold_separately: false })).toBe(false);
+    expect(isSellable({ sold_separately: true })).toBe(true);
+    expect(isSellable({})).toBe(true);
   });
 });

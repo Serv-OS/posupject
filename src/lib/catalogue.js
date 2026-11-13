@@ -12,6 +12,9 @@ const COST = { GBP: 'cost_price', USD: 'cost_price_usd' };
 const ccyOf = (c) => (c === 'USD' ? 'USD' : 'GBP');
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
 
+/** Offered on quotes and invoices? A part only product (migration 124) is not. */
+export const isSellable = (p) => p?.sold_separately !== false;
+
 /** The selling price in a currency, or null when the product is not priced in it. */
 export const priceFor = (p, ccy) => num(p?.[COL[ccyOf(ccy)]]);
 /** The cost price in a currency, or null. */

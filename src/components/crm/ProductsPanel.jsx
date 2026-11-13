@@ -17,6 +17,7 @@ const SHOW = {
   active: { label: 'Active only', test: (p) => p.active },
   inactive: { label: 'Inactive', test: (p) => !p.active },
   bundles: { label: 'Bundles', test: (p) => p.is_bundle },
+  parts: { label: 'Parts only (not sold)', test: (p) => p.sold_separately === false },
   tracked: { label: 'Stock tracked', test: (p) => p.track_inventory },
   low: { label: 'Low stock', test: (p, { stockCounts }) => p.track_inventory && p.default_threshold != null && (stockCounts[p.name]?.in_stock || 0) <= p.default_threshold },
   no_price: { label: 'Missing a £ or $ price', test: (p) => p.default_price == null || p.default_price_usd == null },
@@ -31,7 +32,7 @@ const CATALOGUE_CCY = 'GBP';
 const SYM = currencySymbol(CATALOGUE_CCY);
 const TAX = taxLabelFor(CATALOGUE_CCY);
 
-const blank = { name: '', description: '', sku: '', category: 'hardware', billing_type: 'one_off', default_price: '', cost_price: '', default_price_usd: '', cost_price_usd: '', cost_tax_rate: defaultTaxRateFor(CATALOGUE_CCY), unit: '', active: true, track_inventory: false, inv_category: '', default_threshold: '', supplier_id: '', sku_us: '', is_bundle: false, notes: '', parts: { GBP: [], USD: [] } };
+const blank = { name: '', description: '', sku: '', category: 'hardware', billing_type: 'one_off', default_price: '', cost_price: '', default_price_usd: '', cost_price_usd: '', cost_tax_rate: defaultTaxRateFor(CATALOGUE_CCY), unit: '', active: true, track_inventory: false, inv_category: '', default_threshold: '', supplier_id: '', sku_us: '', is_bundle: false, sold_separately: true, notes: '', parts: { GBP: [], USD: [] } };
 const REGIONS = [{ ccy: 'GBP', label: 'UK parts' }, { ccy: 'USD', label: 'US parts' }];
 
 export default function ProductsPanel({ profile }) {
@@ -98,7 +99,7 @@ export default function ProductsPanel({ profile }) {
     if (!draft.name.trim()) { alert('Name is required.'); return; }
     const payload = {
       name: draft.name.trim(), description: draft.description?.trim() || null, sku: draft.sku?.trim() || null,
-      sku_us: draft.sku_us?.trim() || null, is_bundle: !!draft.is_bundle,
+      sku_us: draft.sku_us?.trim() || null, is_bundle: !!draft.is_bundle, sold_separately: draft.sold_separately !== false,
       category: draft.category, billing_type: draft.billing_type,
       // Empty is "not priced for the UK yet", not £0: a US-only product must not look priced at nothing on a pound quote.
       default_price: draft.default_price === '' || draft.default_price == null ? null : parseFloat(draft.default_price),
@@ -254,6 +255,7 @@ export default function ProductsPanel({ profile }) {
                         <span className="text-sm font-semibold text-paper">{p.name}</span>
                         {!p.active && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-slate-100 text-slate-500">Inactive</span>}
                         {p.is_bundle && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-ember/10 text-ember">Bundle</span>}
+                        {p.sold_separately === false && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-sky-100 text-sky-700">Part only</span>}
                         {(p.sku || p.sku_us) && <span className="text-[10px] font-mono text-dim">{p.sku && `UK ${p.sku}`}{p.sku && p.sku_us && ' · '}{p.sku_us && `US ${p.sku_us}`}</span>}
                       </div>
                       {p.is_bundle && REGIONS.map(({ ccy }) => {
@@ -312,7 +314,11 @@ export default function ProductsPanel({ profile }) {
                   <div><label className={label}>Billing</label><select className={input} value={draft.billing_type} onChange={e => setDraft({ ...draft, billing_type: e.target.value })}>
                     {Object.entries(BILLING).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
                   <div><label className={label}>Unit</label><input className={input} value={draft.unit || ''} onChange={e => setDraft({ ...draft, unit: e.target.value })} placeholder="per till…" /></div>
-                  <label className="flex items-end gap-2 text-sm text-paper cursor-pointer pb-2"><input type="checkbox" checked={draft.active} onChange={e => setDraft({ ...draft, active: e.target.checked })} className="accent-ember" /> Active on quotes</label>
+                  <label className="flex items-end gap-2 text-sm text-paper cursor-pointer pb-2"><input type="checkbox" checked={draft.active} onChange={e => setDraft({ ...draft, active: e.target.checked })} className="accent-ember" /> Active</label>
+                  <label className="col-span-2 sm:col-span-4 flex items-start gap-2 text-sm text-paper cursor-pointer">
+                    <input type="checkbox" checked={draft.sold_separately !== false} onChange={e => setDraft({ ...draft, sold_separately: e.target.checked })} className="accent-ember mt-0.5" />
+                    <span>Sold on its own <span className="text-[11px] text-dim">(untick for a part, e.g. a Sunmi screen that only goes into bundles: it stays in stock and bundles but is not offered on quotes or invoices)</span></span>
+                  </label>
                 </div>
               </div>
 

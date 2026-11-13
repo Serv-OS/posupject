@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import { AccountModal, accountSavings, ccyOf, moneyFor, pct2, RATE_CATEGORIES, rowCalc, isPriced } from './PaymentsPanel.jsx';
-import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT } from '../../lib/catalogue';
+import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT, isSellable } from '../../lib/catalogue';
 import { fmtMoney, currencySymbol, taxLabelFor, defaultTaxRateFor, round2, lineNet } from '../../lib/money';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
 import { sortQuoteLines, saasStartText, customerRecurring } from '../../lib/quoteLines';
@@ -93,7 +93,9 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
 
   // Quote currency drives every figure, label and tax default on this screen.
   const cur = quote?.currency || 'GBP';
-  const unpriced = products.filter(p => !isPricedIn(p, cur));
+  // What the pickers offer: parts only products stay out (they still price lines already on the quote).
+  const forSale = products.filter(isSellable);
+  const unpriced = forSale.filter(p => !isPricedIn(p, cur));
   // Changing the quote's currency re-prices every catalogue line in the new
   // money and moves lines still on the old default tax rate to the new one.
   // A price is never carried across: £149 is not $149. Custom lines have no
@@ -520,7 +522,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
         {sheet === 'add' && (
           <MobileSheet title="Add item" sub={unpriced.length ? `${unpriced.length} product${unpriced.length === 1 ? ' has' : 's have'} no ${currencySymbol(cur)} price yet and will land at 0 to type. Set it under Products.` : 'Search the catalogue, or add a custom line'} onClose={() => setSheet(null)} tall>
             <input autoFocus value={itemQ} onChange={e => setItemQ(e.target.value)} placeholder="Search products…" className="w-full px-[15px] py-[13px] rounded-[12px] border bg-transparent text-[15px] text-paper placeholder-dim focus:outline-none" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
-            {products.filter(p => !itemQ.trim() || `${p.name} ${CAT_LABEL[p.category]}`.toLowerCase().includes(itemQ.trim().toLowerCase())).slice(0, 40).map(p => (
+            {forSale.filter(p => !itemQ.trim() || `${p.name} ${CAT_LABEL[p.category]}`.toLowerCase().includes(itemQ.trim().toLowerCase())).slice(0, 40).map(p => (
               <SheetRow key={p.id} sub={`${CAT_LABEL[p.category]} · ${p.billing_type === 'monthly' ? 'monthly' : 'one-off'}`} trailing={<span className="font-mono text-[13px] text-paper">{listPrice(p, cur)}</span>} onClick={() => { addProduct(p); setSheet({ item: items.length }); }}>{p.name}</SheetRow>
             ))}
             <SheetRow onClick={() => { addCustom(); setSheet({ item: items.length }); }} sub="Name, price and tax by hand">+ Custom item</SheetRow>
@@ -619,7 +621,7 @@ export default function QuoteBuilder({ quoteId, profile, onClose, onNavigate }) 
                   <div className="ml-auto flex items-center gap-2">
                     <select className={cell + ' text-xs'} value="" onChange={e => { const p = products.find(x => x.id === e.target.value); if (p) addProduct(p); e.target.value = ''; }}>
                       <option value="">+ Add product…</option>
-                      {products.map(p => <option key={p.id} value={p.id}>{CAT_LABEL[p.category]}: {p.name} ({listPrice(p, cur)})</option>)}
+                      {forSale.map(p => <option key={p.id} value={p.id}>{CAT_LABEL[p.category]}: {p.name} ({listPrice(p, cur)})</option>)}
                     </select>
                     <button onClick={addCustom} className="text-xs text-ember hover:text-ember-deep font-medium">+ Custom</button>
                   </div>
