@@ -4,18 +4,10 @@ import { sumByCurrency, fmtMoney0 } from '../../lib/money';
 import { currencyForCountry } from '../../lib/region';
 import { handleClosedWon } from '../../lib/dealHelpers';
 import { fmtDay } from '../../lib/day';
+import { DEAL_STAGES, FIRST_DEAL_STAGE } from '../../lib/dealStages';
 
-const STAGES = [
-  { key: 'new_lead',       label: 'New Lead',       color: '#3b82f6' },
-  { key: 'contacted',      label: 'Contacted',      color: '#6366f1' },
-  { key: 'qualified',      label: 'Qualified',      color: '#8b5cf6' },
-  { key: 'demo_booked',    label: 'Demo Booked',    color: '#a855f7' },
-  { key: 'demo_done',      label: 'Demo Done',      color: '#E8743C' },
-  { key: 'proposal_sent',  label: 'Proposal Sent',  color: '#C75A29' },
-  { key: 'negotiation',    label: 'Negotiation',    color: '#eab308' },
-  { key: 'closed_won',     label: 'Closed Won',     color: '#10b981' },
-  { key: 'closed_lost',    label: 'Closed Lost',    color: '#ef4444' },
-];
+// The pipeline lives in lib/dealStages, shared with the deal page and reports.
+const STAGES = DEAL_STAGES;
 
 export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
   const [deals, setDeals] = useState([]);
@@ -87,6 +79,12 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
   const moveDeal = async (dealId, fromStage, toStage) => {
     if (fromStage === toStage) return;
     const patch = { stage: toStage };
+    // Lost always says why, so the reasons can be counted later.
+    if (toStage === 'closed_lost') {
+      const why = window.prompt('Why was this deal lost? (price, went with a competitor, no decision, timing, other)');
+      if (why === null) return;
+      if (why.trim()) patch.lost_reason = why.trim();
+    }
     if (toStage === 'closed_won' || toStage === 'closed_lost') {
       patch.closed_at = new Date().toISOString();
     } else {
@@ -144,12 +142,13 @@ export default function DealBoard({ profile, onSelectDeal, onNavigate }) {
       value: newValue ? parseFloat(newValue) : null,
       currency: newCurrency,
       owner_id: profile.id,
+      stage: FIRST_DEAL_STAGE,
     }).select().single();
     if (error) { alert('Could not create deal: ' + error.message); return; }
     if (data) {
       // Write initial stage history
       await supabase.from('stage_history').insert({
-        object_type: 'deal', object_id: data.id, from_stage: null, to_stage: 'new_lead', changed_by: profile.id,
+        object_type: 'deal', object_id: data.id, from_stage: null, to_stage: FIRST_DEAL_STAGE, changed_by: profile.id,
       });
       // Auto-link the location if one was selected
       if (newLocation) {

@@ -89,11 +89,9 @@ export function estimateAccuracy(estimated, actual) {
   return (a - e) / e;          // +0.10 = doing 10% better than they said
 }
 
-export const DEFAULT_STAGE_WEIGHTS = {
-  new_lead: 0.05, contacted: 0.10, qualified: 0.25, demo_booked: 0.40,
-  demo_done: 0.55, proposal_sent: 0.70, negotiation: 0.85,
-  closed_won: 1, closed_lost: 0,
-};
+// The pipeline's own odds per stage (lib/dealStages); the table can override them.
+import { DEFAULT_STAGE_WEIGHTS } from './dealStages.js';
+export { DEFAULT_STAGE_WEIGHTS };
 
 /**
  * Pipeline view of a set of deals: best case, likely case, and already won.

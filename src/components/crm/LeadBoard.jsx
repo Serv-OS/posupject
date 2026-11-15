@@ -197,7 +197,7 @@ export default function LeadBoard({ profile, onNavigate, prefill, onPrefillConsu
     }).select().single();
 
     if (deal) {
-      await supabase.from('stage_history').insert({ object_type: 'deal', object_id: deal.id, from_stage: null, to_stage: 'new_lead', changed_by: profile.id });
+      await supabase.from('stage_history').insert({ object_type: 'deal', object_id: deal.id, from_stage: null, to_stage: 'discovery', changed_by: profile.id });
       if (lead.contact_id) {
         await supabase.from('associations').insert({ from_type: 'deal', from_id: deal.id, to_type: 'contact', to_id: lead.contact_id, label: 'primary_contact' });
       }

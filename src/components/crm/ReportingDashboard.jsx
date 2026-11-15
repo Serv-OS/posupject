@@ -1,3 +1,4 @@
+import { DEAL_STAGE_KEYS } from '../../lib/dealStages';
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 import { paymentsArrFromRates } from '../../lib/paymentsArr';
@@ -5,7 +6,8 @@ import { ccyOf } from './PaymentsPanel.jsx';
 import { pipelineTotals, DEFAULT_STAGE_WEIGHTS } from '../../lib/trading';
 
 // The deal stages, in order, with the names the rest of the app uses.
-const DEAL_STAGE_ORDER = ['new_lead', 'contacted', 'qualified', 'demo_booked', 'demo_done', 'proposal_sent', 'negotiation', 'closed_won', 'closed_lost'];
+// The pipeline order lives in lib/dealStages.
+const DEAL_STAGE_ORDER = DEAL_STAGE_KEYS;
 const DEAL_STAGE_LABELS = {
   new_lead: 'New Lead', contacted: 'Contacted', qualified: 'Qualified', demo_booked: 'Demo Booked',
   demo_done: 'Demo Done', proposal_sent: 'Proposal Sent', negotiation: 'Negotiation',
@@ -430,8 +432,10 @@ export default function ReportingDashboard({ profile, onNavigate }) {
       const onsiteWeek = myActs.filter(a => a.type === 'meeting' && new Date(a.occurred_at).getTime() >= weekStart).length;
 
       const myHist = stageHistory.filter(h => h.object_type === 'deal' && h.changed_by === m.id && h.changed_at && new Date(h.changed_at).getTime() >= weekStart);
-      const demosScheduled = myHist.filter(h => h.to_stage === 'demo_booked').length;
-      const demosRun = myHist.filter(h => h.to_stage === 'demo_done').length;
+      // Demo is one stage now: moving into it is a demo booked, moving on from it
+      // (anything but Lost) is a demo run. The old keys still count for older history.
+      const demosScheduled = myHist.filter(h => h.to_stage === 'demo' || h.to_stage === 'demo_booked').length;
+      const demosRun = myHist.filter(h => (h.from_stage === 'demo' && h.to_stage !== 'closed_lost') || h.to_stage === 'demo_done').length;
 
       return { id: m.id, name: ownerName(m.id), arrClosed, attainment, commission, wonCount: wonThisMonth.length, actsToday, actsWeek, onsiteWeek, demosScheduled, demosRun };
     }).sort((a, b) => ((b.arrClosed.GBP || 0) - (a.arrClosed.GBP || 0)) || ((b.arrClosed.USD || 0) - (a.arrClosed.USD || 0)));

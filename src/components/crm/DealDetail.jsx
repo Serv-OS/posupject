@@ -13,16 +13,11 @@ import AssociationManager from './AssociationManager.jsx';
 import ActivityTimeline from './ActivityTimeline.jsx';
 import { NOT_ON_DEAL_MSG } from './QuotesPanel.jsx';
 import { fmtDay, toDayISO } from '../../lib/day';
+import { DEAL_STAGE_KEYS, stageLabel } from '../../lib/dealStages';
 
-const STAGES = [
-  'new_lead','contacted','qualified','demo_booked','demo_done',
-  'proposal_sent','negotiation','closed_won','closed_lost'
-];
-const STAGE_LABELS = {
-  new_lead:'New Lead', contacted:'Contacted', qualified:'Qualified',
-  demo_booked:'Demo Booked', demo_done:'Demo Done', proposal_sent:'Proposal Sent',
-  negotiation:'Negotiation', closed_won:'Closed Won', closed_lost:'Closed Lost',
-};
+// The pipeline lives in lib/dealStages; old keys in the history still read as words.
+const STAGES = DEAL_STAGE_KEYS;
+const STAGE_LABELS = new Proxy({}, { get: (_, k) => stageLabel(typeof k === 'string' ? k : '') });
 
 export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
   const [deal, setDeal] = useState(null);
@@ -140,6 +135,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
       value: draft.value || null,
       currency: draft.currency || 'GBP',
       expected_close_date: draft.expected_close_date || null,
+      demo_date: draft.demo_date || null,
       source: draft.source || null,
       notes: draft.notes || null,
       lost_reason: draft.lost_reason || null,
@@ -284,7 +280,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                   { key: 'name', label: 'Name' },
                   { key: 'company_id', label: 'Company', type: 'select', options: companies.map(c => [c.id, c.name]) },
                   { key: 'stage', label: 'Stage', type: 'select', options: STAGES.map(s => [s, STAGE_LABELS[s]]) },
-                  { key: 'source', label: 'Source' }, { key: 'expected_close_date', label: 'Expected close', type: 'date' },
+                  { key: 'source', label: 'Source' }, { key: 'demo_date', label: 'Demo date', type: 'date' }, { key: 'expected_close_date', label: 'Expected close', type: 'date' },
                   { key: 'owner_id', label: 'Owner', type: 'select', options: [['', 'Unassigned'], ...members.map(m => [m.id, m.display_name || m.email])] },
                 ] },
                 { title: `Revenue breakdown (${dealCcy})`, summary: 'one-time, ARR, total', fields: [
@@ -307,6 +303,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                 <div><label className={label}>Stage</label><select className={input} value={draft.stage} onChange={e => set('stage', e.target.value)}>
                   {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}</select></div>
                 <div><label className={label}>Source</label><input className={input} value={draft.source || ''} onChange={e => set('source', e.target.value)} /></div>
+                <div><label className={label}>Demo date</label><input className={input} type="date" value={draft.demo_date || ''} onChange={e => set('demo_date', e.target.value || null)} /></div>
                 <div><label className={label}>Expected close</label><input className={input} type="date" value={draft.expected_close_date || ''} onChange={e => set('expected_close_date', e.target.value || null)} /></div>
                 <div><label className={label}>Owner</label><select className={input} value={draft.owner_id || ''} onChange={e => set('owner_id', e.target.value || null)}>
                   <option value="">Unassigned</option>{members.map(m => <option key={m.id} value={m.id}>{m.display_name || m.email}</option>)}</select></div>
@@ -339,6 +336,7 @@ export default function DealDetail({ dealId, profile, onClose, onNavigate }) {
                 <div className="space-y-3">
                   <Field label="Stage" value={STAGE_LABELS[deal.stage]} />
                   <Field label="Source" value={deal.source} />
+                  <Field label="Demo date" value={fmtDay(deal.demo_date, { day: '2-digit', month: '2-digit', year: 'numeric' }) || null} />
                   <Field label="Expected close" value={fmtDay(deal.expected_close_date, { day: '2-digit', month: '2-digit', year: 'numeric' }) || null} />
                   <Field label="Owner" value={ownerName(deal.owner_id)} />
                   <Field label="Created" value={new Date(deal.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })} />

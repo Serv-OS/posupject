@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { stageLabel } from '../../lib/dealStages';
 import { supabase } from '../../lib/supabase';
 import { EditSheet } from './ui.jsx';
 import TimerButton from './TimerButton.jsx';
@@ -125,7 +126,8 @@ export default function CompanyDetail({ companyId, profile, onClose, onNavigate,
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
 
-  const DEAL_STAGES = { new_lead:'New Lead', contacted:'Contacted', qualified:'Qualified', demo_booked:'Demo Booked', demo_done:'Demo Done', proposal_sent:'Proposal', negotiation:'Negotiation', closed_won:'Won', closed_lost:'Lost' };
+  // Stage words from the one pipeline list (lib/dealStages).
+  const DEAL_STAGES = new Proxy({}, { get: (_, k) => stageLabel(typeof k === 'string' ? k : '') });
 
   return (
     <div className="h-full flex flex-col">
