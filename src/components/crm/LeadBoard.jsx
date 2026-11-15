@@ -188,13 +188,14 @@ export default function LeadBoard({ profile, onNavigate, prefill, onPrefillConsu
   };
 
   const convertToDeal = async (lead) => {
-    const { data: deal } = await supabase.from('deals').insert({
+    const { data: deal, error } = await supabase.from('deals').insert({
       name: `Deal: ${lead.name}`,
       company_id: lead.company_id,
       owner_id: lead.owner_id || profile.id,
       source: lead.source,
       currency: await currencyForLead(lead),
     }).select().single();
+    if (error) { alert('Could not create the deal: ' + error.message); load(); return; }
 
     if (deal) {
       await supabase.from('stage_history').insert({ object_type: 'deal', object_id: deal.id, from_stage: null, to_stage: 'discovery', changed_by: profile.id });
@@ -299,7 +300,16 @@ export default function LeadBoard({ profile, onNavigate, prefill, onPrefillConsu
 
   const onDragStart = (e, lead) => { setDragItem(lead); e.dataTransfer.effectAllowed = 'move'; };
   const onDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
-  const onDrop = (e, stageKey) => { e.preventDefault(); if (dragItem) moveStage(dragItem.id, stageKey); setDragItem(null); };
+  // Dropping on Deal makes the deal (as the Convert button does); a lead that
+  // already has one just moves.
+  const onDrop = (e, stageKey) => {
+    e.preventDefault();
+    if (dragItem && dragItem.stage !== stageKey) {
+      if (stageKey === 'deal' && !dragItem.deal_id && canWrite) convertToDeal(dragItem);
+      else moveStage(dragItem.id, stageKey);
+    }
+    setDragItem(null);
+  };
 
   const input = "w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper placeholder-dim focus:outline-none focus:border-ember";
   const label = "text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block";
@@ -461,6 +471,11 @@ export default function LeadBoard({ profile, onNavigate, prefill, onPrefillConsu
 
                       <div className="flex items-center gap-1 mt-2">
                         {lead.source && <span className="px-1 py-0.5 text-[8px] bg-slate-100 text-slate-600 rounded">{lead.source.replace(/_/g, ' ')}</span>}
+                        {/* On Deal without a deal behind it (dragged there before 15 Nov): make it now. */}
+                        {stage.key === 'deal' && !lead.deal_id && canWrite && (
+                          <button onClick={(e) => { e.stopPropagation(); convertToDeal(lead); }}
+                            className="ml-auto px-2 py-0.5 text-[9px] font-bold bg-amber-100 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-200">Create deal</button>
+                        )}
                         {stage.key === 'sql' && canWrite && (
                           <button onClick={(e) => { e.stopPropagation(); convertToDeal(lead); }}
                             className="ml-auto px-2 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-200">Deal</button>
