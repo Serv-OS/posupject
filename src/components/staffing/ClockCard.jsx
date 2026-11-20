@@ -31,17 +31,24 @@ export default function ClockCard({ profile }) {
     // evening punch never lands on the wrong day.
     const { data: bd } = await supabase.rpc('business_today');
     const day = bd || toDayISO();
-    const [{ data: rows }, { data: sh }] = await Promise.all([
+    // The open punch is looked for on ANY day, the same way punch() does. A
+    // shift left open from an earlier day used to be invisible here: the card
+    // said "Not clocked in", Clock in said "already clocked in", and there was
+    // no Clock out to press (Duncan, open since 17 Nov 2026).
+    const [{ data: rows }, { data: sh }, { data: openRows }] = await Promise.all([
       supabase.from('shift_punches').select('*')
         .eq('user_id', profile.id).eq('business_date', day)
         .order('clock_in', { ascending: true }),
       supabase.from('shifts').select('id, date, start_time, finish_time, status')
-        .eq('user_id', profile.id).eq('date', day).maybeSingle(),
+        .eq('user_id', profile.id).eq('date', day).limit(1),
+      supabase.from('shift_punches').select('*')
+        .eq('user_id', profile.id).is('clock_out', null)
+        .order('clock_in', { ascending: false }).limit(1),
     ]);
-    const open = (rows || []).find(r => !r.clock_out) || null;
+    const open = openRows?.[0] || null;
     setPunch(open);
     setToday((rows || []).filter(r => r.clock_out));
-    setShift(sh || null);
+    setShift(sh?.[0] || null);
   }, [profile.id]);
 
   useEffect(() => { load(); }, [load]);
@@ -88,7 +95,9 @@ export default function ClockCard({ profile }) {
                 {onBreak ? 'On a break' : 'Clocked in'} · {asHours(elapsed)}
               </div>
               <div className="text-xs text-muted">
-                Since {hhmm(punch.clock_in)}
+                Since {new Date(punch.clock_in).toDateString() !== new Date().toDateString()
+                  ? `${new Date(punch.clock_in).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} `
+                  : ''}{hhmm(punch.clock_in)}
                 {punch.break_mins > 0 && ` · ${punch.break_mins}m break`}
                 {punch.scheduled_start_at && ` · rota ${hhmm(punch.scheduled_start_at)}–${hhmm(punch.scheduled_finish_at)}`}
               </div>
