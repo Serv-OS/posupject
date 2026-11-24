@@ -75,12 +75,14 @@ const PERSONAL_AUTOFILL = {
 function autofillFor(key, ctx) {
   if (PERSONAL_AUTOFILL[key]) return ctx.individual ? PERSONAL_AUTOFILL[key] : 'off';
   if (key === 'representative.name') return 'off';
+  // Other owners are never the person holding the phone.
+  if (/^owner\d\./.test(key)) return 'off';
   return undefined;
 }
 // Phone keyboards capitalise and correct as you type. Right for names, wrong
 // for a company number, and a capitalised first letter breaks a WiFi password.
 const CAPITALS = new Set(['company.company_number', 'vat.number']);
-const NAMES = new Set(['company.legal_name', 'company.contact_name', 'representative.name', 'bank.holder_name', 'trading.trading_name', 'signoff.full_name']);
+const NAMES = new Set(['company.legal_name', 'company.contact_name', 'representative.name', 'bank.holder_name', 'trading.trading_name', 'signoff.full_name', 'owner2.name', 'owner3.name', 'owner4.name']);
 const LITERAL = new Set(['network.wifi_name', 'network.wifi_password', 'users.bo_users']);
 function keyboardFor(key, type) {
   if (type === 'email' || LITERAL.has(key)) return { autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false };

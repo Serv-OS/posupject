@@ -5,7 +5,9 @@
 // and a Deno URL import would stop vitest loading it.
 //
 // What is secure: bank numbers, the legal representative's date of birth and
-// home address, and their photo ID. None of it ever sits in
+// home address, and their photo ID. In the US also every SSN, the other
+// owners' dates of birth and home addresses, and the EIN letter, formation
+// document and voided check. None of it ever sits in
 // onboarding_form_requests.answers, which every logged in user can read, or in
 // the attachments bucket, where any logged in user can read, list and delete
 // every object. Values live in onboarding_form_secure and files in the private
@@ -30,11 +32,24 @@ export const SECURE_VALUE_KEYS: readonly string[] = [
   "bank.routing_number",
   "bank.account_number",
   "representative.dob",
+  "representative.ssn",
   "representative.home_address",
+  "owner2.dob",
+  "owner2.ssn",
+  "owner2.home_address",
+  "owner3.dob",
+  "owner3.ssn",
+  "owner3.home_address",
+  "owner4.dob",
+  "owner4.ssn",
+  "owner4.home_address",
 ];
 
 /** 'section.field' keys whose files live in the onboarding-secure bucket. */
 export const SECURE_FILE_KEYS: readonly string[] = [
+  "company.ein_letter",
+  "company.formation_doc",
+  "bank.bank_doc",
   "representative.id_passport",
   "representative.id_front",
   "representative.id_back",
@@ -134,13 +149,28 @@ export const TERMS_VERSION = 3;
  *  the licence images behind. */
 export function secureVisible(answers: Obj | null | undefined, region: string): Set<string> {
   const us = String(region ?? "").toUpperCase() === "US";
-  const rep = obj(obj(answers).representative);
+  const a = obj(answers);
+  const rep = obj(a.representative);
+  const ind = obj(a.company).entity_type === "Individual";
   const out = new Set<string>([
     us ? "bank.routing_number" : "bank.sort_code",
     "bank.account_number",
     "representative.dob",
   ]);
   if (rep.home_same === "No") out.add("representative.home_address");
+  // US only: the Know Your Customer documents and numbers.
+  if (us) {
+    out.add("bank.bank_doc");
+    out.add("representative.ssn");
+    if (!ind) {
+      out.add("company.ein_letter");
+      out.add("company.formation_doc");
+      const more = ({ "No": 0, "1 more": 1, "2 more": 2, "3 more": 3 } as Record<string, number>)[str(obj(a.owners).others)] || 0;
+      for (let n = 2; n <= 1 + more; n++) {
+        for (const f of ["dob", "ssn", "home_address"]) out.add(`owner${n}.${f}`);
+      }
+    }
+  }
   if (rep.id_type === "Passport") out.add("representative.id_passport");
   else if (str(rep.id_type)) {
     out.add("representative.id_front");
@@ -155,6 +185,15 @@ export function validAba(v: unknown): boolean {
   if (!/^\d{9}$/.test(s) || /^0+$/.test(s)) return false;
   const d = s.split("").map(Number);
   return (3 * (d[0] + d[3] + d[6]) + 7 * (d[1] + d[4] + d[7]) + (d[2] + d[5] + d[8])) % 10 === 0;
+}
+
+/** A US Social Security Number the SSA could have issued. Mirrors validSsn
+ *  in src/lib/onboardingForm.js. */
+export function validSsn(v: unknown): boolean {
+  const s = String(v ?? "");
+  if (!/^\d{9}$/.test(s)) return false;
+  const [a, g, n] = [s.slice(0, 3), s.slice(3, 5), s.slice(5)];
+  return a !== "000" && a !== "666" && a[0] !== "9" && g !== "00" && n !== "0000";
 }
 
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -191,11 +230,22 @@ export function serverValid(key: string, value: unknown, region: string, now: Da
     case "bank.account_number":
       return us ? /^\d{4,17}$/.test(value) : /^\d{8}$/.test(value);
     case "representative.dob":
+    case "owner2.dob":
+    case "owner3.dob":
+    case "owner4.dob":
       return dobOk(value, now);
-    case "representative.home_address": {
+    case "representative.home_address":
+    case "owner2.home_address":
+    case "owner3.home_address":
+    case "owner4.home_address": {
       const n = value.trim().length;
       return n >= 5 && n <= 500;
     }
+    case "representative.ssn":
+    case "owner2.ssn":
+    case "owner3.ssn":
+    case "owner4.ssn":
+      return us && validSsn(value);
     default:
       return false;
   }
@@ -203,6 +253,9 @@ export function serverValid(key: string, value: unknown, region: string, now: Da
 
 const EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "application/pdf": "pdf" };
 const DISPLAY: Record<string, string> = {
+  "company.ein_letter": "IRS EIN letter",
+  "company.formation_doc": "Articles of Organization",
+  "bank.bank_doc": "Voided check or bank letter",
   "representative.id_passport": "Passport photo page",
   "representative.id_front": "Photo ID front",
   "representative.id_back": "Photo ID back",
@@ -263,6 +316,9 @@ export function mentionsSecret(text: string, secrets: readonly unknown[]): boole
     const s = str(raw);
     if (s.length < 4) continue;
     const variants = [s];
+    if (/^\d{9}$/.test(s)) {
+      variants.push(`${s.slice(0, 3)}-${s.slice(3, 5)}-${s.slice(5)}`, `${s.slice(0, 3)} ${s.slice(3, 5)} ${s.slice(5)}`);
+    }
     if (/^\d{6}$/.test(s)) {
       variants.push(`${s.slice(0, 2)}-${s.slice(2, 4)}-${s.slice(4)}`, `${s.slice(0, 2)} ${s.slice(2, 4)} ${s.slice(4)}`);
     }

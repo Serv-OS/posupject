@@ -11,6 +11,7 @@ const {
   titleOf, sectionHintOf, labelOf, hintOf, optionsOf, optionLabel, echoOf, suggestOf, formatOf, maxDigitsOf,
   isRequired, isEmpty, fieldIssue, missingRequired, progress, summarize, allFiles,
   SECURE_VALUE_KEYS, SECURE_FILE_KEYS, isSecureKey, representativeName, accountHolder, regionFor, TERMS_VERSION,
+  validSsn, formatSsn, normState,
 } = F;
 
 const section = (key) => SECTIONS.find((s) => s.key === key);
@@ -105,11 +106,11 @@ describe('definition shape', () => {
 
   it('orders the Account group company, VAT, bank, representative, trading, then as before', () => {
     expect(sectionsIn('account').map((s) => s.key)).toEqual([
-      'company', 'vat', 'bank', 'representative', 'trading',
+      'company', 'vat', 'bank', 'representative', 'owners', 'owner2', 'owner3', 'owner4', 'trading',
       'receipt', 'menu', 'users', 'discounts', 'tables', 'drinks_printing', 'food_printing', 'current_pos', 'anything_else',
     ]);
     expect(GROUPS[0].blurb).toBe('What we build your till and card payments from.');
-    expect(section('company').fields.map((f) => f.key)).toEqual(['entity_type', 'legal_name', 'address', 'company_number', 'ein', 'contact_name']);
+    expect(section('company').fields.map((f) => f.key)).toEqual(['entity_type', 'legal_name', 'address', 'company_number', 'ein', 'org_type', 'state', 'ein_letter', 'formation_doc', 'website', 'contact_name']);
   });
 
   it('keeps plain string titles, labels, hints and options, so a screen not yet on the resolvers still reads', () => {
@@ -194,12 +195,14 @@ describe('visibility matrix', () => {
   const ORG_REP = ['is_contact', 'name', 'phone', 'email', 'dob', 'home_same', 'home_address', 'id_type', 'id_front', 'id_back'];
   const IND_REP = ['phone', 'email', 'dob', 'home_same', 'home_address', 'id_type', 'id_front', 'id_back'];
   const UK_BANK = ['sort_code', 'account_number', 'holder_same', 'holder_name'];
-  const US_BANK = ['routing_number', 'account_number', 'account_type', 'holder_same', 'holder_name'];
+  const US_BANK = ['routing_number', 'account_number', 'account_type', 'holder_same', 'holder_name', 'bank_doc'];
+  const US_ORG_REP = ['is_contact', 'name', 'job_title', 'ownership', 'phone', 'email', 'dob', 'ssn', 'home_same', 'home_address', 'id_type', 'id_front', 'id_back'];
+  const US_IND_REP = ['phone', 'email', 'dob', 'ssn', 'home_same', 'home_address', 'id_type', 'id_front', 'id_back'];
   const MATRIX = [
     ['UK', 'Organisation', ['entity_type', 'legal_name', 'address', 'company_number', 'contact_name'], ['registered', 'number'], UK_BANK, ORG_REP],
     ['UK', 'Individual', ['entity_type', 'legal_name', 'address', 'contact_name'], ['registered', 'number'], UK_BANK, IND_REP],
-    ['US', 'Organisation', ['entity_type', 'legal_name', 'address', 'ein', 'contact_name'], [], US_BANK, ORG_REP],
-    ['US', 'Individual', ['entity_type', 'legal_name', 'address', 'ein', 'contact_name'], [], US_BANK, IND_REP],
+    ['US', 'Organisation', ['entity_type', 'legal_name', 'address', 'ein', 'org_type', 'state', 'ein_letter', 'formation_doc', 'website', 'contact_name'], [], US_BANK, US_ORG_REP],
+    ['US', 'Individual', ['entity_type', 'legal_name', 'address', 'ein', 'website', 'contact_name'], [], US_BANK, US_IND_REP],
   ];
 
   it.each(MATRIX)('%s %s', (region, entity, company, vat, bank, rep) => {
@@ -735,8 +738,9 @@ describe('the server copy agrees with the definition', () => {
   it('has the same secure key lists', () => {
     expect(SECURE_VALUE_KEYS).toEqual([...S.SECURE_VALUE_KEYS]);
     expect(SECURE_FILE_KEYS).toEqual([...S.SECURE_FILE_KEYS]);
-    expect(SECURE_VALUE_KEYS).toEqual(['bank.sort_code', 'bank.routing_number', 'bank.account_number', 'representative.dob', 'representative.home_address']);
-    expect(SECURE_FILE_KEYS).toEqual(['representative.id_passport', 'representative.id_front', 'representative.id_back']);
+    const owners = [2, 3, 4].flatMap((n) => [`owner${n}.dob`, `owner${n}.ssn`, `owner${n}.home_address`]);
+    expect(SECURE_VALUE_KEYS).toEqual(['bank.sort_code', 'bank.routing_number', 'bank.account_number', 'representative.dob', 'representative.ssn', 'representative.home_address', ...owners]);
+    expect(SECURE_FILE_KEYS).toEqual(['company.ein_letter', 'company.formation_doc', 'bank.bank_doc', 'representative.id_passport', 'representative.id_front', 'representative.id_back']);
     // Business contact details and public identifiers are deliberately not secure.
     for (const k of ['representative.name', 'representative.phone', 'representative.email', 'company.company_number', 'company.ein', 'vat.number']) {
       expect(isSecureKey(k), k).toBe(false);
@@ -753,20 +757,22 @@ describe('the server copy agrees with the definition', () => {
           for (const is_contact of [undefined, 'Yes', 'No']) {
             for (const home_same of [undefined, 'Yes', 'No']) {
               for (const id_type of [undefined, '', 'Passport', 'Driving licence', 'National ID card']) {
-                const answers = { company: { entity_type, contact_name }, representative: { is_contact, home_same, id_type } };
+               for (const others of [undefined, 'No', '1 more', '3 more']) {
+                const answers = { company: { entity_type, contact_name }, representative: { is_contact, home_same, id_type }, owners: { others } };
                 const fromDefinition = visibleKeys(answers, formContext(answers, { region })).filter(isSecureKey).sort();
                 expect([...S.secureVisible(answers, region)].sort(), JSON.stringify({ region, answers })).toEqual(fromDefinition);
                 // And through the stamp on the pack, as the card reads it.
                 const stamped = { ...answers, _meta: { v: 2, region } };
                 expect([...S.secureVisible(stamped, region)].sort()).toEqual(visibleKeys(stamped).filter(isSecureKey).sort());
                 checked += 1;
+               }
               }
             }
           }
         }
       }
     }
-    expect(checked).toBe(540);
+    expect(checked).toBe(2160);
     expect([...S.secureVisible(null, 'UK')].sort()).toEqual(['bank.account_number', 'bank.sort_code', 'representative.dob']);
   });
 
@@ -932,5 +938,44 @@ describe('migration 114', () => {
     expect(sql).toMatch(/create trigger onb_form_req_keep_id\s+before delete on public\.onboarding_form_requests/);
     expect(sql).toMatch(/o\.bucket_id = 'onboarding-secure'\s+and o\.name like old\.id::text \|\| '\/%'/);
     expect(sql).toMatch(/Delete ID and bank details/);
+  });
+});
+
+
+describe('US Know Your Customer questions', () => {
+  it('checks SSNs the way the SSA issues them, and never in the UK', () => {
+    expect(validSsn('123456789')).toBe(true);
+    for (const bad of ['000123456', '666123456', '912345678', '123006789', '123450000', '12345678', '']) expect(validSsn(bad), bad).toBe(false);
+    expect(formatSsn('123456789')).toBe('123-45-6789');
+    expect(S.validSsn('123456789')).toBe(true);
+    expect(S.serverValid('representative.ssn', '123456789', 'US')).toBe(true);
+    expect(S.serverValid('representative.ssn', '123456789', 'UK')).toBe(false);
+    expect(S.serverValid('owner3.ssn', '666123456', 'US')).toBe(false);
+    expect(S.serverValid('owner2.dob', '1985-07-14', 'US')).toBe(true);
+    expect(S.serverValid('owner4.home_address', '12 Elm St, Sandy, UT 84070', 'US')).toBe(true);
+  });
+
+  it('reads a state by name or letters', () => {
+    expect(normState('utah')).toBe('UT');
+    expect(normState(' ut ')).toBe('UT');
+    expect(normState('District of Columbia')).toBe('DC');
+    expect(normState('Narnia')).toBe('Narnia');
+  });
+
+  it('shows one owner card per extra owner, US organisations only', () => {
+    const shown = (region, entity_type, others) => {
+      const answers = { company: { entity_type }, owners: { others } };
+      return visibleSections('account', answers, formContext(answers, { region })).map((x) => x.key).filter((k) => k.startsWith('owner'));
+    };
+    expect(shown('US', 'Organisation', 'No')).toEqual(['owners']);
+    expect(shown('US', 'Organisation', '2 more')).toEqual(['owners', 'owner2', 'owner3']);
+    expect(shown('US', 'Organisation', '3 more')).toEqual(['owners', 'owner2', 'owner3', 'owner4']);
+    expect(shown('US', 'Individual', '3 more')).toEqual([]);
+    expect(shown('UK', 'Organisation', '3 more')).toEqual([]);
+  });
+
+  it('never lets an SSN reach the activity note', () => {
+    expect(S.mentionsSecret('SSN 123-45-6789', ['123456789'])).toBe(true);
+    expect(S.mentionsSecret('SSN 123 45 6789', ['123456789'])).toBe(true);
   });
 });

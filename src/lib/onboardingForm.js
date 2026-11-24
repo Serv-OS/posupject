@@ -127,6 +127,47 @@ export function formatEin(v) {
   return d.length > 2 && d.length <= 9 ? `${d.slice(0, 2)}-${d.slice(2)}` : d;
 }
 
+/** A US Social Security Number: 9 digits, never area 000, 666 or 9xx, group
+ *  00 or serial 0000, which the SSA never issues. */
+export const normSsn = (v) => digitsOnly(v);
+export function validSsn(v) {
+  const s = String(v ?? '');
+  if (!/^\d{9}$/.test(s)) return false;
+  const [a, g, n] = [s.slice(0, 3), s.slice(3, 5), s.slice(5)];
+  return a !== '000' && a !== '666' && a[0] !== '9' && g !== '00' && n !== '0000';
+}
+export function formatSsn(v) {
+  const d = digitsOnly(v);
+  if (d.length > 9) return d;
+  return [d.slice(0, 3), d.slice(3, 5), d.slice(5)].filter(Boolean).join('-');
+}
+
+/** US states and DC, for the state the business is registered in. */
+export const US_STATES = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado',
+  CT: 'Connecticut', DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia',
+  HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas',
+  KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts',
+  MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana',
+  NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico',
+  NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma',
+  OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina',
+  SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont',
+  VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+};
+/** "utah", "Utah " or "ut" all become UT. Anything else is kept as typed. */
+export function normState(v) {
+  const s = str(v);
+  const up = s.toUpperCase().replace(/\./g, '');
+  if (US_STATES[up]) return up;
+  const hit = Object.entries(US_STATES).find(([, name]) => name.toLowerCase() === s.toLowerCase());
+  return hit ? hit[0] : s;
+}
+
+/** A whole number percentage, 0 to 100. */
+const normPct = (v) => digitsOnly(v).replace(/^0+(?=\d)/, '');
+const validPct = (v) => /^\d{1,3}$/.test(String(v ?? '')) && Number(v) <= 100;
+
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const ymdParts = (s) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str(s));
@@ -248,6 +289,12 @@ const UK_ENTITY_HINT = 'Organisation: a limited company, LLP, partnership, chari
 const idHint = (ctx, which, doc = idDocName(ctx)) =>
   `${which} The real ${doc}, in ${colour(ctx)}, all four corners in shot, no glare. JPG, PNG or PDF, up to 10MB.`;
 
+// Owner n shows when "anyone else own 25%" says enough more people. Owner 2
+// is the first after the legal representative.
+const OWNER_COUNT = { 'No': 0, '1 more': 1, '2 more': 2, '3 more': 3 };
+const ownerShown = (n) => (a, ctx) => isUS(ctx) && !isInd(ctx)
+  && (OWNER_COUNT[str(ctx?.all?.owners?.others)] || 0) >= n - 1;
+
 export const SECTIONS = [
   // ── Account config ────────────────────────────────────────────────────────
   {
@@ -300,9 +347,34 @@ export const SECTIONS = [
         requiredIf: (ctx) => !isInd(ctx),
         showIf: (a, ctx) => isUS(ctx),
         labelFor: (ctx) => (isInd(ctx) ? 'EIN, if your business has one' : 'EIN (Employer Identification Number)'),
-        hint: 'The 9 digit number on your IRS EIN letter, e.g. 12-3456789. Never enter a Social Security number here.',
+        hint: 'The 9 digit number on your IRS EIN letter, e.g. 12-3456789. This is not a Social Security number, those come later for each person.',
         maxDigits: 9, normalize: (v) => normEin(v), format: (v) => formatEin(v),
         validate: (v) => (validEin(normEin(v)) ? null : { error: 'An EIN is 9 digits, like 12-3456789.' }) },
+      // What Adyen needs to verify a US business. The type and the state are
+      // checked against the state's register, the EIN against the IRS.
+      { key: 'org_type', label: 'Type of business', type: 'choice', required: true,
+        options: ['LLC', 'Corporation', 'Partnership', 'Nonprofit'],
+        optionsFor: () => [
+          { value: 'LLC', label: 'LLC' },
+          { value: 'Corporation', label: 'Corporation (Inc. or Corp.)' },
+          { value: 'Partnership', label: 'Partnership' },
+          { value: 'Nonprofit', label: 'Nonprofit' },
+        ],
+        showIf: (a, ctx) => isUS(ctx) && !isInd(ctx) },
+      { key: 'state', label: 'State the business is registered in', type: 'text', required: true,
+        showIf: (a, ctx) => isUS(ctx) && !isInd(ctx),
+        hint: 'The state you filed your Articles of Organization or Incorporation with, e.g. Utah or UT. Often Delaware.',
+        normalize: (v) => normState(v),
+        validate: (v) => (US_STATES[normState(v)] ? null : { error: 'Type the state name, like Utah, or its two letters, like UT.' }) },
+      { key: 'ein_letter', label: 'IRS EIN letter', type: 'file', required: true, secure: true,
+        showIf: (a, ctx) => isUS(ctx) && !isInd(ctx),
+        hint: 'Your IRS letter confirming the EIN: form CP 575, or a 147C letter if you have lost it. A photo or PDF. Held securely.' },
+      { key: 'formation_doc', label: 'Articles of Organization or Incorporation', type: 'file', secure: true,
+        showIf: (a, ctx) => isUS(ctx) && !isInd(ctx),
+        hint: 'Optional, but it speeds up verification. The document filed with your state when the business was formed.' },
+      { key: 'website', label: 'Business website', type: 'text',
+        showIf: (a, ctx) => isUS(ctx),
+        hint: 'Optional. Your website or main social page, so the payment provider can see the business is real.' },
       { key: 'contact_name', label: 'Main contact full name', type: 'text', required: true,
         hint: 'Who we speak to day to day about your set up and install. It can be the same person as the legal representative.',
         suggest: (ctx) => (isInd(ctx) && str(company(ctx).legal_name)
@@ -349,6 +421,9 @@ export const SECTIONS = [
       { key: 'holder_name', label: 'Name on the account', type: 'text', required: true,
         showIf: (a) => a.holder_same === 'No',
         hint: 'Exactly as the bank shows it.' },
+      { key: 'bank_doc', label: 'Voided check or bank letter', type: 'file', required: true, secure: true,
+        showIf: (a, ctx) => isUS(ctx),
+        hint: 'A voided check, or a letter or statement from your bank, showing the account holder name, account number and routing number. Held securely.' },
     ],
   },
   {
@@ -365,6 +440,16 @@ export const SECTIONS = [
       { key: 'name', label: 'Legal representative full name', type: 'text', required: true,
         showIf: (a, ctx) => !isInd(ctx) && (a.is_contact === 'No' || !str(company(ctx).contact_name)),
         hint: 'Exactly as on their photo ID.' },
+      // US rules: the payment provider verifies one person who controls the
+      // business (this one) and everyone who owns 25% or more (Owners, below).
+      { key: 'job_title', label: 'Their job title', type: 'text', required: true,
+        showIf: (a, ctx) => isUS(ctx) && !isInd(ctx),
+        hint: 'e.g. Owner, Managing Member, CEO, President.' },
+      { key: 'ownership', label: 'What percentage of the business do they own?', type: 'digits', required: true,
+        showIf: (a, ctx) => isUS(ctx) && !isInd(ctx),
+        hint: 'A whole number. Type 0 if they do not own any of it.',
+        maxDigits: 3, normalize: (v) => normPct(v), format: (v) => `${v}%`,
+        validate: (v) => (validPct(normPct(v)) ? null : { error: 'A percentage from 0 to 100.' }) },
       { key: 'phone', label: 'Legal representative contact number', type: 'tel', required: true,
         labelFor: (ctx) => (isInd(ctx) ? 'Your mobile number' : 'Legal representative contact number'),
         // Kept as typed when it cannot be read, so the customer sees their own
@@ -384,6 +469,12 @@ export const SECTIONS = [
           if (p === 'age') return { error: isInd(ctx) ? 'You must be 18 or over.' : 'They must be 18 or over.' };
           return null;
         } },
+      { key: 'ssn', label: 'Legal representative Social Security Number', type: 'digits', required: true, secure: true,
+        showIf: (a, ctx) => isUS(ctx),
+        labelFor: (ctx) => (isInd(ctx) ? 'Your Social Security Number' : 'Legal representative Social Security Number'),
+        hint: 'Federal Know Your Customer rules mean the payment provider must verify this person. Held securely, only our account owner can see it, and it is passed only to the payment provider.',
+        maxDigits: 9, normalize: (v) => normSsn(v), format: (v) => formatSsn(v),
+        validate: (v) => (validSsn(normSsn(v)) ? null : { error: 'A Social Security Number is 9 digits, like 123-45-6789.' }) },
       { key: 'home_same', label: 'Does the legal representative live at the company registered address?', type: 'choice', options: ['Yes', 'No'], required: true,
         labelFor: (ctx) => (isInd(ctx) ? 'Do you live at your business address?' : 'Does the legal representative live at the company registered address?'),
         echo: (ctx) => str(company(ctx).address) },
@@ -424,6 +515,121 @@ export const SECTIONS = [
         labelFor: (ctx) => `Back of the ${idDocName(ctx)}`,
         hint: idHint(null, 'The other side.'),
         hintFor: (ctx) => idHint(ctx, 'The other side.') },
+    ],
+  },
+  {
+    key: 'owners', group: 'account', title: 'Owners',
+    hint: 'US rules: the payment provider must verify everyone who owns 25% or more of the business.',
+    fields: [
+      { key: 'others', label: 'Apart from the legal representative, does anyone else own 25% or more?', type: 'choice', required: true,
+        options: ['No', '1 more', '2 more', '3 more'],
+        showIf: (a, ctx) => isUS(ctx) && !isInd(ctx),
+        hint: 'Count people, not companies. If a company owns part of the business, tell us in Anything else and we will help.' },
+    ],
+  },
+  {
+    key: 'owner2', group: 'account', title: 'Owner 2',
+    hint: 'Someone else who owns 25% or more of the business.',
+    fields: [
+      { key: 'name', label: 'Full legal name', type: 'text', required: true,
+        showIf: ownerShown(2), hint: 'Exactly as on their photo ID.' },
+      { key: 'email', label: 'Email', type: 'email', required: true, showIf: ownerShown(2),
+        normalize: (v) => str(v).toLowerCase(),
+        validate: (v) => (validEmail(str(v)) ? null : { error: 'Check the email address.' }) },
+      { key: 'ownership', label: 'What percentage do they own?', type: 'digits', required: true, showIf: ownerShown(2),
+        maxDigits: 3, normalize: (v) => normPct(v), format: (v) => `${v}%`,
+        validate: (v) => {
+          const p = normPct(v);
+          if (!validPct(p)) return { error: 'A percentage from 0 to 100.' };
+          return Number(p) < 25 ? { warning: 'Only owners with 25% or more need to be listed.' } : null;
+        } },
+      { key: 'dob', label: 'Date of birth', type: 'dob', required: true, secure: true, showIf: ownerShown(2),
+        validate: (v) => {
+          const p = dobProblem(v);
+          if (p === 'date') return { error: 'Check the date.' };
+          if (p === 'age') return { error: 'They must be 18 or over.' };
+          return null;
+        } },
+      { key: 'ssn', label: 'Social Security Number', type: 'digits', required: true, secure: true, showIf: ownerShown(2),
+        hint: 'Held securely and passed only to the payment provider.',
+        maxDigits: 9, normalize: (v) => normSsn(v), format: (v) => formatSsn(v),
+        validate: (v) => (validSsn(normSsn(v)) ? null : { error: 'A Social Security Number is 9 digits, like 123-45-6789.' }) },
+      { key: 'home_address', label: 'Home address', type: 'textarea', required: true, secure: true, showIf: ownerShown(2),
+        validate: (v, ctx) => {
+          const t = str(v);
+          if (t.length < 5 || t.length > 500) return { error: 'Check the address.' };
+          return addressWarning(t, ctx);
+        } },
+    ],
+  },
+  {
+    key: 'owner3', group: 'account', title: 'Owner 3',
+    hint: 'Someone else who owns 25% or more of the business.',
+    fields: [
+      { key: 'name', label: 'Full legal name', type: 'text', required: true,
+        showIf: ownerShown(3), hint: 'Exactly as on their photo ID.' },
+      { key: 'email', label: 'Email', type: 'email', required: true, showIf: ownerShown(3),
+        normalize: (v) => str(v).toLowerCase(),
+        validate: (v) => (validEmail(str(v)) ? null : { error: 'Check the email address.' }) },
+      { key: 'ownership', label: 'What percentage do they own?', type: 'digits', required: true, showIf: ownerShown(3),
+        maxDigits: 3, normalize: (v) => normPct(v), format: (v) => `${v}%`,
+        validate: (v) => {
+          const p = normPct(v);
+          if (!validPct(p)) return { error: 'A percentage from 0 to 100.' };
+          return Number(p) < 25 ? { warning: 'Only owners with 25% or more need to be listed.' } : null;
+        } },
+      { key: 'dob', label: 'Date of birth', type: 'dob', required: true, secure: true, showIf: ownerShown(3),
+        validate: (v) => {
+          const p = dobProblem(v);
+          if (p === 'date') return { error: 'Check the date.' };
+          if (p === 'age') return { error: 'They must be 18 or over.' };
+          return null;
+        } },
+      { key: 'ssn', label: 'Social Security Number', type: 'digits', required: true, secure: true, showIf: ownerShown(3),
+        hint: 'Held securely and passed only to the payment provider.',
+        maxDigits: 9, normalize: (v) => normSsn(v), format: (v) => formatSsn(v),
+        validate: (v) => (validSsn(normSsn(v)) ? null : { error: 'A Social Security Number is 9 digits, like 123-45-6789.' }) },
+      { key: 'home_address', label: 'Home address', type: 'textarea', required: true, secure: true, showIf: ownerShown(3),
+        validate: (v, ctx) => {
+          const t = str(v);
+          if (t.length < 5 || t.length > 500) return { error: 'Check the address.' };
+          return addressWarning(t, ctx);
+        } },
+    ],
+  },
+  {
+    key: 'owner4', group: 'account', title: 'Owner 4',
+    hint: 'Someone else who owns 25% or more of the business.',
+    fields: [
+      { key: 'name', label: 'Full legal name', type: 'text', required: true,
+        showIf: ownerShown(4), hint: 'Exactly as on their photo ID.' },
+      { key: 'email', label: 'Email', type: 'email', required: true, showIf: ownerShown(4),
+        normalize: (v) => str(v).toLowerCase(),
+        validate: (v) => (validEmail(str(v)) ? null : { error: 'Check the email address.' }) },
+      { key: 'ownership', label: 'What percentage do they own?', type: 'digits', required: true, showIf: ownerShown(4),
+        maxDigits: 3, normalize: (v) => normPct(v), format: (v) => `${v}%`,
+        validate: (v) => {
+          const p = normPct(v);
+          if (!validPct(p)) return { error: 'A percentage from 0 to 100.' };
+          return Number(p) < 25 ? { warning: 'Only owners with 25% or more need to be listed.' } : null;
+        } },
+      { key: 'dob', label: 'Date of birth', type: 'dob', required: true, secure: true, showIf: ownerShown(4),
+        validate: (v) => {
+          const p = dobProblem(v);
+          if (p === 'date') return { error: 'Check the date.' };
+          if (p === 'age') return { error: 'They must be 18 or over.' };
+          return null;
+        } },
+      { key: 'ssn', label: 'Social Security Number', type: 'digits', required: true, secure: true, showIf: ownerShown(4),
+        hint: 'Held securely and passed only to the payment provider.',
+        maxDigits: 9, normalize: (v) => normSsn(v), format: (v) => formatSsn(v),
+        validate: (v) => (validSsn(normSsn(v)) ? null : { error: 'A Social Security Number is 9 digits, like 123-45-6789.' }) },
+      { key: 'home_address', label: 'Home address', type: 'textarea', required: true, secure: true, showIf: ownerShown(4),
+        validate: (v, ctx) => {
+          const t = str(v);
+          if (t.length < 5 || t.length > 500) return { error: 'Check the address.' };
+          return addressWarning(t, ctx);
+        } },
     ],
   },
   {
@@ -493,8 +699,12 @@ export const SECTIONS = [
     key: 'food_printing', group: 'account', title: 'Production printing: food',
     fields: [
       { key: 'multiple', label: 'Do you have multiple production centres? (e.g. starters, mains, desserts)', type: 'choice',
+        labelFor: (ctx) => (isUS(ctx) ? 'Do you have multiple production stations? (e.g. appetizers, entrees, desserts)'
+          : 'Do you have multiple production centres? (e.g. starters, mains, desserts)'),
         options: ['Yes', 'No', 'Not sure'], required: true },
       { key: 'detail', label: 'How should food printing work?', type: 'textarea', required: true, showIf: (a) => a.multiple !== 'No',
+        hintFor: (ctx) => (isUS(ctx) ? 'If you know: list which product categories go to each station. If you are not sure, just describe how the kitchen works and we will design it with you.'
+          : 'If you know: list which product categories go to each production centre. If you are not sure, just describe how the kitchen works and we will design it with you.'),
         hint: 'If you know: list which product categories go to each production centre. If you are not sure, just describe how the kitchen works and we will design it with you.' },
     ],
   },
@@ -552,7 +762,8 @@ export const SECTIONS = [
       { key: 'full_name', label: 'Full name of the person signing off', type: 'text', required: true,
         suggest: (ctx) => chips([representativeName(ctx?.all || {})]) },
       { key: 'position', label: 'Position in the business', type: 'text', required: true,
-        hint: 'e.g. Owner, Director, General Manager.' },
+        hint: 'e.g. Owner, Director, General Manager.',
+        hintFor: (ctx) => (isUS(ctx) ? 'e.g. Owner, Managing Member, President, General Manager.' : 'e.g. Owner, Director, General Manager.') },
       {
         key: 'terms', type: 'terms', label: 'What you are confirming',
         // Adding or rewording a clause means bumping TERMS_VERSION, which is
