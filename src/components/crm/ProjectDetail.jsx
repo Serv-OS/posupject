@@ -26,7 +26,9 @@ import { useIsMobile } from '../../lib/useMedia';
 const SUBJECT_LABEL = { company: 'Company', location: 'Site', deal: 'Deal', onboarding: 'Onboarding', ticket: 'Ticket' };
 const PROJECT_STATUSES = ['active', 'completed', 'cancelled'];
 
-export default function ProjectDetail({ projectId, profile, onClose, onSelectTask, onNavigate }) {
+const BACK_LABEL = { tasks: 'Tasks', projects: 'Projects', my_work: 'My work', today: 'Today', board: 'Board', timeline: 'Timeline', work_calendar: 'Calendar', calendar: 'Calendar', task_detail: 'Task', onboarding_detail: 'Onboarding', company_detail: 'Company' };
+
+export default function ProjectDetail({ projectId, profile, onClose, onSelectTask, onNavigate, backTo }) {
   const [project, setProject] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [members, setMembers] = useState([]);
@@ -263,7 +265,7 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
         <div className="flex items-start gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-[9px] mb-1">
-              <button onClick={onClose} className="text-[13px] text-dim hover:text-paper">&larr; Projects</button>
+              <button onClick={onClose} className="text-[13px] text-dim hover:text-paper">&larr; {backTo?.view ? (BACK_LABEL[backTo.view] || 'Back') : 'Projects'}</button>
               <Pill tone={project.status === 'active' ? 'primary' : project.status === 'completed' ? 'ink' : 'coral'} className="!text-[11px] !px-2 !py-[2px]">{project.status}</Pill>
             </div>
             <PageTitle size={28} className="mb-2 truncate hidden lg:block">{project.name}</PageTitle>

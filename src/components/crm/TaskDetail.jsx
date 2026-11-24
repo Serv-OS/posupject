@@ -21,7 +21,9 @@ const STATUS_COLOR = { todo: 'rgb(var(--c-muted))', in_progress: 'rgb(var(--c-am
 const PRIORITY_COLOR = { P0: 'rgb(var(--c-coral-deep))', P1: 'rgb(var(--c-coral-deep))', P2: 'rgb(var(--c-text))', P3: 'rgb(var(--c-muted))' };
 const SUBJECT_LABEL = { company: 'Company', location: 'Site', deal: 'Deal', onboarding: 'Onboarding', ticket: 'Ticket' };
 
-export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
+const BACK_LABEL = { tasks: 'Tasks', projects: 'Projects', my_work: 'My work', today: 'Today', board: 'Board', timeline: 'Timeline', work_calendar: 'Calendar', calendar: 'Calendar', inbox: 'Inbox' };
+
+export default function TaskDetail({ taskId, profile, onClose, onNavigate, backTo }) {
   const [task, setTask] = useState(null);
   const [subtasks, setSubtasks] = useState([]);
   const [blocks, setBlocks] = useState([]);       // tasks that wait on this one
@@ -46,6 +48,9 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
   const [sheet, setSheet] = useState(false); // the phone's "…"
   const [titleDraft, setTitleDraft] = useState('');
   const [newSub, setNewSub] = useState('');
+  const [newSubDue, setNewSubDue] = useState('');
+  const [subDateFor, setSubDateFor] = useState(null); // subtask row whose date box is open
+  const [parent, setParent] = useState(null);
   const [subOpen, setSubOpen] = useState(false);
   const [err, setErr] = useState('');
   const subRef = useRef(null);
@@ -77,6 +82,10 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
     setTask(t.data); setSubtasks(st.data || []); setBlocks(bl.data || []); setMembers(m.data || []); setProjects(p.data || []);
     setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setTickets(tk.data || []); setOnboardings(ob.data || []);
     setActivities(act.data || []); setEntries(te.data || []); setAttachCount(att.count || 0);
+    if (t.data?.parent_task_id) {
+      const { data: par } = await supabase.from('tasks').select('id, title').eq('id', t.data.parent_task_id).maybeSingle();
+      setParent(par || null);
+    } else setParent(null);
   };
 
   // ── Timer ──────────────────────────────────────────────────────────────────
@@ -199,10 +208,11 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
   const addSubtask = async () => {
     if (!newSub.trim()) return;
     const { error } = await supabase.from('tasks').insert({ title: newSub.trim(), parent_task_id: taskId, project_id: task.project_id, phase: task.phase,
-      subject_type: task.subject_type, subject_id: task.subject_id, sort_order: subtasks.length, created_by: profile.id });
+      subject_type: task.subject_type, subject_id: task.subject_id, sort_order: subtasks.length, due_date: newSubDue || null, created_by: profile.id });
     if (error) { setErr(error.message); return; }
-    setNewSub(''); load();
+    setNewSub(''); setNewSubDue(''); load();
   };
+  const setSubDue = (s, d) => supabase.from('tasks').update({ due_date: d || null }).eq('id', s.id).then(({ error }) => { if (error) setErr(error.message); setSubDateFor(null); load(); });
   const toggleSub = (s) => supabase.from('tasks').update(s.status === 'done' ? { status: 'todo', completed_at: null } : { status: 'done', completed_at: new Date().toISOString() }).eq('id', s.id).then(load);
   const duplicate = async () => {
     const { id, created_at, updated_at, completed_at, ...rest } = task;
@@ -223,6 +233,13 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
   const inputCls = 'w-full px-3 py-2 rounded-[10px] text-[14px] text-paper placeholder-dim focus:outline-none border';
   const inputStyle = { background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' };
   const phases = project?.phases || [];
+  // Back says where it goes: the project or parent task this was opened from.
+  const backText = (() => {
+    if (backTo?.view === 'project_detail') return projects.find(p => p.id === backTo.detailId)?.name || 'Project';
+    if (backTo?.view === 'task_detail') return backTo.detailId === parent?.id ? parent.title : 'Back';
+    if (backTo?.view) return BACK_LABEL[backTo.view] || 'Back';
+    return 'Tasks';
+  })();
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--scene)' }}>
@@ -231,7 +248,8 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
         <div className="flex items-start gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1 flex-wrap">
-              <button onClick={onClose} className="text-[13px] text-dim hover:text-paper">&larr; Tasks</button>
+              <button onClick={onClose} className="text-[13px] text-dim hover:text-paper">&larr; {backText}</button>
+              {parent && <LinkChip tone="ink" onClick={() => onNavigate?.('task', parent.id)}>Part of: {parent.title}</LinkChip>}
               {project && <LinkChip tone="uv" onClick={() => onNavigate?.('project', project.id)}>{project.name}{task.phase ? ` · ${task.phase}` : ''}</LinkChip>}
               {linked?.type === 'ticket' && <LinkChip tone="primary" onClick={() => onNavigate?.('ticket', task.subject_id)}>Ticket {linked.name}</LinkChip>}
               {linked && linked.type !== 'ticket' && linked.name && <LinkChip tone="ink" onClick={() => linked.companyId && onNavigate?.('company', linked.companyId)}>{linked.companyName || linked.name}</LinkChip>}
@@ -348,6 +366,20 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
                     <div key={s.id} className={`flex items-center gap-[11px] py-[9px] ${i < subtasks.length - 1 || canWrite ? 'border-b' : ''}`} style={hair}>
                       <Check size={18} done={s.status === 'done'} onClick={() => canWrite && toggleSub(s)} disabled={!canWrite} />
                       <span className={`flex-1 text-[14px] cursor-pointer ${s.status === 'done' ? 'text-dim line-through' : 'text-paper'}`} onClick={() => onNavigate?.('task', s.id)}>{s.title}</span>
+                      {subDateFor === s.id ? (
+                        <input type="date" autoFocus defaultValue={s.due_date || ''} onChange={e => setSubDue(s, e.target.value)}
+                          onBlur={() => setSubDateFor(null)} onKeyDown={e => { if (e.key === 'Escape') setSubDateFor(null); }}
+                          className="text-[12px] px-1.5 py-1 rounded-[7px] border text-paper" style={inputStyle} />
+                      ) : (() => {
+                        const sd = s.due_date ? dueLabel(s.due_date, s.status) : null;
+                        return (
+                          <button disabled={!canWrite} onClick={() => setSubDateFor(s.id)}
+                            className="text-[12px] px-2 py-[3px] rounded-[7px] border whitespace-nowrap disabled:cursor-default"
+                            style={{ borderColor: 'var(--ink-line)', color: sd?.tone === 'coral' ? 'rgb(var(--c-coral-deep))' : sd ? 'rgb(var(--c-text))' : 'rgb(var(--c-muted))' }}>
+                            {sd ? sd.text : '+ Date'}
+                          </button>
+                        );
+                      })()}
                       <AssigneePicker ownerId={s.owner_id} members={members} size={22} disabled={!canWrite}
                         onPick={(id) => supabase.from('tasks').update({ owner_id: id }).eq('id', s.id).then(({ error }) => { if (error) alert(error.message); load(); })} />
                     </div>
@@ -357,6 +389,9 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate }) {
                       <span className="w-[18px] h-[18px] rounded-[6px] border-2 border-dashed shrink-0" style={{ borderColor: 'var(--dash-line)' }} />
                       <input ref={subRef} value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSubtask(); } }}
                         placeholder="Add an item" className="flex-1 bg-transparent text-[14px] text-paper placeholder-dim focus:outline-none" />
+                      <input type="date" value={newSubDue} onChange={e => setNewSubDue(e.target.value)} title="Due date (optional)"
+                        className="text-[12px] px-1.5 py-1 rounded-[7px] border text-paper" style={inputStyle} />
+                      <button onClick={addSubtask} disabled={!newSub.trim()} className="text-[13px] font-semibold disabled:opacity-40" style={{ color: 'rgb(var(--c-primary-deep))' }}>Add</button>
                     </div>
                   )}
                 </div>

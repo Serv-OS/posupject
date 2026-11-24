@@ -130,6 +130,22 @@ export default function Shell({ session }) {
 
   // Keep the URL in step with the active view/record. The first sync replaces
   // (no phantom history entry on load); later navigations push so Back works.
+  // Where each screen was opened from, so Back on a task returns to the
+  // project (or parent task) it was opened from, not always the Tasks list
+  // (Peter, 24 Nov 2026). Mirrors the browser history this effect pushes.
+  const navStack = useRef([]);
+  const fromPop = useRef(false);
+  useEffect(() => {
+    const here = { view, detailId };
+    const st = navStack.current;
+    const at = fromPop.current ? st.findIndex(e => e.view === view && e.detailId === detailId) : -1;
+    if (at !== -1) navStack.current = st.slice(0, at + 1);
+    else { const top = st[st.length - 1]; if (!top || top.view !== view || top.detailId !== detailId) st.push(here); }
+    fromPop.current = false;
+  }, [view, detailId]);
+  const prevScreen = () => { const st = navStack.current; return st.length > 1 ? st[st.length - 2] : null; };
+  const goBack = (fallback) => { if (prevScreen()) window.history.back(); else setView(fallback); };
+
   useEffect(() => {
     const target = detailId ? `#${view}/${detailId}` : `#${view}`;
     if (window.location.hash === target) { firstUrlSync.current = false; return; }
@@ -142,7 +158,7 @@ export default function Shell({ session }) {
   // pushState/replaceState don't fire hashchange, so this only runs on real
   // navigation → no feedback loop with the effect above.
   useEffect(() => {
-    const onHash = () => { const p = parseHash(); setView(p.view); setDetailId(p.detailId); };
+    const onHash = () => { fromPop.current = true; const p = parseHash(); setView(p.view); setDetailId(p.detailId); };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -426,14 +442,15 @@ export default function Shell({ session }) {
       case 'tasks':
         return <TaskList profile={profile} onSelect={(id) => { setView('task_detail'); setDetailId(id); }} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} />;
       case 'task_detail':
-        return <TaskDetail key={detailId} taskId={detailId} profile={profile} onClose={() => setView('tasks')} onNavigate={navigateTo} />;
+        return <TaskDetail key={detailId} taskId={detailId} profile={profile} backTo={prevScreen()} onClose={() => goBack('tasks')} onNavigate={navigateTo} />;
       case 'projects':
         return <ProjectList profile={profile} onSelect={(id) => { setView('project_detail'); setDetailId(id); }} onNavigate={(k, id) => (id ? navigateTo(k, id) : setView(k))} />;
       case 'project_templates':
         return <ProjectTemplates profile={profile} />;
       case 'project_detail':
         return <ProjectDetail key={detailId} projectId={detailId} profile={profile}
-          onClose={() => setView('projects')}
+          backTo={prevScreen()}
+          onClose={() => goBack('projects')}
           onSelectTask={(id) => { setView('task_detail'); setDetailId(id); }}
           onNavigate={navigateTo} />;
       case 'board':

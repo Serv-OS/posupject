@@ -46,6 +46,9 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
   const [groupMenu, setGroupMenu] = useState(false);
   const [addText, setAddText] = useState('');
   const [adding, setAdding] = useState(false);
+  const [addProject, setAddProject] = useState('');   // picked project for the top add row
+  const [addDue, setAddDue] = useState('');
+  const [groupAdd, setGroupAdd] = useState(null);      // { key, text } inline add inside a project card
   const [err, setErr] = useState('');
   const addRef = useRef(null);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
@@ -172,12 +175,27 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
     setMenuFor(null);
     await patch(t.id, p);
   };
+  // Adding to a project no longer needs "#project" typed (Peter, 24 Nov 2026):
+  // pick it in the add row, or use the add line inside the project's card.
+  // Typed @person / #project / dates still work and win over the pickers.
+  const insertTask = async (text, projectId, due) => {
+    const parsed = parseQuickAdd(text, { members, projects });
+    const row = quickAddRow(parsed, profile.id);
+    if (!row.project_id && projectId) row.project_id = projectId;
+    if (!row.due_date && due) row.due_date = due;
+    const proj = projects.find(p => p.id === row.project_id);
+    if (proj?.subject_type && proj?.subject_id) { row.subject_type = proj.subject_type; row.subject_id = proj.subject_id; }
+    const { error } = await supabase.from('tasks').insert(row);
+    if (error) { setErr(error.message); return false; }
+    load(); return true;
+  };
   const addTask = async () => {
     const text = addText.trim(); if (!text) return;
-    const parsed = parseQuickAdd(text, { members, projects });
-    const { error } = await supabase.from('tasks').insert(quickAddRow(parsed, profile.id));
-    if (error) { setErr(error.message); return; }
-    setAddText(''); load();
+    if (await insertTask(text, addProject || null, addDue || null)) { setAddText(''); setAddDue(''); }
+  };
+  const addToGroup = async (projectId) => {
+    const text = groupAdd?.text?.trim(); if (!text) return;
+    if (await insertTask(text, projectId, null)) setGroupAdd({ key: projectId, text: '' });
   };
 
   // Bulk actions — the dark bar.
@@ -262,13 +280,20 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
               <span className="text-[18px] leading-none text-dim">+</span>
               <input ref={addRef} autoFocus value={addText} onChange={e => setAddText(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTask(); } if (e.key === 'Escape') { setAdding(false); setAddText(''); } }}
-                placeholder="Add a task — @person #project !priority fri"
+                placeholder="Add a task — @person !priority fri"
                 className="flex-1 min-w-0 bg-transparent text-[14px] text-paper placeholder-dim focus:outline-none" />
+              <select value={addProject} onChange={e => setAddProject(e.target.value)} title="Project"
+                className="text-[12px] max-w-[180px] px-1.5 py-1 rounded-[7px] border text-paper" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>
+                <option value="">No project</option>
+                {projects.filter(p => p.status === 'active').map(p => <option key={p.id} value={p.id}>{projectCustomer(p)?.site ? `${projectCustomer(p).site} · ${p.name}` : p.name}</option>)}
+              </select>
+              <input type="date" value={addDue} onChange={e => setAddDue(e.target.value)} title="Due date"
+                className="text-[12px] px-1.5 py-1 rounded-[7px] border text-paper hidden sm:block" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
               <button onClick={addTask} disabled={!addText.trim()} className="text-[13px] font-semibold disabled:opacity-40" style={{ color: 'rgb(var(--c-primary-deep))' }}>Add</button>
               <button onClick={() => { setAdding(false); setAddText(''); }} className="text-[13px] text-dim">Cancel</button>
             </div>
           ) : (
-            <DashedAdd onClick={() => { setAdding(true); setTimeout(() => addRef.current?.focus(), 30); }}>
+            <DashedAdd onClick={() => { setAdding(true); if (firstProject && !addProject) setAddProject(firstProject.id); setTimeout(() => addRef.current?.focus(), 30); }}>
               Add a task{firstProject ? ` to ${projectCustomer(firstProject)?.site || firstProject.name}` : ''} — <span className="font-mono text-[13px]">@peter mon !high</span>
             </DashedAdd>
           )}
@@ -405,6 +430,20 @@ export default function TaskList({ profile, onSelect, onNavigate }) {
                     </div>
                   ))
                 : rowsOf(g.tasks))}
+              {!hidden && canWrite && proj && (groupAdd?.key === g.key ? (
+                <div className="flex items-center gap-2.5 px-4 py-[9px] border-t" style={hair}>
+                  <span className="text-[16px] leading-none text-dim">+</span>
+                  <input autoFocus value={groupAdd.text} onChange={e => setGroupAdd({ key: g.key, text: e.target.value })}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addToGroup(g.key); } if (e.key === 'Escape') setGroupAdd(null); }}
+                    placeholder={`Add a task to ${customer?.site || g.label} — @person fri`}
+                    className="flex-1 min-w-0 bg-transparent text-[14px] text-paper placeholder-dim focus:outline-none" />
+                  <button onClick={() => addToGroup(g.key)} disabled={!groupAdd.text.trim()} className="text-[13px] font-semibold disabled:opacity-40" style={{ color: 'rgb(var(--c-primary-deep))' }}>Add</button>
+                  <button onClick={() => setGroupAdd(null)} className="text-[13px] text-dim">Done</button>
+                </div>
+              ) : (
+                <button onClick={() => setGroupAdd({ key: g.key, text: '' })}
+                  className="w-full text-left px-4 py-[9px] border-t text-[13px] text-dim hover:text-paper" style={hair}>+ Add task to this project</button>
+              ))}
             </Card>
           );
         })}
