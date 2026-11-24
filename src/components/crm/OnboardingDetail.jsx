@@ -318,6 +318,21 @@ export default function OnboardingDetail({ onboardingId, profile, onClose, onNav
                       <div className="text-xs text-muted">{[venue.venue_type, venue.city].filter(Boolean).join(' / ') || 'Venue'}</div>
                     </div>
                   </div>
+                ) : canWrite && locations.length ? (
+                  // One pick, right here: no trip into Edit.
+                  <div>
+                    <select className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper" value=""
+                      onChange={async e => {
+                        if (!e.target.value) return;
+                        const { error } = await supabase.from('onboardings').update({ location_id: e.target.value }).eq('id', onboardingId);
+                        if (error) { alert('Could not save: ' + error.message); return; }
+                        load();
+                      }}>
+                      <option value="">Choose the site being installed</option>
+                      {locations.map(l => <option key={l.id} value={l.id}>{l.name}{l.city ? ` · ${l.city}` : ''}</option>)}
+                    </select>
+                    <div className="text-[10px] text-amber mt-1">The quote had no site, so pick it once here.</div>
+                  </div>
                 ) : <Empty>No venue set. Use Edit to choose which site this job is for.</Empty>}
               </Card>
 
