@@ -5,7 +5,7 @@ import { getRunning, startTimer, stopTimer, fmtClock, fmtDuration } from '../../
 import { PRIORITY_LABEL, PRIORITY_SLA } from '../../lib/priority';
 import { isSendShortcut, sendShortcutLabel } from '../../lib/conversation';
 import { AssigneePicker,
-  Avatar, Check, LinkChip, SectionLabel, Mono, PageTitle, PrimaryBtn, GhostBtn, SolidChipBtn, Card, SkeletonList, MobileDock, MobileSheet, SheetRow,
+  Avatar, Check, StatusPill, StatusMenu, LinkChip, SectionLabel, Mono, PageTitle, PrimaryBtn, GhostBtn, SolidChipBtn, Card, SkeletonList, MobileDock, MobileSheet, SheetRow,
   hair, dueLabel, fmtShort, fmtRel, STATUS_ORDER, STATUS_LABEL, initialsOf,
 } from './ui.jsx';
 
@@ -49,7 +49,8 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate, backT
   const [titleDraft, setTitleDraft] = useState('');
   const [newSub, setNewSub] = useState('');
   const [newSubDue, setNewSubDue] = useState('');
-  const [subDateFor, setSubDateFor] = useState(null); // subtask row whose date box is open
+  const [subDateFor, setSubDateFor] = useState(null);
+  const [subStatusFor, setSubStatusFor] = useState(null); // subtask row whose status menu is open // subtask row whose date box is open
   const [parent, setParent] = useState(null);
   const [subOpen, setSubOpen] = useState(false);
   const [err, setErr] = useState('');
@@ -213,6 +214,8 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate, backT
     setNewSub(''); setNewSubDue(''); load();
   };
   const setSubDue = (s, d) => supabase.from('tasks').update({ due_date: d || null }).eq('id', s.id).then(({ error }) => { if (error) setErr(error.message); setSubDateFor(null); load(); });
+  const setSubStatus = (s, status) => supabase.from('tasks').update({ status, completed_at: status === 'done' ? new Date().toISOString() : null }).eq('id', s.id)
+    .then(({ error }) => { if (error) setErr(error.message); setSubStatusFor(null); load(); });
   const toggleSub = (s) => supabase.from('tasks').update(s.status === 'done' ? { status: 'todo', completed_at: null } : { status: 'done', completed_at: new Date().toISOString() }).eq('id', s.id).then(load);
   const duplicate = async () => {
     const { id, created_at, updated_at, completed_at, ...rest } = task;
@@ -364,8 +367,17 @@ export default function TaskDetail({ taskId, profile, onClose, onNavigate, backT
                 <div className="px-[18px] pt-1.5 pb-3 flex flex-col">
                   {subtasks.map((s, i) => (
                     <div key={s.id} className={`flex items-center gap-[11px] py-[9px] ${i < subtasks.length - 1 || canWrite ? 'border-b' : ''}`} style={hair}>
-                      <Check size={18} done={s.status === 'done'} onClick={() => canWrite && toggleSub(s)} disabled={!canWrite} />
+                      <Check size={18} done={s.status === 'done'} active={s.status === 'in_progress'} onClick={() => canWrite && toggleSub(s)} disabled={!canWrite} />
                       <span className={`flex-1 text-[14px] cursor-pointer ${s.status === 'done' ? 'text-dim line-through' : 'text-paper'}`} onClick={() => onNavigate?.('task', s.id)}>{s.title}</span>
+                      {/* Status shows when it is not plain To do; ▾ changes it (Peter, 24 Nov 2026). */}
+                      {s.status !== 'done' && (
+                        <span className="relative shrink-0">
+                          {s.status !== 'todo'
+                            ? <StatusPill status={s.status} onClick={canWrite ? () => setSubStatusFor(subStatusFor === s.id ? null : s.id) : undefined} />
+                            : canWrite && <button onClick={() => setSubStatusFor(subStatusFor === s.id ? null : s.id)} title="Set status" className="text-[12px] text-dim hover:text-paper px-1">Status &#9662;</button>}
+                          {subStatusFor === s.id && <StatusMenu current={s.status} onPick={(st) => setSubStatus(s, st)} onClose={() => setSubStatusFor(null)} />}
+                        </span>
+                      )}
                       {subDateFor === s.id ? (
                         <input type="date" autoFocus defaultValue={s.due_date || ''} onChange={e => setSubDue(s, e.target.value)}
                           onBlur={() => setSubDateFor(null)} onKeyDown={e => { if (e.key === 'Escape') setSubDateFor(null); }}

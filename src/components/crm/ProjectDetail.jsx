@@ -524,9 +524,17 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                               const kd = dueLabel(k.due_date, k.status);
                               return (
                                 <div key={k.id} className="flex items-center gap-2.5 py-[6px]">
-                                  <Check size={16} done={k.status === 'done'} disabled={!canWrite}
+                                  <Check size={16} done={k.status === 'done'} active={k.status === 'in_progress'} disabled={!canWrite}
                                     onClick={() => canWrite && patchSub(k.id, k.status === 'done' ? { status: 'todo', completed_at: null } : { status: 'done', completed_at: new Date().toISOString() })} />
                                   <span onClick={() => onSelectTask?.(k.id)} className={`flex-1 min-w-0 truncate text-[13px] cursor-pointer ${k.status === 'done' ? 'text-dim line-through' : 'text-paper'}`}>{k.title}</span>
+                                  {k.status !== 'done' && (
+                                    <span className="relative shrink-0">
+                                      {k.status !== 'todo'
+                                        ? <StatusPill status={k.status} onClick={canWrite ? () => setStatusMenu(statusMenu === k.id ? null : k.id) : undefined} />
+                                        : canWrite && <button onClick={() => setStatusMenu(statusMenu === k.id ? null : k.id)} title="Set status" className="text-[11px] text-dim hover:text-paper px-1">&#9662;</button>}
+                                      {statusMenu === k.id && <StatusMenu task={k} onPick={(st) => { setStatusMenu(null); patchSub(k.id, { status: st, completed_at: st === 'done' ? new Date().toISOString() : null }); }} onClose={() => setStatusMenu(null)} />}
+                                    </span>
+                                  )}
                                   {dateFor === k.id ? (
                                     <input type="date" autoFocus defaultValue={k.due_date || ''} onChange={e => setDue(k, e.target.value, true)} onBlur={() => setDateFor(null)}
                                       className="text-[12px] px-1.5 py-1 rounded-[7px] border text-paper" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
