@@ -51,6 +51,12 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
   const [drag, setDrag] = useState(null);   // phase key the inline add is open for
   const [addText, setAddText] = useState('');
   const [statusMenu, setStatusMenu] = useState(null); // task id with the status popover open
+  // Easier in place (Peter, 24 Nov 2026): dates, subtasks and adds without leaving the project.
+  const [subs, setSubs] = useState([]);            // every subtask in the project
+  const [openSubs, setOpenSubs] = useState(() => new Set());
+  const [subDraft, setSubDraft] = useState({ parent: null, text: '' });
+  const [dateFor, setDateFor] = useState(null);    // task id whose date box is open
+  const [phaseAdd, setPhaseAdd] = useState({ key: null, text: '' });
   const [err, setErr] = useState('');
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -79,6 +85,8 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
       supabase.from('deals').select('id, name, company_id'),
       supabase.from('onboardings').select('id, company_id, deal_id, location_id, stage'),
     ]);
+    const { data: st } = await supabase.from('tasks').select('id, title, status, due_date, owner_id, parent_task_id, sort_order').eq('project_id', projectId).not('parent_task_id', 'is', null).order('sort_order');
+    setSubs(st || []);
     setProject(p.data); setTasks(t.data || []); setMembers(m.data || []);
     setCompanies(c.data || []); setLocations(l.data || []); setDeals(d.data || []); setOnboardings(ob.data || []);
     const ids = (t.data || []).map(x => x.id);
@@ -176,6 +184,31 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
     if (error) { setTasks(before); setErr(error.message); return false; }
     load();
     return true;
+  };
+  const patchSub = async (id, patch) => {
+    setSubs(ss => ss.map(x => (x.id === id ? { ...x, ...patch } : x)));
+    const { error } = await supabase.from('tasks').update(patch).eq('id', id);
+    if (error) setErr(error.message);
+    load();
+  };
+  const setDue = (t, d, isSub) => { setDateFor(null); (isSub ? patchSub : patchTask)(t.id, { due_date: d || null }); };
+  const addSub = async (parent) => {
+    const title = subDraft.text.trim(); if (!title) return;
+    const { error } = await supabase.from('tasks').insert({ title, parent_task_id: parent.id, project_id: projectId, phase: parent.phase || null,
+      subject_type: parent.subject_type || null, subject_id: parent.subject_id || null, status: 'todo', priority: 'P2',
+      sort_order: subs.filter(x => x.parent_task_id === parent.id).length, created_by: profile.id });
+    if (error) { setErr(error.message); return; }
+    setSubDraft({ parent: parent.id, text: '' }); load();
+  };
+  const addToPhase = async (g) => {
+    const title = phaseAdd.text.trim(); if (!title) return;
+    const phaseName = g.name || null;
+    const parsed = parseQuickAdd(title, { members, projects: [project], presets: { project_id: projectId, phase: phaseName } });
+    const row = { ...quickAddRow(parsed, profile.id), project_id: projectId, phase: phaseName, sort_order: tasks.length,
+      subject_type: project.subject_type || null, subject_id: project.subject_id || null };
+    const { error } = await supabase.from('tasks').insert(row);
+    if (error) { setErr(error.message); return; }
+    setPhaseAdd({ key: g.key, text: '' }); load();
   };
   const toggleTask = (t) => patchTask(t.id, t.status === 'done'
     ? { status: 'todo', completed_at: null }
@@ -395,16 +428,37 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                       const isDone = t.status === 'done';
                       const isBlocked = t.status === 'blocked';
                       const sub = isBlocked ? (t.blocked_reason ? `Blocked by ${t.blocked_reason}` : 'Blocked') : waits ? `Waits on “${waits.title}”` : null;
+                      const kids = subs.filter(x => x.parent_task_id === t.id);
+                      const kidsDone = kids.filter(x => x.status === 'done').length;
+                      const kidsOpen = openSubs.has(t.id);
+                      const flipKids = () => setOpenSubs(o => { const n = new Set(o); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return n; });
                       return (
-                        <div key={t.id} className={`flex items-center gap-3 px-4 py-[11px] ${i < g.tasks.length - 1 ? 'border-b' : ''}`}
-                          style={{ ...hair, borderLeft: isBlocked ? '3px solid rgb(var(--c-coral))' : '3px solid transparent' }}>
+                        <div key={t.id} className={i < g.tasks.length - 1 ? 'border-b' : ''} style={hair}>
+                        <div className="group flex items-center gap-3 px-4 py-[11px]"
+                          style={{ borderLeft: isBlocked ? '3px solid rgb(var(--c-coral))' : '3px solid transparent' }}>
                           <Check done={isDone} active={t.status === 'in_progress'} onClick={() => canWrite && toggleTask(t)} disabled={!canWrite} />
                           <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onSelectTask?.(t.id)}>
                             <div className={`text-[15px] truncate ${isDone ? 'text-dim line-through' : 'text-paper font-medium'}`}>{t.title}</div>
                             {sub && <div className="text-[11px] truncate" style={{ color: isBlocked ? 'rgb(var(--c-coral))' : 'rgb(var(--c-dim))' }}>{sub}</div>}
                             {!sub && !isDone && <div className="sm:hidden text-[11px] text-dim truncate">{STATUS_LABEL[t.status]}{due.text ? ` · ${due.text.toLowerCase()}` : ''}</div>}
                           </div>
-                          {!isDone && <span className={isBlocked ? '' : 'hidden sm:inline-flex'}><Mono tone={due.tone === 'coral' ? 'coral' : due.tone === 'primary' ? 'primary' : 'dim'} bold={due.tone !== 'dim'}>{due.text}</Mono></span>}
+                          {kids.length > 0 ? (
+                            <button onClick={flipKids} title="Subtasks" className="text-[11px] font-mono px-1.5 py-[2px] rounded-[6px] border text-muted hover:text-paper" style={{ borderColor: 'var(--ink-line)' }}>
+                              {kidsOpen ? '\u25be' : '\u25b8'} {kidsDone}/{kids.length}
+                            </button>
+                          ) : canWrite && !isDone && (
+                            <button onClick={() => { flipKids(); setSubDraft({ parent: t.id, text: '' }); }} className="hidden sm:inline text-[12px] text-dim hover:text-paper opacity-0 group-hover:opacity-100">+ Subtask</button>
+                          )}
+                          {!isDone && (dateFor === t.id ? (
+                            <input type="date" autoFocus defaultValue={t.due_date || ''} onChange={e => setDue(t, e.target.value)}
+                              onBlur={() => setDateFor(null)} onKeyDown={e => { if (e.key === 'Escape') setDateFor(null); }}
+                              className="text-[12px] px-1.5 py-1 rounded-[7px] border text-paper" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+                          ) : (
+                            <button disabled={!canWrite} onClick={() => setDateFor(t.id)} title="Set due date"
+                              className={`${isBlocked || t.due_date ? '' : 'hidden sm:inline-flex sm:opacity-0 group-hover:opacity-100'} ${isBlocked ? '' : 'hidden sm:inline-flex'} items-center rounded-[6px] px-1 hover:bg-ember/10 disabled:cursor-default`}>
+                              {t.due_date ? <Mono tone={due.tone === 'coral' ? 'coral' : due.tone === 'primary' ? 'primary' : 'dim'} bold={due.tone !== 'dim'}>{due.text}</Mono> : <span className="text-[12px] text-dim">+ Date</span>}
+                            </button>
+                          ))}
                           {!isDone && !isBlocked && t.status === 'in_progress' && (
                             <span className="relative hidden sm:inline-flex">
                               <StatusPill status={t.status} onClick={() => canWrite && setStatusMenu(statusMenu === t.id ? null : t.id)} caret={false} />
@@ -419,9 +473,56 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                           )}
                           <AssigneePicker ownerId={t.owner_id} members={members} disabled={!canWrite} onPick={(id) => patchTask(t.id, { owner_id: id })} />
                         </div>
+                        {kidsOpen && (
+                          <div className="pl-[52px] pr-4 pb-2">
+                            {kids.map(k => {
+                              const kd = dueLabel(k.due_date, k.status);
+                              return (
+                                <div key={k.id} className="flex items-center gap-2.5 py-[6px]">
+                                  <Check size={16} done={k.status === 'done'} disabled={!canWrite}
+                                    onClick={() => canWrite && patchSub(k.id, k.status === 'done' ? { status: 'todo', completed_at: null } : { status: 'done', completed_at: new Date().toISOString() })} />
+                                  <span onClick={() => onSelectTask?.(k.id)} className={`flex-1 min-w-0 truncate text-[13px] cursor-pointer ${k.status === 'done' ? 'text-dim line-through' : 'text-paper'}`}>{k.title}</span>
+                                  {dateFor === k.id ? (
+                                    <input type="date" autoFocus defaultValue={k.due_date || ''} onChange={e => setDue(k, e.target.value, true)} onBlur={() => setDateFor(null)}
+                                      className="text-[12px] px-1.5 py-1 rounded-[7px] border text-paper" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+                                  ) : (
+                                    <button disabled={!canWrite} onClick={() => setDateFor(k.id)} className="text-[12px] px-1 rounded-[6px] hover:bg-ember/10">
+                                      {k.due_date ? <Mono tone={kd.tone === 'coral' ? 'coral' : 'dim'}>{kd.text}</Mono> : <span className="text-dim">+ Date</span>}
+                                    </button>
+                                  )}
+                                  <AssigneePicker ownerId={k.owner_id} members={members} size={20} disabled={!canWrite} onPick={(id) => patchSub(k.id, { owner_id: id })} />
+                                </div>
+                              );
+                            })}
+                            {canWrite && (
+                              <div className="flex items-center gap-2.5 py-[6px]">
+                                <span className="w-4 h-4 rounded-[5px] border-2 border-dashed shrink-0" style={{ borderColor: 'var(--dash-line)' }} />
+                                <input autoFocus={kids.length === 0} value={subDraft.parent === t.id ? subDraft.text : ''} onChange={e => setSubDraft({ parent: t.id, text: e.target.value })}
+                                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSub(t); } }}
+                                  placeholder="Add a subtask, Enter to save" className="flex-1 min-w-0 bg-transparent text-[13px] text-paper placeholder-dim focus:outline-none" />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        </div>
                       );
                     })}
                     {g.tasks.length === 0 && g.name && <div className="px-4 py-3 text-[13px] text-dim">Nothing in this phase yet.</div>}
+                    {canWrite && (phaseAdd.key === g.key ? (
+                      <div className="flex items-center gap-2.5 px-4 py-[9px] border-t" style={hair}>
+                        <span className="text-[16px] leading-none text-dim">+</span>
+                        <input autoFocus value={phaseAdd.text} onChange={e => setPhaseAdd({ key: g.key, text: e.target.value })}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addToPhase(g); } if (e.key === 'Escape') setPhaseAdd({ key: null, text: '' }); }}
+                          placeholder={`Add a task${g.name ? ` to ${g.name}` : ''} \u2014 @person fri`}
+                          className="flex-1 min-w-0 bg-transparent text-[14px] text-paper placeholder-dim focus:outline-none" />
+                        <button onClick={() => addToPhase(g)} disabled={!phaseAdd.text.trim()} className="text-[13px] font-semibold disabled:opacity-40" style={{ color: 'rgb(var(--c-primary-deep))' }}>Add</button>
+                        <button onClick={() => setPhaseAdd({ key: null, text: '' })} className="text-[13px] text-dim">Done</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setPhaseAdd({ key: g.key, text: '' })} className={`w-full text-left px-4 py-[9px] text-[13px] text-dim hover:text-paper ${g.tasks.length || g.name ? 'border-t' : ''}`} style={hair}>
+                        + Add task{g.name ? ` to ${g.name}` : ''}
+                      </button>
+                    ))}
                   </Card>
                 );
               })}
@@ -449,10 +550,7 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                     <button onClick={() => setAddingTo(null)} className="text-[13px] text-dim">Cancel</button>
                   </div>
                 ) : (
-                  <DashedAdd onClick={() => { setAddingTo(last.key); setAddText(''); }}
-                    trailing={<button onClick={(e) => { e.stopPropagation(); addPhase(); }} className="text-[13px] font-semibold shrink-0" style={{ color: 'rgb(var(--c-primary-deep))' }}>+ Add phase</button>}>
-                    Add task{last.name ? ` to ${last.name}` : ''}
-                  </DashedAdd>
+                  <DashedAdd onClick={addPhase}>Add a phase</DashedAdd>
                 );
               })()}
             </div>
