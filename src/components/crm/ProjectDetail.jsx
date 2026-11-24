@@ -57,6 +57,8 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
   const [subDraft, setSubDraft] = useState({ parent: null, text: '' });
   const [dateFor, setDateFor] = useState(null);    // task id whose date box is open
   const [phaseAdd, setPhaseAdd] = useState({ key: null, text: '' });
+  const [rowDrag, setRowDrag] = useState(null);    // task being dragged in the phases view
+  const [dropAt, setDropAt] = useState(null);      // { key, index } where it would land
   const [err, setErr] = useState('');
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
 
@@ -199,6 +201,29 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
       sort_order: subs.filter(x => x.parent_task_id === parent.id).length, created_by: profile.id });
     if (error) { setErr(error.message); return; }
     setSubDraft({ parent: parent.id, text: '' }); load();
+  };
+  // Drag a task up or down, or into another phase. Writes the new phase and the
+  // order of the phase it lands in; put back if the save fails.
+  const dropTask = async () => {
+    const t = rowDrag, at = dropAt;
+    setRowDrag(null); setDropAt(null);
+    if (!t || !at) return;
+    const g = groups.find(x => x.key === at.key); if (!g) return;
+    const phase = g.name || null;
+    const list = g.tasks.filter(x => x.id !== t.id);
+    let idx = at.index;
+    const oldIdx = g.tasks.findIndex(x => x.id === t.id);
+    if (oldIdx !== -1 && oldIdx < at.index) idx -= 1;
+    list.splice(Math.max(0, Math.min(idx, list.length)), 0, t);
+    const writes = list.map((x, i) => ({ id: x.id, patch: { sort_order: i, ...(x.id === t.id && (x.phase || null) !== phase ? { phase } : {}) } }))
+      .filter(w => w.patch.phase !== undefined || tasks.find(x => x.id === w.id)?.sort_order !== w.patch.sort_order);
+    if (!writes.length) return;
+    const before = tasks;
+    setTasks(ts => ts.map(x => { const w = writes.find(y => y.id === x.id); return w ? { ...x, ...w.patch } : x; }).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)));
+    const res = await Promise.all(writes.map(w => supabase.from('tasks').update(w.patch).eq('id', w.id)));
+    const bad = res.find(r => r.error);
+    if (bad) { setTasks(before); setErr(bad.error.message); }
+    load();
   };
   const addToPhase = async (g) => {
     const title = phaseAdd.text.trim(); if (!title) return;
@@ -414,6 +439,9 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                 })();
                 return (
                   <Card key={g.key}>
+                    <div onDragOver={e => { if (!rowDrag) return; e.preventDefault(); if (!g.tasks.length || e.target === e.currentTarget) setDropAt({ key: g.key, index: g.tasks.length }); }}
+                      onDrop={e => { e.preventDefault(); dropTask(); }}
+                      style={rowDrag && dropAt?.key === g.key ? { background: 'rgb(var(--c-primary) / .04)' } : undefined}>
                     {g.label && (
                       <div className="px-4 py-3 flex items-center gap-2.5 border-b" style={hair}>
                         <SectionLabel tone={tone} className="!text-[10px]">{g.label}</SectionLabel>
@@ -434,8 +462,12 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                       const flipKids = () => setOpenSubs(o => { const n = new Set(o); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return n; });
                       return (
                         <div key={t.id} className={i < g.tasks.length - 1 ? 'border-b' : ''} style={hair}>
+                        {rowDrag && dropAt?.key === g.key && dropAt.index === i && <div className="h-[2px] mx-4" style={{ background: 'rgb(var(--c-primary))' }} />}
                         <div className="group flex items-center gap-3 px-4 py-[11px]"
-                          style={{ borderLeft: isBlocked ? '3px solid rgb(var(--c-coral))' : '3px solid transparent' }}>
+                          draggable={canWrite && !isMobile} onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setRowDrag(t); }} onDragEnd={() => { setRowDrag(null); setDropAt(null); }}
+                          onDragOver={e => { if (!rowDrag) return; e.preventDefault(); e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setDropAt({ key: g.key, index: e.clientY < r.top + r.height / 2 ? i : i + 1 }); }}
+                          onDrop={e => { e.preventDefault(); e.stopPropagation(); dropTask(); }}
+                          style={{ borderLeft: isBlocked ? '3px solid rgb(var(--c-coral))' : '3px solid transparent', opacity: rowDrag?.id === t.id ? 0.4 : 1, cursor: canWrite && !isMobile ? 'grab' : undefined }}>
                           <Check done={isDone} active={t.status === 'in_progress'} onClick={() => canWrite && toggleTask(t)} disabled={!canWrite} />
                           <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onSelectTask?.(t.id)}>
                             <div className={`text-[15px] truncate ${isDone ? 'text-dim line-through' : 'text-paper font-medium'}`}>{t.title}</div>
@@ -507,7 +539,9 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
                         </div>
                       );
                     })}
-                    {g.tasks.length === 0 && g.name && <div className="px-4 py-3 text-[13px] text-dim">Nothing in this phase yet.</div>}
+                    {g.tasks.length === 0 && g.name && <div className="px-4 py-3 text-[13px] text-dim">{rowDrag ? 'Drop here to move it to this phase' : 'Nothing in this phase yet.'}</div>}
+                    {rowDrag && dropAt?.key === g.key && dropAt.index === g.tasks.length && g.tasks.length > 0 && <div className="h-[2px] mx-4" style={{ background: 'rgb(var(--c-primary))' }} />}
+                    </div>
                     {canWrite && (phaseAdd.key === g.key ? (
                       <div className="flex items-center gap-2.5 px-4 py-[9px] border-t" style={hair}>
                         <span className="text-[16px] leading-none text-dim">+</span>
