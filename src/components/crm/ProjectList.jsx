@@ -48,6 +48,10 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
   const [err, setErr] = useState('');
   // What the project is for. Internal means no customer record behind it.
   const [subj, setSubj] = useState({ type: 'internal', id: '' });
+  // A new project can start from a template and carry its go-live date (Peter, 24 Nov 2026).
+  const [tplId, setTplId] = useState('');
+  const [goLive, setGoLive] = useState('');
+  const [creating, setCreating] = useState(false);
   const [groupMenu, setGroupMenu] = useState(false);
   const [ownerMenu, setOwnerMenu] = useState(false);
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
@@ -137,14 +141,31 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
   const behindN = projects.filter(p => p.status === 'active' && stats[p.id]?.behind).length;
   const templatesInUse = new Set(projects.filter(p => p.status === 'active' && p.template_id).map(p => p.template_id)).size;
 
+  const canCreate = (name.trim() || tplId) && (subj.type === 'internal' || subj.id) && !creating;
   const create = async (e) => {
-    e.preventDefault(); if (!name.trim() || (subj.type !== 'internal' && !subj.id)) return;
-    setErr('');
-    const row = { name: name.trim(), owner_id: profile.id, subject_type: subj.type !== 'internal' && subj.id ? subj.type : null, subject_id: subj.type !== 'internal' && subj.id ? subj.id : null };
-    const { data, error } = await supabase.from('crm_projects').insert(row).select().single();
-    if (error) { setErr(error.message); return; }
-    setName(''); setSubj({ type: 'internal', id: '' }); setShowCreate(false);
-    if (data) onSelect(data.id); else load();
+    e.preventDefault(); if (!canCreate) return;
+    setErr(''); setCreating(true);
+    const sType = subj.type !== 'internal' && subj.id ? subj.type : null;
+    const sId = sType ? subj.id : null;
+    let id = null;
+    if (tplId) {
+      // The template engine makes the project and every task (with dates and subtasks).
+      const { data, error } = await supabase.rpc('apply_project_template_rpc', { p_template_id: tplId, p_subject_type: sType, p_subject_id: sId, p_owner: profile.id });
+      if (error) { setCreating(false); setErr(error.message); return; }
+      id = data;
+      const patch = {};
+      if (name.trim()) patch.name = name.trim();
+      if (goLive) patch.due_date = goLive;
+      if (id && Object.keys(patch).length) await supabase.from('crm_projects').update(patch).eq('id', id);
+    } else {
+      const row = { name: name.trim(), owner_id: profile.id, subject_type: sType, subject_id: sId, due_date: goLive || null };
+      const { data, error } = await supabase.from('crm_projects').insert(row).select().single();
+      if (error) { setCreating(false); setErr(error.message); return; }
+      id = data?.id;
+    }
+    setCreating(false);
+    setName(''); setSubj({ type: 'internal', id: '' }); setTplId(''); setGoLive(''); setShowCreate(false);
+    if (id) onSelect(id); else load();
   };
 
   const COLS = 'grid gap-4 items-center';
@@ -188,9 +209,18 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
 
       {showCreate && (
         <form onSubmit={create} className="px-6 pt-3 flex flex-col gap-2">
-          <div className="flex gap-2">
-            <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Project name" className="flex-1 px-3 py-2 rounded-[10px] text-[14px] text-paper placeholder-dim focus:outline-none border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
-            <PrimaryBtn type="submit" disabled={!name.trim() || (subj.type !== 'internal' && !subj.id)}>Create</PrimaryBtn>
+          <div className="flex gap-2 flex-wrap">
+            <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder={tplId ? `Project name (blank = ${templates.find(t => t.id === tplId)?.name || 'template name'})` : 'Project name'} className="flex-1 px-3 py-2 rounded-[10px] text-[14px] text-paper placeholder-dim focus:outline-none border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+            <select value={tplId} onChange={e => setTplId(e.target.value)} title="Start from a template"
+              className="px-3 py-2 rounded-[10px] text-[13px] text-paper border max-w-[220px]" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }}>
+              <option value="">Blank project</option>
+              {templates.map(t => <option key={t.id} value={t.id}>Template: {t.name}</option>)}
+            </select>
+            <label className="flex items-center gap-1.5 text-[12px] text-dim">Go live
+              <input type="date" value={goLive} onChange={e => setGoLive(e.target.value)}
+                className="px-2 py-2 rounded-[10px] text-[13px] text-paper border" style={{ background: 'var(--surface-solid)', borderColor: 'var(--ink-line)' }} />
+            </label>
+            <PrimaryBtn type="submit" disabled={!canCreate}>{creating ? 'Creating…' : 'Create'}</PrimaryBtn>
             <GhostBtn onClick={() => setShowCreate(false)}>Cancel</GhostBtn>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
