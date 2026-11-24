@@ -18,6 +18,9 @@ import {
 
 const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
+// NEW for the first 7 days (Peter, 24 Nov 2026).
+const isNew = (row) => row?.created_at && Date.now() - new Date(row.created_at).getTime() < 7 * 86400000;
+
 export default function ProjectList({ profile, onSelect, onNavigate }) {
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -243,7 +246,7 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
                           <div key={p.id} onClick={() => onSelect(p.id)} className={`${COLS} px-[18px] py-3 border-b cursor-pointer hover:bg-card/60`}
                             style={{ ...hair, ...colStyle, borderLeft: s.behind ? '3px solid rgb(var(--c-coral))' : '3px solid transparent' }}>
                             <div className="min-w-0">
-                              <div className="text-[14px] font-semibold text-paper truncate">{cust.name || p.name}</div>
+                              <div className="text-[14px] font-semibold text-paper truncate flex items-center gap-1.5">{isNew(p) && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-ember text-white shrink-0">New</span>}<span className="truncate">{cust.name || p.name}</span></div>
                               <div className="text-[11px] text-dim truncate">{cust.company || (cust.name ? p.name : `Internal${nameOf(p.owner_id) ? ` · owner ${nameOf(p.owner_id)}` : ''}`)}</div>
                             </div>
                             <div className="flex items-center gap-[9px]">
@@ -280,7 +283,7 @@ export default function ProjectList({ profile, onSelect, onNavigate }) {
                 <Card key={p.id} onClick={() => onSelect(p.id)} className="p-4 hover:border-ember/30" coral={s.behind}>
                   <div className="flex items-start gap-2 mb-1.5">
                     <div className="flex-1 min-w-0">
-                      <div className="text-[15px] font-bold text-paper truncate">{p.name}</div>
+                      <div className="text-[15px] font-bold text-paper truncate flex items-center gap-1.5">{isNew(p) && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-ember text-white shrink-0">New</span>}<span className="truncate">{p.name}</span></div>
                       {cust.name && <div className="text-[12px] text-muted truncate">{cust.name}{cust.company ? ` · ${cust.company}` : ''}</div>}
                     </div>
                     <Avatar id={p.owner_id} name={nameOf(p.owner_id)} />

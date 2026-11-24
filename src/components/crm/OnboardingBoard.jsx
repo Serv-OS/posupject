@@ -17,6 +17,10 @@ const STAGES = [
   { key: 'handover_to_support',  label: 'Handover',          color: '#948A7A' },
 ];
 
+// Peter, 24 Nov 2026: a fresh onboarding must stand out ("we are already
+// losing things"). NEW for the first 7 days.
+const isNew = (row) => row?.created_at && Date.now() - new Date(row.created_at).getTime() < 7 * 86400000;
+
 export default function OnboardingBoard({ profile, onSelectOnboarding, onNavigate }) {
   const [onboardings, setOnboardings] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -143,7 +147,8 @@ export default function OnboardingBoard({ profile, onSelectOnboarding, onNavigat
                       draggable={canWrite}
                       onDragStart={e => onDragStart(e, o)}
                       onClick={() => onSelectOnboarding(o.id)}
-                      className="glass-inner rounded-xl p-3 cursor-pointer">
+                      className={`glass-inner rounded-xl p-3 cursor-pointer ${isNew(o) ? 'ring-2 ring-ember' : ''}`}>
+                      {isNew(o) && <div className="mb-1.5"><span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-ember text-white shrink-0">New</span></div>}
                       <table className="w-full text-xs">
                         <tbody>
                           {rows.map(([k, v]) => (
