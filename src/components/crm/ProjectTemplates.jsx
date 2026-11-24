@@ -24,7 +24,7 @@ const SMALL_INPUT = "px-2 py-1.5 bg-card border border-bdr rounded text-xs text-
  * whole row away and mounts a fresh one, which takes the focus with it: you
  * could type exactly one character in a task title before the box went dead.
  * Typing updates local state through onEdit; the save still happens on blur. */
-function TaskRow({ row, isChild, isOwner, onEdit, onPatch, onMove, onDelete, onAddSub }) {
+function TaskRow({ row, isChild, isOwner, onEdit, onPatch, onMove, onDelete, onAddSub, phases = [] }) {
   const smallInput = SMALL_INPUT;
   return (
     <div className={`glass-inner rounded-xl p-3 ${isChild ? 'ml-8' : ''}`}>
@@ -37,6 +37,13 @@ function TaskRow({ row, isChild, isOwner, onEdit, onPatch, onMove, onDelete, onA
           onChange={e => onEdit(row.id, { title: e.target.value })}
           onBlur={e => onPatch(row.id, { title: e.target.value })}
           placeholder={isChild ? 'Sub-task title' : 'Task title'} />
+        {!isChild && phases.length > 0 && (
+          <select className={smallInput + ' shrink-0 max-w-[130px]'} value={phases.includes(row.phase) ? row.phase : ''} disabled={!isOwner}
+            onChange={e => onPatch(row.id, { phase: e.target.value || null })} title="Phase">
+            <option value="">No phase</option>
+            {phases.map(ph => <option key={ph} value={ph}>{ph}</option>)}
+          </select>
+        )}
         <select className={smallInput + ' shrink-0 ' + (PRIORITY_STYLES[row.priority] || '')} value={row.priority} disabled={!isOwner}
           onChange={e => onPatch(row.id, { priority: e.target.value })} title="Priority">
           {PRIORITIES.map(p => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
@@ -129,7 +136,7 @@ export default function ProjectTemplates({ profile }) {
     if (!selected) return;
     setSaving(true);
     const { data: nt } = await supabase.from('project_templates')
-      .insert({ name: `${selected.name} (copy)`, description: selected.description }).select().single();
+      .insert({ name: `${selected.name} (copy)`, description: selected.description, phases: selected.phases || [] }).select().single();
     if (nt) {
       // Copy parents first so children can point at the new parent ids.
       const idMap = {};
@@ -137,7 +144,7 @@ export default function ProjectTemplates({ profile }) {
         const { data: nr } = await supabase.from('task_templates').insert({
           project_template_id: nt.id, title: r.title, description: r.description,
           priority: r.priority, due_offset_days: r.due_offset_days,
-          default_assignee_role: r.default_assignee_role, sort_order: r.sort_order,
+          default_assignee_role: r.default_assignee_role, sort_order: r.sort_order, phase: r.phase || null,
           parent_template_id: r.parent_template_id ? idMap[r.parent_template_id] || null : null,
         }).select().single();
         if (nr) idMap[r.id] = nr.id;
@@ -179,15 +186,44 @@ export default function ProjectTemplates({ profile }) {
   };
 
   // ── Task rows ──────────────────────────────────────────────────────────────
-  const addTask = async (parentId = null) => {
+  const addTask = async (parentId = null, phase = null) => {
     const siblings = parentId ? childrenOf(parentId) : parents;
     const { data, error } = await supabase.from('task_templates').insert({
-      project_template_id: selectedId, title: '', priority: 'P2',
+      project_template_id: selectedId, title: '', priority: 'P2', phase: parentId ? null : phase,
       parent_template_id: parentId, due_offset_days: 0,
       sort_order: (siblings.at(-1)?.sort_order ?? -1) + 1,
     }).select().single();
     if (error) { alert(error.message); return; }
     setTaskTemplates(prev => [...prev, data]);
+  };
+
+  // Phases: the template's ordered list; a project made from it gets the same.
+  const phases = selected?.phases || [];
+  const addPhase = () => {
+    const n = prompt('Phase name (e.g. Account setup)');
+    if (!n?.trim() || phases.includes(n.trim())) return;
+    patchTemplate({ phases: [...phases, n.trim()] });
+  };
+  const renamePhase = async (ph) => {
+    const n = prompt('Rename phase', ph);
+    if (!n?.trim() || n.trim() === ph || phases.includes(n.trim())) return;
+    await patchTemplate({ phases: phases.map(x => (x === ph ? n.trim() : x)) });
+    const ids = rows.filter(r => r.phase === ph).map(r => r.id);
+    setTaskTemplates(prev => prev.map(t => (ids.includes(t.id) ? { ...t, phase: n.trim() } : t)));
+    if (ids.length) await supabase.from('task_templates').update({ phase: n.trim() }).in('id', ids);
+  };
+  const removePhase = async (ph) => {
+    if (!confirm(`Remove the phase "${ph}"? Its tasks stay, with no phase.`)) return;
+    await patchTemplate({ phases: phases.filter(x => x !== ph) });
+    const ids = rows.filter(r => r.phase === ph).map(r => r.id);
+    setTaskTemplates(prev => prev.map(t => (ids.includes(t.id) ? { ...t, phase: null } : t)));
+    if (ids.length) await supabase.from('task_templates').update({ phase: null }).in('id', ids);
+  };
+  const movePhase = (ph, dir) => {
+    const i = phases.indexOf(ph), j = i + dir;
+    if (j < 0 || j >= phases.length) return;
+    const next = [...phases]; [next[i], next[j]] = [next[j], next[i]];
+    patchTemplate({ phases: next });
   };
 
   // Typing only moves local state. The save still happens on blur.
@@ -336,23 +372,49 @@ export default function ProjectTemplates({ profile }) {
                   <div className="text-sm font-bold text-paper">Tasks</div>
                   <div className="text-[10px] text-dim">+Nd = due N days after the job starts · “owner” assigns to the job owner</div>
                 </div>
-                <div className="space-y-2">
-                  {parents.map(p => (
-                    <div key={p.id} className="space-y-2">
-                      <TaskRow row={p} isChild={false} isOwner={isOwner} onEdit={editTask} onPatch={patchTask} onMove={moveTask} onDelete={deleteTask} onAddSub={addTask} />
-                      {childrenOf(p.id).map(c => <TaskRow key={c.id} row={c} isChild isOwner={isOwner} onEdit={editTask} onPatch={patchTask} onMove={moveTask} onDelete={deleteTask} onAddSub={addTask} />)}
-                    </div>
+                {/* Phases: the project made from this template is split the same way. */}
+                <div className="mb-4 flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted">Phases:</span>
+                  {phases.length === 0 && <span className="text-xs text-dim italic">none, all tasks in one list</span>}
+                  {phases.map((ph, i) => (
+                    <span key={ph} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-bdr text-xs text-paper">
+                      <span className="text-dim font-mono">{i + 1}</span>
+                      {isOwner ? <button onClick={() => renamePhase(ph)} title="Rename" className="hover:text-ember">{ph}</button> : ph}
+                      {isOwner && <>
+                        <button onClick={() => movePhase(ph, -1)} className="text-[10px] text-dim hover:text-paper" title="Move earlier">◀</button>
+                        <button onClick={() => movePhase(ph, 1)} className="text-[10px] text-dim hover:text-paper" title="Move later">▶</button>
+                        <button onClick={() => removePhase(ph)} className="text-red-500 hover:text-red-600" title="Remove phase">×</button>
+                      </>}
+                    </span>
                   ))}
-                  {parents.length === 0 && (
-                    <div className="text-xs text-dim italic py-3 text-center">No tasks yet — add the steps this project should always contain.</div>
-                  )}
+                  {isOwner && <button onClick={addPhase} className="px-2 py-1 text-xs font-semibold text-ember border border-ember/30 rounded-lg hover:bg-ember/10">+ Phase</button>}
                 </div>
-                {isOwner && (
-                  <button onClick={() => addTask(null)}
-                    className="mt-3 px-3 py-1.5 text-xs font-semibold text-ember border border-ember/30 rounded-lg hover:bg-ember/10 transition">
-                    + Task
-                  </button>
-                )}
+                {[...phases.map(ph => ({ key: ph, name: ph, label: `Phase ${phases.indexOf(ph) + 1}: ${ph}` })), { key: '__none', name: null, label: phases.length ? 'No phase' : null }].map(sec => {
+                  const list = parents.filter(p => (sec.name ? p.phase === sec.name : !phases.includes(p.phase)));
+                  if (!sec.name && phases.length && !list.length) return null;
+                  return (
+                    <div key={sec.key} className="mb-4">
+                      {sec.label && <div className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-ember mb-2">{sec.label}</div>}
+                      <div className="space-y-2">
+                        {list.map(p => (
+                          <div key={p.id} className="space-y-2">
+                            <TaskRow row={p} isChild={false} isOwner={isOwner} phases={phases} onEdit={editTask} onPatch={patchTask} onMove={moveTask} onDelete={deleteTask} onAddSub={addTask} />
+                            {childrenOf(p.id).map(c => <TaskRow key={c.id} row={c} isChild isOwner={isOwner} onEdit={editTask} onPatch={patchTask} onMove={moveTask} onDelete={deleteTask} onAddSub={addTask} />)}
+                          </div>
+                        ))}
+                        {list.length === 0 && (
+                          <div className="text-xs text-dim italic py-2 text-center">{sec.name ? 'No tasks in this phase yet.' : 'No tasks yet. Add the steps this project should always contain.'}</div>
+                        )}
+                      </div>
+                      {isOwner && (
+                        <button onClick={() => addTask(null, sec.name)}
+                          className="mt-2 px-3 py-1.5 text-xs font-semibold text-ember border border-ember/30 rounded-lg hover:bg-ember/10 transition">
+                          + Task{sec.name ? ` in ${sec.name}` : ''}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

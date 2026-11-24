@@ -287,12 +287,25 @@ export default function ProjectDetail({ projectId, profile, onClose, onSelectTas
   const saveAsTemplate = async () => {
     const name = prompt('Template name', project.name);
     if (!name?.trim()) return;
-    const { data: nt, error } = await supabase.from('project_templates').insert({ name: name.trim(), description: project.description || null }).select().single();
+    const { data: nt, error } = await supabase.from('project_templates').insert({ name: name.trim(), description: project.description || null, phases: phases || [] }).select().single();
     if (error) { setErr(error.message); return; }
+    // Keeps the phases, the subtasks and each task's day offset from the project's start.
+    const start = new Date(String(project.created_at).slice(0, 10) + 'T00:00:00');
+    const offset = (d) => (d ? Math.max(0, Math.round((new Date(d + 'T00:00:00') - start) / 86400000)) : 0);
     const ordered = groups.flatMap(g => g.tasks);
-    const rows = ordered.map((t, i) => ({ project_template_id: nt.id, title: t.title, description: t.description || null, priority: t.priority || 'P2', sort_order: i }));
-    if (rows.length) await supabase.from('task_templates').insert(rows);
-    alert(`Saved as template “${name.trim()}” (${rows.length} task${rows.length === 1 ? '' : 's'}). Find it under Project templates.`);
+    let n = 0;
+    for (const [i, t] of ordered.entries()) {
+      const { data: row } = await supabase.from('task_templates').insert({ project_template_id: nt.id, title: t.title, description: t.description || null,
+        priority: t.priority || 'P2', sort_order: i, phase: phases.includes(t.phase) ? t.phase : null, due_offset_days: offset(t.due_date) }).select('id').single();
+      n++;
+      const kids = subs.filter(x => x.parent_task_id === t.id);
+      if (row && kids.length) {
+        await supabase.from('task_templates').insert(kids.map((k, j) => ({ project_template_id: nt.id, parent_template_id: row.id, title: k.title,
+          priority: 'P2', sort_order: j, due_offset_days: offset(k.due_date) })));
+        n += kids.length;
+      }
+    }
+    alert(`Saved as template “${name.trim()}” (${n} task${n === 1 ? '' : 's'}${phases.length ? `, ${phases.length} phases` : ''}). Find it under Project templates.`);
   };
 
   const startEdit = () => { setDraft({ ...project }); setEditing(true); };
