@@ -134,5 +134,11 @@ export function mapSheetRow(idx: Record<string, number>, row: string[], defCur =
   };
 }
 
+// supabase-js sends apikey and x-client-info as well: a preflight that does not
+// allow them is refused by the browser before the function ever runs.
 export const corsJson = (b: unknown, s = 200) =>
-  new Response(JSON.stringify(b), { status: s, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, content-type" } });
+  new Response(JSON.stringify(b), { status: s, headers: {
+    "Content-Type": "application/json", "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  } });
