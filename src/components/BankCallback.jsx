@@ -8,6 +8,16 @@ import { supabase } from '../lib/supabase';
 //      Monzo app, so we ask, and check every few seconds. The moment it is
 //      approved the whole history is imported: Monzo allows that for 5 minutes
 //      after approval only, then just the last 90 days.
+// A function's own error message: supabase-js only says "non-2xx status code"
+// and keeps the body on error.context.
+async function invoke(name, body) {
+  const { data, error } = await supabase.functions.invoke(name, { body });
+  if (!error) return { data, error: null };
+  let detail = null;
+  try { detail = (await error.context?.json())?.error; } catch { /* not json */ }
+  return { data: detail ? { error: detail } : data, error: detail ? null : error };
+}
+
 export default function BankCallback() {
   const [step, setStep] = useState('linking'); // linking | approve | importing | done | error
   const [msg, setMsg] = useState('');
@@ -16,7 +26,7 @@ export default function BankCallback() {
   const timer = useRef(null);
 
   const activate = async () => {
-    const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'activate', connection_id: conn.current } });
+    const { data, error } = await invoke('bank-connect', { action: 'activate', connection_id: conn.current });
     if (error || data?.error) { setStep('error'); setMsg(error?.message || data?.error || 'unknown error'); return true; }
     if (data.waiting) return false;
     setResult(data.accounts || []);
@@ -38,7 +48,7 @@ export default function BankCallback() {
       const errParam = p.get('error');
       if (errParam) { setStep('error'); setMsg('The bank said no (' + errParam + '). Try again from Bank feed.'); return; }
       if (!code || !state) { setStep('error'); setMsg('Missing sign in details. Try again from Bank feed.'); return; }
-      const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'finalise', reference: state, code } });
+      const { data, error } = await invoke('bank-connect', { action: 'finalise', reference: state, code });
       if (error || data?.error) { setStep('error'); setMsg(error?.message || data?.error || 'unknown error'); return; }
       if (data.status === 'LN') { setStep('done'); setResult([]); return; }
       conn.current = data.connection_id;

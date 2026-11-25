@@ -9,6 +9,16 @@ import { suggestMatch, suggestInvoice, invoiceBalance, applyRule, txnToBill, nor
 const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : '—';
 const daysUntil = (d) => d ? Math.ceil((new Date(d + 'T00:00:00') - Date.now()) / 86400000) : null;
 
+// A function's own error message: supabase-js only says "non-2xx status code"
+// and keeps the body on error.context.
+async function invoke(name, body) {
+  const { data, error } = await supabase.functions.invoke(name, { body });
+  if (!error) return { data, error: null };
+  let detail = null;
+  try { detail = (await error.context?.json())?.error; } catch { /* not json */ }
+  return { data: detail ? { error: detail } : data, error: detail ? null : error };
+}
+
 export default function BankFeedPanel({ profile }) {
   const [pick, setPick] = useState(null); // phone (20): the transaction whose actions are open
   const [connections, setConnections] = useState([]);
@@ -49,14 +59,14 @@ export default function BankFeedPanel({ profile }) {
 
   const connect = async () => {
     setBusy('institutions'); setErr('');
-    const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'institutions', country: 'gb' } });
+    const { data, error } = await invoke('bank-connect', { action: 'institutions', country: 'gb' });
     setBusy('');
     if (error || data?.error) { setErr('Could not load banks — is the bank-connect function deployed + secrets set? ' + (error?.message || data?.error || '')); return; }
     setPicker(data.institutions || []);
   };
   const pickBank = async (inst) => {
     setBusy('init'); setErr(''); setPicker(null);
-    const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'init', institution_id: inst.id, country: inst.country || 'GB' } });
+    const { data, error } = await invoke('bank-connect', { action: 'init', institution_id: inst.id, country: inst.country || 'GB' });
     setBusy('');
     if (error || data?.error) { setErr('Could not connect. ' + (error?.message || data?.error || '')); return; }
     if (data.link) { window.location.href = data.link; return; }   // hosted bank-consent flow (Open Banking providers)
@@ -65,7 +75,7 @@ export default function BankFeedPanel({ profile }) {
   };
   const refresh = async (connId) => {
     setBusy('sync:' + connId); setErr('');
-    const { data, error } = await supabase.functions.invoke('bank-sync', { body: { connection_id: connId } });
+    const { data, error } = await invoke('bank-sync', { connection_id: connId });
     setBusy('');
     if (error || data?.error) { setErr('Sync failed. ' + (error?.message || data?.error || '')); return; }
     load();
@@ -88,7 +98,7 @@ export default function BankFeedPanel({ profile }) {
   const matchTo = async (txn, type, id) => {
     if (type === 'invoice') {
       setErr('');
-      const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'match_invoice', txn_id: txn.id, invoice_id: id } });
+      const { data, error } = await invoke('bank-connect', { action: 'match_invoice', txn_id: txn.id, invoice_id: id });
       if (error || data?.error) setErr('Could not match: ' + (data?.error || error?.message || ''));
       load();
       return;
@@ -109,7 +119,7 @@ export default function BankFeedPanel({ profile }) {
   const ignore = async (txn) => { await markReconciled(txn.id, { matched_type: 'ignored' }); load(); };
   const activate = async (connId) => {
     setBusy('activate:' + connId); setErr('');
-    const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'activate', connection_id: connId } });
+    const { data, error } = await invoke('bank-connect', { action: 'activate', connection_id: connId });
     setBusy('');
     if (error || data?.error) { setErr('Could not finish connecting. ' + (data?.error || error?.message || '')); return; }
     if (data.waiting) { setErr('Monzo is still waiting for you to tap Allow in the Monzo app.'); return; }
