@@ -106,3 +106,67 @@ describe('txnToBill', () => {
     expect(b).toMatchObject({ status: 'paid', total: 120, subtotal: 120, amount_paid: 120, paid_at: '2026-06-01', payment_method: 'bank', payment_reference: 't:1', supplier_id: 's1' });
   });
 });
+
+import { mapMonzoTransaction as mzWeb, suggestInvoice, referencesInvoice, invoiceBalance } from './bankRecon.js';
+import { mapMonzoTransaction as mzServer } from '../../supabase/functions/_shared/monzo.ts';
+
+describe('Monzo transactions', () => {
+  const card = { id: 'tx_1', created: '2026-11-20T10:00:00Z', settled: '2026-11-21T09:00:00Z', amount: -1250, currency: 'GBP',
+    description: 'AMAZON MKTPLACE', merchant: { name: 'Amazon' }, notes: '' };
+  const bacs = { id: 'tx_2', created: '2026-11-22T08:00:00Z', settled: '', amount: 269160, currency: 'GBP',
+    description: 'INV-1021', counterparty: { name: 'COFFEE BOY RETAIL LTD' }, notes: '' };
+
+  it('maps money out and money in, signed, in pounds', () => {
+    expect(mzWeb(card)).toEqual({ dedup_key: 'mz:tx_1', status: 'booked', booking_date: '2026-11-20', value_date: '2026-11-21',
+      amount: -12.5, currency: 'GBP', payee: 'Amazon', description: 'AMAZON MKTPLACE' });
+    expect(mzWeb(bacs)).toMatchObject({ status: 'pending', amount: 2691.6, payee: 'COFFEE BOY RETAIL LTD', description: 'INV-1021' });
+  });
+
+  it('skips declined and zero lines', () => {
+    expect(mzWeb({ ...card, decline_reason: 'INSUFFICIENT_FUNDS' })).toBeNull();
+    expect(mzWeb({ ...card, amount: 0 })).toBeNull();
+    expect(mzWeb(null)).toBeNull();
+  });
+
+  it('the server copy maps the same', () => {
+    for (const t of [card, bacs, { ...card, merchant: 'merch_1' }, { ...bacs, notes: 'Thanks', metadata: { notes: 'Thanks' } }]) {
+      expect(mzServer(t)).toEqual(mzWeb(t));
+    }
+  });
+});
+
+describe('matching money in to invoices', () => {
+  const inv = (o) => ({ id: o.id, invoice_number: o.n, total: o.total, amount_paid: o.paid || 0, due_date: o.due || '2026-11-25', company_name: o.co });
+  const invoices = [
+    inv({ id: 'a', n: 1021, total: 2691.6, co: 'Coffee Boy Retail' }),
+    inv({ id: 'b', n: 1030, total: 500, co: 'Verde' }),
+    inv({ id: 'c', n: 1031, total: 500, co: 'Mozz Sourdough Pizza' }),
+  ];
+
+  it('finds the invoice by the reference', () => {
+    expect(referencesInvoice('INV-1021', 1021)).toBe(true);
+    expect(referencesInvoice('inv 1021 thanks', 1021)).toBe(true);
+    expect(referencesInvoice('Payment 1021', 1021)).toBe(true);
+    expect(referencesInvoice('INV-10210', 1021)).toBe(false);
+    expect(referencesInvoice('100 pounds', 100)).toBe(false);
+    expect(referencesInvoice('INV 100', 100)).toBe(true);
+  });
+
+  it('suggests the exact amount, and the customer breaks a tie', () => {
+    expect(suggestInvoice({ amount: 2691.6, payee: 'COFFEE BOY RETAIL LTD' }, invoices)).toMatchObject({ id: 'a', part: false });
+    expect(suggestInvoice({ amount: 500, payee: 'MOZZ SOURDOUGH PIZZA LLC' }, invoices).id).toBe('c');
+    expect(suggestInvoice({ amount: 500, payee: 'Someone', description: 'INV-1030' }, invoices).id).toBe('b');
+  });
+
+  it('allows a part payment only when the reference names the invoice', () => {
+    expect(suggestInvoice({ amount: 1000, payee: 'Coffee Boy' }, invoices)).toBeNull();
+    expect(suggestInvoice({ amount: 1000, payee: 'Coffee Boy', description: 'INV-1021 part' }, invoices)).toMatchObject({ id: 'a', part: true });
+  });
+
+  it('never matches money out, or a paid invoice', () => {
+    expect(suggestInvoice({ amount: -500 }, invoices)).toBeNull();
+    expect(suggestInvoice({ amount: 500, description: 'INV-1030' }, [inv({ id: 'b', n: 1030, total: 500, paid: 500 })])).toBeNull();
+    expect(invoiceBalance({ total: 100, amount_paid: 40, amount_allocated: 10 })).toBe(50);
+    expect(invoiceBalance({ total: 100, amount_paid: 0, amount_credited: 30 })).toBe(70);
+  });
+});

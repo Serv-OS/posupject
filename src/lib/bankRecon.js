@@ -4,6 +4,7 @@
 // matching brain plus pure mirrors of the Enable Banking transaction mapping (kept
 // byte-for-byte identical to supabase/functions/_shared/enablebanking.ts so vitest covers it).
 import { round2 } from './money.js';
+import { balanceDue } from './creditNotes.js';
 
 // Normalise a bank payee/description for matching + rules: uppercase, strip common
 // card-network/scheme noise + punctuation, collapse whitespace.
@@ -127,4 +128,74 @@ export function txnToBill(txn, { supplier_id = null, category_id = null, cost_co
     amount_paid: gross, paid_at: txn.booking_date || txn.value_date,
     payment_method: 'bank', payment_reference: txn.dedup_key || null,
   };
+}
+
+// --- Monzo Developer API mapping (pure mirror of supabase/functions/_shared/monzo.ts) ---
+// Amount is integer pence, negative = money out. Declined or zero lines never
+// moved money and are skipped. settled === '' means authorised, not complete.
+export function mapMonzoTransaction(t) {
+  if (!t || !t.id || t.decline_reason) return null;
+  const pence = Number(t.amount || 0);
+  if (!pence) return null;
+  const merchant = t.merchant && typeof t.merchant === 'object' ? t.merchant : null;
+  const counterparty = t.counterparty && typeof t.counterparty === 'object' ? t.counterparty : null;
+  const payee = merchant?.name || counterparty?.name || counterparty?.preferred_name || t.description || null;
+  const ref = [t.notes, t.metadata?.notes, counterparty ? t.description : null]
+    .map((x) => String(x ?? '').trim()).filter(Boolean);
+  const day = (s) => (typeof s === 'string' && s.length >= 10 ? s.slice(0, 10) : null);
+  return {
+    dedup_key: 'mz:' + t.id,
+    status: t.settled ? 'booked' : 'pending',
+    booking_date: day(t.created),
+    value_date: day(t.settled) || null,
+    amount: Math.round(pence) / 100,
+    currency: t.currency || 'GBP',
+    payee,
+    description: [...new Set(ref)].join(' · ') || t.description || null,
+  };
+}
+
+// What is still owed on an invoice: the invoice screen's own rule (cash paid,
+// credit notes and credit applied all come off), so a match never disagrees
+// with what the invoice says is due.
+export const invoiceBalance = (inv = {}) => balanceDue(inv);
+
+// Does the bank reference carry this invoice's number? "INV-1021", "inv 1021",
+// "1021" as a whole word. Short numbers need the INV prefix, so a £100
+// payment never reads as invoice 100.
+export function referencesInvoice(text, number) {
+  if (number == null) return false;
+  const s = String(text || '').toUpperCase();
+  const n = String(number);
+  if (new RegExp(`INV[\\s#:-]*0*${n}(?!\\d)`).test(s)) return true;
+  return n.length >= 4 && new RegExp(`(^|\\D)${n}(?!\\d)`).test(s);
+}
+
+// Suggest the open invoice an INCOMING payment settles. The amount must equal
+// what is still owed, to the penny, unless the reference names the invoice
+// (a part payment). Score: reference names it, then payer looks like the
+// customer, then closeness to the due date.
+export function suggestInvoice(txn = {}, invoices = []) {
+  const amt = round2(Number(txn.amount || 0));
+  if (amt <= 0) return null;
+  const text = `${txn.payee || ''} ${txn.description || ''}`;
+  const payer = normalizePayee(txn.payee || txn.description);
+  const txDate = txn.booking_date || txn.value_date;
+  let best = null;
+  for (const inv of invoices) {
+    const owed = invoiceBalance(inv);
+    if (owed <= 0) continue;
+    const named = referencesInvoice(text, inv.invoice_number);
+    const exact = owed === amt;
+    if (!exact && !(named && amt < owed)) continue;
+    const due = inv.due_date || inv.issue_date;
+    const days = txDate && due ? Math.abs((new Date(txDate) - new Date(due)) / 86400000) : 60;
+    let score = 100 - Math.min(days, 60);
+    if (named) score += 200;
+    const cust = normalizePayee(inv.company_name);
+    if (cust && payer && (cust.includes(payer) || payer.includes(cust))) score += 80;
+    if (!exact) score -= 50;
+    if (!best || score > best.score) best = { type: 'invoice', id: inv.id, score, part: !exact };
+  }
+  return best;
 }

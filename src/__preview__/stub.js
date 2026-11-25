@@ -353,6 +353,14 @@ export const TABLES = { project_templates: [{ id: 'tpl1', name: 'New template', 
     { id: 'ex2', expense_date: d(-5), description: 'Train to Macclesfield', merchant: 'Northern', amount: 32.5, net: 32.5, vat_amount: 0, total: 32.5, currency: 'GBP', status: 'submitted', company_id: 'c2', location_id: 'l1', created_by: ME, created_at: ts(-5) },
   ], bill_schedules: [], recurring_bills: [], suppliers: [{ id: 's1', name: 'Lightspeed POS UK Ltd' }, { id: 's2', name: 'Adyen N.V.' }, { id: 's3', name: 'Sumup Payments Ltd' }], expense_categories: [{ id: 'ec1', label: 'Software', active: true, sort: 1 }], attachments: [], processing_accounts: PROC_ACCOUNTS, processing_rates: PROC_RATES, leads: LEADS, stage_history: STAGE_HISTORY,
   onboarding_form_requests: PACK_REQUESTS, onboarding_form_secure: PACK_SECURE,
+  bank_connections: [{ id: 'bc1', reference: 'r1', institution_id: 'monzo', institution_name: 'Monzo Business', status: 'LN', last_synced_at: ts(0), created_at: ts(-1) }],
+  bank_accounts: [{ id: 'ba1', connection_id: 'bc1', gc_account_id: 'acc_1', provider_account_id: 'acc_1', name: 'Monzo Business · POSUP', currency: 'GBP', balance: 12840.22, iban: '04-00-06 12345678', active: true, last_synced_at: ts(0) }],
+  bank_transactions: [
+    { id: 'bt1', account_id: 'ba1', gc_account_id: 'acc_1', dedup_key: 'mz:tx_1', status: 'booked', booking_date: d(-1), amount: 682.5, currency: 'GBP', payee: 'VERDE KITCHENS LTD', description: 'INV-1045', reconciled: false },
+    { id: 'bt2', account_id: 'ba1', gc_account_id: 'acc_1', dedup_key: 'mz:tx_2', status: 'pending', booking_date: d(0), amount: 250, currency: 'GBP', payee: 'A Customer', description: 'thanks', reconciled: false },
+    { id: 'bt3', account_id: 'ba1', gc_account_id: 'acc_1', dedup_key: 'mz:tx_3', status: 'booked', booking_date: d(-2), amount: -45.99, currency: 'GBP', payee: 'Google', description: 'GSUITE', reconciled: false },
+  ],
+  bank_match_rules: [],
   invoices: INVOICES, invoice_line_items: INVOICE_LINES, credit_notes: CREDIT_NOTES, credit_note_lines: CREDIT_NOTE_LINES, support_settings: SUPPORT_SETTINGS,
   credit_allocations: CREDIT_ALLOCATIONS, invoice_payment_adjustments: PAYMENT_ADJUSTMENTS };
 export const MEMBERS_LIST = MEMBERS;

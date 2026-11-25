@@ -1,24 +1,81 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
-// Enable Banking redirects the user here (/bank/callback?code=<auth code>&state=<reference>)
-// after bank consent. We exchange the code for a session (POST /sessions) which fetches +
-// stores the linked accounts, then return to the app.
+// Monzo sends the user back here (/bank/callback?code=...&state=<reference>)
+// after they sign in. Two more steps happen on this page:
+//   1. finalise: the code is swapped for tokens
+//   2. activate: Monzo only shares data once the access is approved in the
+//      Monzo app, so we ask, and check every few seconds. The moment it is
+//      approved the whole history is imported: Monzo allows that for 5 minutes
+//      after approval only, then just the last 90 days.
 export default function BankCallback() {
-  const [msg, setMsg] = useState('Linking your bank…');
+  const [step, setStep] = useState('linking'); // linking | approve | importing | done | error
+  const [msg, setMsg] = useState('');
+  const [result, setResult] = useState(null);
+  const conn = useRef(null);
+  const timer = useRef(null);
+
+  const activate = async () => {
+    const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'activate', connection_id: conn.current } });
+    if (error || data?.error) { setStep('error'); setMsg(error?.message || data?.error || 'unknown error'); return true; }
+    if (data.waiting) return false;
+    setResult(data.accounts || []);
+    setStep('done');
+    return true;
+  };
+
+  const poll = async () => {
+    setStep((s) => (s === 'approve' ? 'approve' : s));
+    const finished = await activate();
+    if (!finished) timer.current = setTimeout(poll, 4000);
+  };
+
   useEffect(() => {
     (async () => {
       const p = new URLSearchParams(window.location.search);
       const code = p.get('code');
-      const state = p.get('state') || p.get('ref');   // state is our connection reference
+      const state = p.get('state') || p.get('ref');
       const errParam = p.get('error');
-      if (errParam) { setMsg('Your bank declined the connection (' + errParam + '). Please retry from the Bank feed.'); return; }
-      if (!code || !state) { setMsg('Missing authorisation — please retry from the Bank feed.'); return; }
+      if (errParam) { setStep('error'); setMsg('The bank said no (' + errParam + '). Try again from Bank feed.'); return; }
+      if (!code || !state) { setStep('error'); setMsg('Missing sign in details. Try again from Bank feed.'); return; }
       const { data, error } = await supabase.functions.invoke('bank-connect', { body: { action: 'finalise', reference: state, code } });
-      if (error || data?.error) { setMsg('Could not finish linking: ' + (error?.message || data?.error || 'unknown error')); return; }
-      setMsg(data.status === 'LN' ? 'Bank linked ✓ Taking you back…' : `Almost there (status ${data.status}). Returning — use Refresh shortly.`);
-      setTimeout(() => { window.location.href = '/'; }, 1400);
+      if (error || data?.error) { setStep('error'); setMsg(error?.message || data?.error || 'unknown error'); return; }
+      if (data.status === 'LN') { setStep('done'); setResult([]); return; }
+      conn.current = data.connection_id;
+      setStep('approve');
+      timer.current = setTimeout(poll, 3000);
     })();
+    return () => clearTimeout(timer.current);
   }, []);
-  return <div className="h-full flex items-center justify-center text-muted text-sm">{msg}</div>;
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="glass-card rounded-2xl p-6 max-w-md w-full text-center space-y-3">
+        {step === 'linking' && <div className="text-muted text-sm">Linking Monzo…</div>}
+        {step === 'approve' && (
+          <>
+            <div className="text-lg font-bold text-paper">Approve it in the Monzo app</div>
+            <div className="text-sm text-muted">Open Monzo on your phone and tap <b>Allow</b> on the request to share your data. This page carries on by itself once you have.</div>
+            <div className="text-[11px] text-dim">Checking every few seconds…</div>
+          </>
+        )}
+        {step === 'done' && (
+          <>
+            <div className="text-lg font-bold text-paper">Monzo is connected</div>
+            {(result || []).map((r) => (
+              <div key={r.account} className="text-sm text-muted">{r.account}: {r.imported} transactions imported{r.webhook === 'registered' ? ', live updates on' : ''}</div>
+            ))}
+            <button onClick={() => { window.location.href = '/'; }} className="btn-glass px-5 py-2 rounded-xl text-sm font-semibold">Back to the CRM</button>
+          </>
+        )}
+        {step === 'error' && (
+          <>
+            <div className="text-lg font-bold text-paper">Could not finish connecting</div>
+            <div className="text-sm text-red-600">{msg}</div>
+            <button onClick={() => { window.location.href = '/'; }} className="btn-glass px-5 py-2 rounded-xl text-sm">Back to the CRM</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }

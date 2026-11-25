@@ -11,6 +11,7 @@ import Timeline from '../components/crm/Timeline.jsx';
 import WorkCalendar from '../components/crm/WorkCalendar.jsx';
 import WorkBoard from '../components/crm/WorkBoard.jsx';
 import BillsPanel from '../components/finance/BillsPanel.jsx';
+import BankFeedPanel from '../components/finance/BankFeedPanel.jsx';
 import QuoteBuilder from '../components/crm/QuoteBuilder.jsx';
 import MobileInbox from '../components/crm/MobileInbox.jsx';
 import CallLogPanel from '../components/crm/CallLogPanel.jsx';
@@ -461,6 +462,7 @@ function App() {
         {v === 'calendar' && <WorkCalendar profile={P} onNavigate={nav} />}
         {v === 'board' && <WorkBoard profile={P} onNavigate={nav} initialTab="board" />}
         {v === 'bills' && <BillsPanel profile={P} onNavigate={nav} />}
+        {v === 'bankfeed' && <BankFeedPanel profile={P} />}
         {v === 'quote' && <QuoteBuilder quoteId="q1" profile={P} onClose={nav} onNavigate={nav} />}
         {v === 'reporting' && <ReportingDashboard profile={P} onNavigate={nav} />}
         {v === 'expenses' && <ExpensesPanel profile={P} onNavigate={nav} />}
