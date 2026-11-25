@@ -132,7 +132,7 @@ serve(async (req) => {
       if (!txn) return corsJson({ error: "Transaction not found." }, 404);
       if (txn.reconciled) return corsJson({ error: "That payment is already matched." }, 409);
       if (Number(txn.amount) <= 0) return corsJson({ error: "Only money coming in can pay an invoice." }, 400);
-      const { data: inv } = await admin.from("invoices").select("id, currency").eq("id", String(body.invoice_id || "")).maybeSingle();
+      const { data: inv } = await admin.from("invoices").select("*").eq("id", String(body.invoice_id || "")).maybeSingle();
       if (!inv) return corsJson({ error: "Invoice not found." }, 404);
       if ((inv.currency || "GBP") !== (txn.currency || "GBP")) return corsJson({ error: "The payment and the invoice are in different currencies." }, 400);
       // The bank line's own key is the payment reference, so the same line can
