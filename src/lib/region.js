@@ -60,3 +60,26 @@ export function localTimeForPhone(raw, regions) {
 // definition and its tests) can use it without importing the Supabase client.
 // Re-exported here so every existing `import { toE164 } from '…/region'` works.
 export { toE164 } from './phoneFormat';
+
+/** Who is billing: the invoice currency picks the company (USD = the US
+ *  company, GBP = the UK one). The region's name, address, email, phone,
+ *  terms and footer win; anything empty falls back to the global settings.
+ *  Same rule as invoiceSeller in supabase/functions/_shared/region.ts. */
+export function mergeSeller(settings, regions, currency) {
+  const base = settings || {};
+  const cur = currency === 'USD' ? 'USD' : 'GBP';
+  const r = (regions || []).find((x) => x.currency === cur);
+  if (!r) return base;
+  const pick = (a, b) => (a === null || a === undefined || String(a).trim() === '' ? b : a);
+  return {
+    ...base,
+    region_code: r.code,
+    business_name: pick(r.business_name, base.business_name),
+    business_address: pick(r.business_address, base.business_address),
+    business_email: pick(r.business_email, base.business_email),
+    business_phone: pick(r.business_phone, base.business_phone),
+    invoice_terms: pick(r.invoice_terms, base.invoice_terms),
+    quote_terms: pick(r.quote_terms, base.quote_terms),
+    invoice_footer: pick(r.invoice_footer, base.invoice_footer ?? null),
+  };
+}

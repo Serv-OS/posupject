@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { Receipt, Plus, Repeat, X, Trash2, FileDown, Download, FileMinus, Wallet } from 'lucide-react';
 import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT, isSellable } from '../../lib/catalogue';
 import { fmtMoney, sumByCurrency, fmtByCurrency, currencySymbol, taxLabelFor, currencyLocale, defaultTaxRateFor } from '../../lib/money';
-import { currencyForCountry } from '../../lib/region';
+import { currencyForCountry, loadRegions, mergeSeller } from '../../lib/region';
 import { useStickyState } from '../../lib/stickyState';
 import { downloadListPdf } from '../../lib/listPdf';
 import { balanceDue, creditState, amountPaid, creditNoteLabel, creditNoteStatusLabel, creditNoteStatusKind, overpaidNotOnCredit, creditAvailable, creditUse } from '../../lib/creditNotes';
@@ -166,9 +166,9 @@ export default function InvoicesPanel({ profile, onNavigate }) {
     try {
       const [{ data: lines }, { data: seller }, { data: contact }, applied] = await Promise.all([
         supabase.from('invoice_line_items').select('*').eq('invoice_id', inv.id).order('sort'),
-        supabase.from('support_settings')
-          .select('business_name, business_address, business_email, business_phone, logo_url, quote_accent, invoice_terms')
-          .eq('id', 1).maybeSingle(),
+        // The company billing, picked by the invoice currency (UK or US).
+        Promise.all([supabase.from('support_settings').select('*').eq('id', 1).maybeSingle(), loadRegions()])
+          .then(([st, rg]) => ({ data: mergeSeller(st.data, rg, inv.currency) })),
         inv.contact_id
           ? supabase.from('contacts').select('first_name, last_name, email').eq('id', inv.contact_id).maybeSingle()
           : Promise.resolve({ data: null }),
@@ -203,6 +203,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
           name: seller?.business_name, address: seller?.business_address,
           email: seller?.business_email, phone: seller?.business_phone,
           logo_url: seller?.logo_url, accent: seller?.quote_accent,
+          footer: seller?.invoice_footer || null,
         },
         billTo: {
           companyName: company?.name, companyAddress: addr(company),

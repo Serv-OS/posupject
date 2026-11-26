@@ -8,7 +8,7 @@ import AmountReceivedModal from './AmountReceivedModal.jsx';
 import BillInStagesModal from './BillInStagesModal.jsx';
 import { listPrice, unitPriceFor, isPricedIn, lineDescriptionFor, BUNDLE_SELECT, bundleParts, bundleBuildable, isSellable } from '../../lib/catalogue';
 import { round2, taxLabelFor, defaultTaxRateFor, currencySymbol, currencyLocale } from '../../lib/money';
-import { currencyForCountry } from '../../lib/region';
+import { currencyForCountry, loadRegions, mergeSeller } from '../../lib/region';
 import { downloadInvoicePdf, creditNotePdf } from '../../lib/invoicePdf';
 import { savableLines, namelessWithValue, invoiceTotals } from '../../lib/invoiceLines';
 import { stageLines } from '../../lib/invoiceStages';
@@ -31,10 +31,10 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
   const [products, setProducts] = useState([]);
   const [bundleRows, setBundleRows] = useState([]);
   const [stockCounts, setStockCounts] = useState({});
-  const [globalTerms, setGlobalTerms] = useState('');
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
-  const [seller, setSeller] = useState(null);
+  const [settingsRow, setSettingsRow] = useState(null);
+  const [regions, setRegions] = useState([]);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [flash, setFlash] = useState('');
   // Declared up here with the rest: a hook below the loading return would
@@ -137,7 +137,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
       supabase.from('companies').select('id, name, address, city, postcode, country').order('name'),
       supabase.from('locations').select('id, name, company_id, address, city, postcode, country').order('name'),
       supabase.from('contacts').select('id, first_name, last_name, email').order('last_name'),
-      supabase.from('support_settings').select('invoice_terms, business_name, business_address, business_email, business_phone, logo_url, quote_accent').eq('id', 1).maybeSingle(),
+      supabase.from('support_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('products').select('id, name, description, default_price, default_price_usd, cost_price_usd, category, is_bundle, track_inventory, sold_separately').eq('active', true).order('name'),
       supabase.from('inv_serials').select('product_id').eq('status', 'in_stock'),
       // Newest first. An error (the credit notes migration not applied yet)
@@ -155,8 +155,8 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
     const counts = {};
     (sk.data || []).forEach(r => { counts[r.product_id] = (counts[r.product_id] || 0) + 1; });
     setStockCounts(counts);
-    setGlobalTerms(st.data?.invoice_terms || '');
-    setSeller(st.data || {});
+    setSettingsRow(st.data || {});
+    loadRegions().then(setRegions);
     loadAllocations(cn.error ? [] : cn.data, i.data);
     loadHistory();
   }, [invoiceId, loadAllocations, loadHistory]);
@@ -415,11 +415,16 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
     try { await navigator.clipboard.writeText(url); notify(canMarkPaid ? 'Pay link copied: the customer can pay by card from it' : 'Link copied'); } catch { prompt('Invoice link:', url); }
   };
 
+  // The company billing: the invoice currency picks the UK or US company's
+  // name, address, terms and footer (Settings, Regions).
+  const seller = mergeSeller(settingsRow, regions, inv?.currency);
+  const globalTerms = seller?.invoice_terms || '';
   // The seller and customer blocks, shared by the invoice and credit note PDFs.
   const sellerInfo = () => ({
     name: seller?.business_name, address: seller?.business_address,
     email: seller?.business_email, phone: seller?.business_phone,
     logo_url: seller?.logo_url, accent: seller?.quote_accent,
+    footer: seller?.invoice_footer || null,
   });
   const billToFor = (row) => {
     const company = companies.find(c => c.id === row.company_id);
@@ -1043,7 +1048,7 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
               <textarea className={input + ' resize-none'} rows={2} disabled={locked} value={inv.notes || ''} onChange={e => set('notes', e.target.value)} /></div>
             <div><label className={label}>Terms</label>
               <textarea className={input + ' resize-none'} rows={3} disabled={locked} value={inv.terms || ''} onChange={e => set('terms', e.target.value)}
-                placeholder={globalTerms ? `Default: ${globalTerms.slice(0, 120)}…` : 'Falls back to the global invoice terms in Settings'} /></div>
+                placeholder={globalTerms ? `Default: ${globalTerms.slice(0, 120)}…` : 'Falls back to this company\'s invoice terms in Settings, Regions'} /></div>
           </div>
 
         </div>

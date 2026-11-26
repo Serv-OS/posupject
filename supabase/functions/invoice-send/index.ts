@@ -1,6 +1,7 @@
 // Sends an invoice to the customer by email (from the connected support
 // mailbox) and marks it sent. Auth: caller JWT, editor/owner only.
 
+import { invoiceSeller } from "../_shared/region.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { invoiceEmailHtml, sendInvoiceEmail } from "../_shared/invoiceEmail.ts";
@@ -39,8 +40,7 @@ serve(async (req) => {
     }
     if (!recipient) return json({ error: "No recipient email — add one to the invoice or link a contact." }, 422);
 
-    const { data: seller } = await supabase.from("support_settings")
-      .select("business_name, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle();
+    const { data: seller } = await invoiceSeller(supabase, inv.currency);
 
     const appUrl = Deno.env.get("APP_URL") || "https://posupject.vercel.app";
     const link = `${appUrl}/i/${inv.public_token}`;

@@ -4,6 +4,7 @@
 // invoices ("Applied to invoice INV-1050: £224.00"), refunded, and what is
 // left. The unguessable token is the auth, as it is for invoice-public.
 
+import { invoiceSeller } from "../_shared/region.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { balanceDue, creditUse, sameCustomer } from "../_shared/invoiceEmail.ts";
@@ -68,7 +69,7 @@ serve(async (req) => {
       companyId ? supabase.from("companies").select("name, address, city, postcode").eq("id", companyId).maybeSingle() : Promise.resolve({ data: null }),
       contactId ? supabase.from("contacts").select("first_name, last_name, email").eq("id", contactId).maybeSingle() : Promise.resolve({ data: null }),
       locationId ? supabase.from("locations").select("name, address, city, postcode").eq("id", locationId).maybeSingle() : Promise.resolve({ data: null }),
-      supabase.from("support_settings").select("business_name, business_address, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle(),
+      invoiceSeller(supabase, inv.currency),
       appliedTo(supabase, note),
     ]);
 
@@ -102,6 +103,7 @@ serve(async (req) => {
         name: s.business_name || "ServOS", address: s.business_address || "",
         email: s.business_email || "", phone: s.business_phone || "",
         accent: s.quote_accent || "#15C26A", logo_url: s.logo_url || null,
+        footer: s.invoice_footer || "",
       },
       company: company ? { name: company.name, address: [company.address, company.city, company.postcode].filter(Boolean).join(", ") } : null,
       contact: contact ? { name: [contact.first_name, contact.last_name].filter(Boolean).join(" "), email: contact.email } : null,

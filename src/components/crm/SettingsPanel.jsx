@@ -769,6 +769,27 @@ export default function SettingsPanel({ profile }) {
                             onBlur={e => saveRegion(r.code, { business_address: e.target.value || null })}
                             placeholder="Falls back to the global setting" />
                         </div>
+                        {/* Peter, 25 Nov 2026: each company bills with its own
+                            terms, bank details and footer. The invoice currency
+                            picks the company (USD = US, GBP = UK). */}
+                        <div className="mt-2">
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Invoice terms and bank details</label>
+                          <textarea rows={8}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember placeholder-dim"
+                            value={r.invoice_terms || ''}
+                            onChange={e => upd({ invoice_terms: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { invoice_terms: e.target.value || null })}
+                            placeholder={`Shown on every ${r.currency === 'USD' ? 'dollar' : 'pound'} invoice. Falls back to the global invoice terms`} />
+                        </div>
+                        <div className="mt-2">
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Invoice footer</label>
+                          <textarea rows={2}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper resize-none focus:outline-none focus:border-ember placeholder-dim"
+                            value={r.invoice_footer || ''}
+                            onChange={e => upd({ invoice_footer: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { invoice_footer: e.target.value || null })}
+                            placeholder={r.currency === 'USD' ? 'e.g. ServOS App Inc · Delaware · EIN 00-0000000' : 'e.g. ServOS App Ltd · Registered in England 00000000 · VAT GB000000000'} />
+                        </div>
                       </div>
                     </div>
                   );

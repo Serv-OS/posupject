@@ -118,3 +118,35 @@ export function fromNumberFor(regions: SupportRegion[], recipient: string | null
   const uk = regions.find((x) => x.code === "UK");
   return dialable(uk?.twilio_number, "GB") || envFallback;
 }
+
+/** Who is billing (Peter, 25 Nov 2026: "all invoices need different footers,
+ *  terms etc based on which company is billing them, US or UK company").
+ *  The invoice's currency decides the company: USD is the US company, GBP the
+ *  UK one. The region's own name, address, email, phone, invoice terms and
+ *  footer win; anything left empty falls back to the global settings.
+ *  Returns { data } shaped like a support_settings row, so it drops in where
+ *  `supabase.from("support_settings").select(...).eq("id", 1).maybeSingle()` was. */
+export async function invoiceSeller(supabase: Sb, currency: string | null | undefined): Promise<{ data: any }> {
+  const [{ data: s }, regions] = await Promise.all([
+    supabase.from("support_settings").select("*").eq("id", 1).maybeSingle(),
+    loadRegions(supabase),
+  ]);
+  const cur = currency === "USD" ? "USD" : "GBP";
+  const r: any = regions.find((x) => x.currency === cur) || null;
+  const base = s || {};
+  if (!r) return { data: base };
+  const pick = (a: unknown, b: unknown) => (a === null || a === undefined || String(a).trim() === "" ? b : a);
+  return {
+    data: {
+      ...base,
+      region_code: r.code,
+      business_name: pick(r.business_name, base.business_name),
+      business_address: pick(r.business_address, base.business_address),
+      business_email: pick(r.business_email, base.business_email),
+      business_phone: pick(r.business_phone, base.business_phone),
+      invoice_terms: pick(r.invoice_terms, base.invoice_terms),
+      quote_terms: pick(r.quote_terms, base.quote_terms),
+      invoice_footer: pick(r.invoice_footer, base.invoice_footer ?? null),
+    },
+  };
+}

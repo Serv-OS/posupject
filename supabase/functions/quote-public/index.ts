@@ -3,6 +3,7 @@
 //   POST { token, name, signature } -> save the drawn signature, mark signed,
 //         and (if terms = invoice_later) execute the quote immediately.
 
+import { invoiceSeller } from "../_shared/region.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ensureInvoiceForQuote, quoteContactEmail } from "../_shared/quoteInvoice.ts";
@@ -110,8 +111,7 @@ serve(async (req) => {
       if (inv && quote.payment_terms === "invoice_later") {
         const recipient = await quoteContactEmail(supabase, quote);
         if (recipient) {
-          const { data: seller } = await supabase.from("support_settings")
-            .select("business_name, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle();
+          const { data: seller } = await invoiceSeller(supabase, inv.currency);
           const appUrl = Deno.env.get("APP_URL") || "https://posupject.vercel.app";
           const { subject, html } = invoiceEmailHtml(inv, seller || {}, `${appUrl}/i/${inv.public_token}`, {});
           await sendInvoiceEmail(supabase, recipient, subject, html);

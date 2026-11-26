@@ -5,6 +5,7 @@
 // database functions), so sent_at and email_to are stamped with the service
 // role client this function already holds.
 
+import { invoiceSeller } from "../_shared/region.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { creditNoteEmailHtml, sendInvoiceEmail } from "../_shared/invoiceEmail.ts";
@@ -71,8 +72,7 @@ serve(async (req) => {
     if (!recipient) return json({ error: "No email address to send to. Add one, or link a contact to the invoice." }, 422);
     if (!looksLikeEmail(recipient)) return json({ error: "That email address does not look right." }, 422);
 
-    const { data: seller } = await supabase.from("support_settings")
-      .select("business_name, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle();
+    const { data: seller } = await invoiceSeller(supabase, inv?.currency);
 
     const appUrl = Deno.env.get("APP_URL") || "https://posupject.vercel.app";
     const link = `${appUrl}/c/${note.public_token}`;

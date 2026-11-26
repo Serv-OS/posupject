@@ -195,7 +195,7 @@ export async function buildInvoicePdfBytes({ inv = {} as any, lines = [] as any[
     doc.setPage(p);
     doc.setDrawColor(238).line(M, fy - 12, W - M, fy - 12);
     doc.setFont("helvetica", "normal").setFontSize(8.5).setTextColor(160, 160, 160);
-    doc.text([seller.name, seller.email, seller.phone].filter(Boolean).join("   ·   ") || "Thank you for your business", M, fy);
+    doc.text(doc.splitTextToSize(String(seller.footer || [seller.name, seller.email, seller.phone].filter(Boolean).join("   ·   ") || "Thank you for your business").replace(/\s*\n\s*/g, "   ·   "), W - 2 * M - 150)[0] || "", M, fy);
     doc.text(pages > 1 ? `INV-${number}   ·   page ${p} of ${pages}` : `INV-${number}`, W - M, fy, { align: "right" });
   }
   doc.setPage(pages);

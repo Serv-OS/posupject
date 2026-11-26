@@ -3,6 +3,7 @@
 // plus the invoice's issued credit notes, the credit applied to it from other
 // invoices' credit notes, and what is left to pay after both.
 
+import { invoiceSeller } from "../_shared/region.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { amountAllocated, balanceDue, sameCustomer } from "../_shared/invoiceEmail.ts";
@@ -58,7 +59,7 @@ serve(async (req) => {
       inv.company_id ? supabase.from("companies").select("name, address, city, postcode").eq("id", inv.company_id).maybeSingle() : Promise.resolve({ data: null }),
       inv.contact_id ? supabase.from("contacts").select("first_name, last_name, email").eq("id", inv.contact_id).maybeSingle() : Promise.resolve({ data: null }),
       inv.location_id ? supabase.from("locations").select("name, address, city, postcode").eq("id", inv.location_id).maybeSingle() : Promise.resolve({ data: null }),
-      supabase.from("support_settings").select("invoice_terms, business_name, business_address, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle(),
+      invoiceSeller(supabase, inv.currency),
       // Issued only: a cancelled credit note no longer reduces the invoice, so
       // the customer is not shown it. Each keeps its own token for /c/<token>.
       supabase.from("credit_notes").select("credit_number, issue_date, total, public_token")
@@ -94,6 +95,7 @@ serve(async (req) => {
         name: s.business_name || "ServOS", address: s.business_address || "",
         email: s.business_email || "", phone: s.business_phone || "",
         accent: s.quote_accent || "#15C26A", logo_url: s.logo_url || null,
+        footer: s.invoice_footer || "",
       },
       company: company ? { name: company.name, address: [company.address, company.city, company.postcode].filter(Boolean).join(", ") } : null,
       contact: contact ? { name: [contact.first_name, contact.last_name].filter(Boolean).join(" "), email: contact.email } : null,

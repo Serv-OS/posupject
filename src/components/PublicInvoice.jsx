@@ -277,6 +277,7 @@ export default function PublicInvoice({ token }) {
           </div>
         )}
       </div>
+      {seller.footer && <div className="text-center text-[11px] text-slate-500 whitespace-pre-line pt-3 px-2">{seller.footer}</div>}
       <div className="text-center text-[10px] text-slate-300 pt-3">Powered by ServOS</div>
     </Page>
   );

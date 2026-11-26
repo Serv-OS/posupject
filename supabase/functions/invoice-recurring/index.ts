@@ -10,6 +10,7 @@
 // Idempotent: next_run moves forward after generation, so repeat calls no-op.
 // Deployed --no-verify-jwt (cron has no JWT); uses the service role internally.
 
+import { invoiceSeller } from "../_shared/region.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { invoiceEmailHtml, sendInvoiceEmail, moneyFor, taxLabelFor, dateLocaleFor, balanceDue, amountAllocated } from "../_shared/invoiceEmail.ts";
@@ -177,8 +178,7 @@ serve(async (req) => {
           // 'Sales tax' — the schedule that made it isn't consulted again.
           const currency = (inv as any).currency || "GBP";
           const { data: lines } = await supabase.from("invoice_line_items").select("*").eq("invoice_id", inv.id).order("sort");
-          const { data: seller } = await supabase.from("support_settings")
-            .select("business_name, business_email, business_phone, quote_accent, logo_url, logo_pdf_data").eq("id", 1).maybeSingle();
+          const { data: seller } = await invoiceSeller(supabase, currency);
           const appUrl = Deno.env.get("APP_URL") || "https://posupject.vercel.app";
           const { subject, html } = invoiceEmailHtml(inv, seller || {}, `${appUrl}/i/${inv.public_token}`);
 
@@ -190,11 +190,11 @@ serve(async (req) => {
           ]);
           const contactName = contact ? [(contact as any).first_name, (contact as any).last_name].filter(Boolean).join(" ") : "";
           const pdfBytes = await buildInvoicePdfBytes({
-            inv, lines: lines || [],
+            inv: { ...inv, terms: (inv as any).terms || (seller as any)?.invoice_terms || null }, lines: lines || [],
             totals: { subtotal: inv.subtotal, tax: inv.tax_amount, total: inv.total },
             // logo_data is the pre-encoded logo: the fetch+base64 of logo_url on
             // every build was the dominant CPU cost. logo_url stays the fallback.
-            seller: { name: (seller as any)?.business_name, email: (seller as any)?.business_email, phone: (seller as any)?.business_phone, accent: (seller as any)?.quote_accent, logo_url: (seller as any)?.logo_url, logo_data: (seller as any)?.logo_pdf_data },
+            seller: { name: (seller as any)?.business_name, email: (seller as any)?.business_email, phone: (seller as any)?.business_phone, accent: (seller as any)?.quote_accent, logo_url: (seller as any)?.logo_url, logo_data: (seller as any)?.logo_pdf_data, address: (seller as any)?.business_address, footer: (seller as any)?.invoice_footer },
             billTo: { companyName: (company as any)?.name || "", contactName, contactEmail: recipient, locationName: (location as any)?.name || "" },
             fmt: moneyFor(currency),
             // The emailed PDF used the builder's defaults ('Tax', en-US) while
