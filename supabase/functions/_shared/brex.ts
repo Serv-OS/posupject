@@ -108,7 +108,14 @@ export function mapBrexCash(t: Obj): Obj | null {
  *  full: from `fromDate` (first connect); otherwise the last 30 days, which
  *  overlaps every sync so nothing is missed (Brex advise a lookback). */
 export async function syncBrexAccount(admin: any, token: string, account: Obj, full = false): Promise<number> {
-  const since = new Date(Date.now() - (full ? 730 : 30) * DAY).toISOString();
+  // An account with nothing stored yet gets the full two years.
+  if (!full) {
+    const { count } = await admin.from("bank_transactions").select("id", { count: "exact", head: true }).eq("account_id", account.id);
+    if (!count) full = true;
+  }
+  // Brex refuses posted_at_start with a timezone or milliseconds (400 Bad
+  // request, found 25 Nov 2026): it must be plain 2024-11-26T00:00:00.
+  const since = new Date(Date.now() - (full ? 730 : 30) * DAY).toISOString().slice(0, 19);
   const isCard = String(account.provider_account_id || "").startsWith("card:");
   const raw = isCard
     ? await brexAll(token, "/v2/transactions/card/primary", [["posted_at_start", since]], full ? 200 : 20)
