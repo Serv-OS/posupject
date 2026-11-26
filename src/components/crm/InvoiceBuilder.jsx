@@ -474,6 +474,15 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
     const { data: fresh } = await supabase.from('invoices').select('*').eq('id', invoiceId).single();
     setReceiving({ kind: 'correction', invoice: fresh || savedInv });
   };
+  // Historic payments that went to the POSUP bank account (migration 134).
+  const togglePosup = async () => {
+    const next = savedInv?.paid_into === 'posup' ? null : 'posup';
+    const { error } = await supabase.from('invoices').update({ paid_into: next }).eq('id', invoiceId);
+    if (error) { notify(/paid_into/.test(error.message) ? 'Run the SQL for "paid into POSUP" first.' : error.message); return; }
+    setSavedInv(v => ({ ...v, paid_into: next }));
+    notify(next ? 'Marked as paid into the POSUP account' : 'No longer marked as paid into POSUP');
+  };
+
   const onReceived = (result, { kind, payment }) => {
     setReceiving(null);
     const invLbl = `INV-${inv.invoice_number}`;
@@ -699,6 +708,12 @@ export default function InvoiceBuilder({ invoiceId, profile, onClose, onNavigate
             {canStage && <button onClick={() => setStaging(true)} disabled={saving} title="Split this invoice into stages by percentage, each with its own pay link" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"><Layers size={14} /> Bill in stages</button>}
             {canCredit && <button onClick={openCredit} disabled={saving} title="Reduce this invoice with a credit note" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"><FileMinus size={14} /> Raise credit note</button>}
             {!locked && <button onClick={sendInvoice} disabled={sending} className="btn-glass px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50"><Send size={14} /> {sending ? 'Sending…' : inv.sent_at ? 'Resend' : 'Send'}</button>}
+            {savedInv && (savedInv.status === 'paid' || Number(savedInv.amount_paid) > 0) && (
+              <button onClick={togglePosup} disabled={saving} title="Where the customer's money landed. Tick when they paid into the POSUP bank account instead of ServOS."
+                className={`px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 whitespace-nowrap ${savedInv.paid_into === 'posup' ? 'bg-amber-100 text-amber-800 border border-amber-300 font-semibold' : 'btn-ghost'}`}>
+                {savedInv.paid_into === 'posup' ? <><Check size={14} /> Paid into POSUP</> : 'Paid into POSUP?'}
+              </button>
+            )}
             {canMarkPaid && <button onClick={markPaid} disabled={saving} className="px-3 py-2 rounded-xl text-sm font-semibold bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 flex items-center gap-1.5 disabled:opacity-50"><Check size={14} /> Mark paid</button>}
             {!locked && <button onClick={voidInvoice} title="Void" className="btn-ghost px-3 py-2 rounded-xl text-sm flex items-center gap-1.5 text-muted"><Ban size={14} /></button>}
             {profile.role === 'owner' && <button onClick={del} title="Delete" className="px-3 py-2 text-red-600 border border-red-200 rounded-xl hover:bg-red-50"><Trash2 size={14} /></button>}

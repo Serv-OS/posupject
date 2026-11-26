@@ -317,7 +317,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
   const shownCredits = creditFilter === 'available' ? searchedCredits.filter(hasCredit)
     : creditFilter === 'cancelled' ? searchedCredits.filter(cn => cn.status === 'cancelled')
     : searchedCredits;
-  const statusText = (inv) => [invStatus(inv), creditMarker(inv)?.toLowerCase(), overpaidOf(inv) > 0 ? 'overpaid' : null].filter(Boolean).join(', ');
+  const statusText = (inv) => [invStatus(inv), creditMarker(inv)?.toLowerCase(), overpaidOf(inv) > 0 ? 'overpaid' : null, inv.paid_into === 'posup' ? 'paid into POSUP' : null].filter(Boolean).join(', ');
   // A credit note's status in plain words: "Used on INV-1036", "£224.00 to
   // use", "Used on INV-1050". Chip colours key on creditNoteStatusKind.
   const numberOf = new Map(invoices.map(i => [i.id, i.invoice_number]));
@@ -479,6 +479,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
               const mark = creditMarker(inv);
               if (mark) chip.text = `${chip.text} · ${mark}`;
               if (overpaidOf(inv) > 0) chip.text = `${chip.text} · Overpaid`;
+              if (inv.paid_into === 'posup') chip.text = `${chip.text} · to POSUP`;
               return { title: company || inv.label || '—', amount: money(inv.total, inv.currency), chip, tone: st === 'overdue' ? 'coral' : undefined, meta: [`INV-${inv.invoice_number}`, site, inv.recurring_id ? 'recurring' : null].filter(Boolean).join(' · ') };
             }} />
           )}
@@ -619,6 +620,7 @@ export default function InvoicesPanel({ profile, onNavigate }) {
                         <div className="flex flex-col items-center gap-0.5 min-w-0">
                           <span className={`w-full text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg text-center ${INV_BADGE[st]}`}>{st}</span>
                           {mark && <span className="text-[9px] font-semibold text-violet-700 whitespace-nowrap">{mark}</span>}
+                          {inv.paid_into === 'posup' && <span className="text-[9px] font-semibold text-amber-700 whitespace-nowrap">to POSUP</span>}
                           {overpaidOf(inv) > 0 && <span className="text-[9px] font-semibold text-amber-deep whitespace-nowrap" title={`${money(overpaidOf(inv), inv.currency)} more was paid than this invoice asks for`}>Overpaid</span>}
                         </div>
                         <button onClick={(e) => downloadOne(inv, e)} disabled={pdfFor === inv.id}

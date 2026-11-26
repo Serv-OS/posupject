@@ -75,6 +75,8 @@ export default function AmountReceivedModal({ invoice: invoiceProp, kind = 'corr
   const [loadError, setLoadError] = useState('');
   const [amount, setAmount] = useState(() => amountText(payment ? balanceDue(invoiceProp) : amountPaid(invoiceProp)));
   const [reason, setReason] = useState('');
+  // Historic: some customers paid into the POSUP bank account (migration 134).
+  const [toPosup, setToPosup] = useState(!!invoiceProp?.paid_into);
   const [touched, setTouched] = useState(false);
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -174,12 +176,15 @@ export default function AmountReceivedModal({ invoice: invoiceProp, kind = 'corr
     const { data, error: rpcError } = await supabase.rpc('set_invoice_amount_received', {
       p_invoice_id: inv.id,
       p_amount: full.amount_paid,
-      p_reason: reason.trim(),
+      p_reason: reason.trim() || (payment && toPosup ? 'Paid into the POSUP account' : ''),
       p_kind: kind,
       // The amount received the total was worked out from: if a card payment
       // lands in the moment before this arrives, nothing is written.
       p_expected_from: full.from_amount,
     });
+    if (!rpcError && payment && toPosup !== !!inv.paid_into) {
+      await supabase.from('invoices').update({ paid_into: toPosup ? 'posup' : null }).eq('id', inv.id);
+    }
     setBusy(false);
     if (rpcError) {
       setError(receivedError(rpcError));
@@ -242,6 +247,13 @@ export default function AmountReceivedModal({ invoice: invoiceProp, kind = 'corr
                 : 'The total cash received, not the difference. Card payments are included.'}
             </div>
           </div>
+
+          {payment && (
+            <label className="flex items-start gap-2 text-sm text-paper cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={toPosup} disabled={busy} onChange={(e) => setToPosup(e.target.checked)} />
+              <span>Paid into the <b>POSUP</b> bank account<span className="block text-[11px] text-dim">The customer paid POSUP instead of ServOS. Marked on the invoice so it can be sorted out later.</span></span>
+            </label>
+          )}
 
           <div>
             <label className={label} htmlFor="received-reason">{payment ? 'Reason (optional)' : 'Reason'}</label>
