@@ -39,6 +39,12 @@ const CRM = [
   ['chat', 'Chat', MessageSquare], ['calendar', 'Meetings', Calendar],
 ];
 
+// A menu item's 4th field: a role it needs, or 'bank' for the bank feed,
+// which the owner switches on per person (profiles.bank_feed_access).
+export const needOk = (profile, need) => (need === 'bank'
+  ? profile?.role === 'owner' || (profile?.role === 'editor' && !!profile?.bank_feed_access)
+  : profile?.role === need);
+
 export const COLLAPSIBLE = [
   { id: 'crm', label: 'CRM', items: CRM },
   { id: 'sales', label: 'Sales', items: [
@@ -52,7 +58,7 @@ export const COLLAPSIBLE = [
   ] },
   { id: 'finance', label: 'Finance', items: [
     ['bills', 'Bills', Wallet], ['expenses', 'Expenses', Receipt], ['what_i_owe', 'What I owe', Banknote],
-    ['bank_feed', 'Bank feed', Landmark],
+    ['bank_feed', 'Bank feed', Landmark, 'bank'],
     ['finance_categories', 'Categories', Tags], ['finance_rates', 'Tax rates', Percent],
     ['finance_vat', 'VAT & reports', FileText], ['finance_reports', 'Reports', BarChart3],
   ] },
@@ -201,7 +207,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
   const results = useMemo(() => {
     if (!query) return [];
     return INDEX
-      .filter(r => !r.need || profile.role === r.need)
+      .filter(r => !r.need || needOk(profile, r.need))
       .map(r => { const idx = r.label.toLowerCase().indexOf(query); const inSec = r.section.toLowerCase().includes(query); return (idx < 0 && !inSec) ? null : { r, idx: idx < 0 ? 99 : idx }; })
       .filter(Boolean)
       .sort((a, b) => (a.idx - b.idx) || a.r.label.localeCompare(b.r.label))
@@ -316,7 +322,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
             {COLLAPSIBLE.map(g => (
               <div key={g.id} className="flex flex-col items-center gap-0.5 w-full">
                 <div className="h-px w-8 my-1.5" style={{ background: 'var(--ink-line)' }} />
-                {g.items.filter(([, , , need]) => !need || profile.role === need).map(([key, label, Icon]) => <RailBtn key={key} row={{ key, label, Icon, section: g.label }} active={activeKey === key} onClick={() => go(key)} />)}
+                {g.items.filter(([, , , need]) => !need || needOk(profile, need)).map(([key, label, Icon]) => <RailBtn key={key} row={{ key, label, Icon, section: g.label }} active={activeKey === key} onClick={() => go(key)} />)}
               </div>
             ))}
           </div>
@@ -354,7 +360,7 @@ export default function Sidebar({ profile, projects, activeProject, setActivePro
             {COLLAPSIBLE.map(g => (
               <div key={g.id} className="flex flex-col gap-[2px]">
                 <GroupHeader label={g.label} count={g.items.length} open={open[g.id]} onToggle={() => toggle(g.id)} />
-                {open[g.id] && g.items.filter(([, , , need]) => !need || profile.role === need).map(([key, label, Icon]) => (
+                {open[g.id] && g.items.filter(([, , , need]) => !need || needOk(profile, need)).map(([key, label, Icon]) => (
                   <NavItem key={key} icon={Icon} label={label} active={activeKey === key} onClick={() => go(key)} navKey={key}
                     pinned={pinned.includes(key)} onPin={() => togglePin(key)} hover={hover} setHover={setHover} rowKey={key} />
                 ))}

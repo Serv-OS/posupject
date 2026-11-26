@@ -73,6 +73,12 @@ export default function UsersPanel({ profile }) {
     load();
   };
 
+  const changeBankAccess = async (id, on) => {
+    const { error: err } = await supabase.from('profiles').update({ bank_feed_access: on }).eq('id', id);
+    if (err) setError(err.message);
+    load();
+  };
+
   const changeRole = async (id, role) => {
     await supabase.from('profiles').update({ role }).eq('id', id);
     load();
@@ -242,6 +248,13 @@ export default function UsersPanel({ profile }) {
                       <option value="editor">Editor</option>
                       <option value="viewer">Viewer</option>
                     </select>
+                  )}
+                  {/* The bank feed is private: the owner sees it, and editors only when switched on here. */}
+                  {u.role === 'editor' && (
+                    <label className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted cursor-pointer" title="Lets this person see and match the company bank feed">
+                      <input type="checkbox" checked={!!u.bank_feed_access} onChange={e => changeBankAccess(u.id, e.target.checked)} />
+                      Bank feed
+                    </label>
                   )}
                 </div>
                 <div className="col-span-3">

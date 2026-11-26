@@ -12,12 +12,17 @@
 //                  webhook that makes the feed live
 //   match_invoice  books money in against an invoice, through the same
 //                  record_invoice_payment the card payments use
+// Brex (ServOS US, dollars): brex_connect takes a Brex user token pasted into
+// the CRM, checks it, keeps it in bank_tokens and imports two years.
 // The Google Sheets path is kept as it was for any connection made that way.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { readSheet, headerIndex, corsJson } from "../_shared/gsheets.ts";
 import { authUrl, exchangeCode, listAccounts, monzoGet, monzoPost, needsApproval } from "../_shared/monzo.ts";
 import { accessToken, saveTokens, syncMonzoAccount, syncMonzoBalance } from "../_shared/monzoSync.ts";
+import { companyCardExpense } from "../_shared/bankBook.ts";
+import { aiMatch } from "../_shared/bankMatchAi.ts";
+import { listCashAccounts, listCardAccounts, syncBrexAccount, syncBrexBalances } from "../_shared/brex.ts";
 
 const APP_URL = () => (Deno.env.get("APP_URL") || "https://posupject.vercel.app").replace(/\/$/, "");
 const REDIRECT = () => `${APP_URL()}/bank/callback`;
@@ -32,8 +37,10 @@ serve(async (req) => {
   const { data: { user } } = await userClient.auth.getUser();
   if (!user) return corsJson({ error: "unauthorized" }, 401);
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-  const { data: prof } = await admin.from("profiles").select("role").eq("id", user.id).single();
-  if (!prof || !["editor", "owner"].includes(prof.role)) return corsJson({ error: "forbidden" }, 403);
+  // The owner, and editors the owner has given bank feed access (migration 116).
+  const { data: prof } = await admin.from("profiles").select("*").eq("id", user.id).single();
+  const allowed = prof && (prof.role === "owner" || (prof.role === "editor" && prof.bank_feed_access === true));
+  if (!allowed) return corsJson({ error: "You do not have access to the bank feed. Ask the owner to switch it on for you in Users." }, 403);
 
   const body = await req.json().catch(() => ({}));
   const { action } = body;
@@ -44,7 +51,8 @@ serve(async (req) => {
   try {
     if (action === "institutions") {
       const list = [];
-      if (monzoId && monzoSecret) list.push({ id: "monzo", name: "Monzo Business (live)", logo: null });
+      if (monzoId && monzoSecret) list.push({ id: "monzo", name: "Monzo Business (UK, pounds)", logo: null });
+      list.push({ id: "brex", name: "Brex (US, dollars)", logo: null, token: true });
       if (sheetId) list.push({ id: "monzo-gsheets", name: "Monzo Business (Google Sheets)", logo: null });
       if (!list.length) return corsJson({ error: "No bank is set up yet: add MONZO_CLIENT_ID and MONZO_CLIENT_SECRET." }, 400);
       return corsJson({ institutions: list });
@@ -66,6 +74,56 @@ serve(async (req) => {
         if (error) throw new Error(error.message);
       }
       return corsJson({ link: authUrl(monzoId, REDIRECT(), reference) });
+    }
+
+    // ── Brex ───────────────────────────────────────────────────────────────
+    if (action === "brex_connect") {
+      const token = String(body.token || "").trim();
+      if (token.length < 20) return corsJson({ error: "Paste the whole Brex token (it starts bxt_)." }, 400);
+      let cash: any[] = [], card: any[] = [], cashErr = "", cardErr = "";
+      try { cash = await listCashAccounts(token); } catch (e) { cashErr = (e as Error).message; if ((e as any).status === 401) return corsJson({ error: cashErr }, 400); }
+      try { card = await listCardAccounts(token); } catch (e) { cardErr = (e as Error).message; }
+      if (!cash.length && !card.length) return corsJson({ error: `Brex shows no accounts this token can read. ${cashErr || cardErr}` }, 400);
+      const now = new Date().toISOString();
+      const { data: existing } = await admin.from("bank_connections").select("id").eq("institution_id", "brex").maybeSingle();
+      let connId = existing?.id;
+      if (connId) {
+        await admin.from("bank_connections").update({ status: "LN", updated_at: now }).eq("id", connId);
+      } else {
+        const { data: c, error } = await admin.from("bank_connections").insert({
+          reference: crypto.randomUUID(), institution_id: "brex", institution_name: "Brex", aspsp_country: "US", status: "LN", created_by: user.id,
+        }).select("id").single();
+        if (error) throw new Error(error.message);
+        connId = c.id;
+      }
+      // Brex tokens do not expire while used; expires_at is when it would
+      // lapse if the sync stopped (90 days of no calls).
+      const { error: te } = await admin.from("bank_tokens").upsert({
+        connection_id: connId, access_token: token, refresh_token: null,
+        expires_at: new Date(Date.now() + 90 * 86400000).toISOString(), updated_at: now,
+      }, { onConflict: "connection_id" });
+      if (te) throw new Error(`save token: ${te.message}`);
+      const want = [
+        ...cash.map((a: any) => ({ pid: `cash:${a.id}`, name: `Brex · ${a.name || "Business account"}`, currency: a.current_balance?.currency || "USD", num: a.account_number ? `Acct ${String(a.account_number).slice(-4)}` : null })),
+        ...(card.length ? [{ pid: "card:primary", name: "Brex card", currency: card[0]?.current_balance?.currency || "USD", num: null }] : []),
+      ];
+      const saved: any[] = [];
+      for (const w of want) {
+        const { data: row, error } = await admin.from("bank_accounts").upsert({
+          connection_id: connId, gc_account_id: `brex:${w.pid}`, provider_account_id: w.pid, account_uid: w.pid,
+          name: w.name, currency: w.currency, iban: w.num, active: true, updated_at: now,
+        }, { onConflict: "gc_account_id" }).select("*").single();
+        if (error) throw new Error(error.message);
+        saved.push(row);
+      }
+      const result: any[] = [];
+      for (const acc of saved) {
+        try { result.push({ account: acc.name, imported: await syncBrexAccount(admin, token, acc, true) }); }
+        catch (e) { result.push({ account: acc.name, error: (e as Error).message }); }
+      }
+      await syncBrexBalances(admin, token, saved);
+      await admin.from("bank_connections").update({ last_synced_at: new Date().toISOString() }).eq("id", connId);
+      return corsJson({ status: "LN", accounts: result });
     }
 
     if (action === "finalise") {
@@ -95,8 +153,20 @@ serve(async (req) => {
       }
       if (!accounts.length) return corsJson({ error: "Monzo shows no open accounts on this login." }, 422);
       // The business account feeds the CRM. A personal account on the same
-      // login is saved but switched off.
+      // login is saved but switched off. One Monzo login can hold several
+      // companies (POSUP and SERVOS APP LIMITED): MONZO_ACCOUNTS names the
+      // ones this CRM keeps (a word from the account name, comma separated).
+      // An account already saved keeps the on/off it was given.
       const hasBusiness = accounts.some((a: any) => a.type === "uk_business");
+      const wanted = (Deno.env.get("MONZO_ACCOUNTS") || "").split(",").map((w) => w.trim().toUpperCase()).filter(Boolean);
+      const { data: before } = await admin.from("bank_accounts").select("gc_account_id, active").in("gc_account_id", accounts.map((a: any) => a.id));
+      const keep = new Map((before || []).map((b: any) => [b.gc_account_id, b.active]));
+      const defaultOn = (a: any) => {
+        if (hasBusiness && a.type !== "uk_business") return false;
+        if (!wanted.length) return true;
+        const label = String(a.description || "").toUpperCase();
+        return wanted.some((w) => label.includes(w));
+      };
       const saved = [];
       for (const a of accounts) {
         const name = a.type === "uk_business" ? `Monzo Business${a.description ? ` · ${a.description}` : ""}` : "Monzo personal";
@@ -104,7 +174,7 @@ serve(async (req) => {
           connection_id: conn.id, gc_account_id: a.id, provider_account_id: a.id, account_uid: a.id,
           name, owner_name: (a.owners || [])[0]?.preferred_name || null, currency: a.currency || "GBP",
           iban: a.account_number && a.sort_code ? `${a.sort_code.replace(/(\d\d)(\d\d)(\d\d)/, "$1-$2-$3")} ${a.account_number}` : null,
-          active: hasBusiness ? a.type === "uk_business" : true, updated_at: new Date().toISOString(),
+          active: keep.has(a.id) ? keep.get(a.id) : defaultOn(a), updated_at: new Date().toISOString(),
         }, { onConflict: "gc_account_id" }).select("*").single();
         if (error) throw new Error(error.message);
         saved.push(row);
@@ -112,7 +182,8 @@ serve(async (req) => {
       await admin.from("bank_connections").update({ status: "LN", updated_at: new Date().toISOString() }).eq("id", conn.id);
       const result: any[] = [];
       for (const acc of saved.filter((a) => a.active)) {
-        const imported = await syncMonzoAccount(admin, token, acc, true);
+        const opened = accounts.find((x: any) => x.id === acc.provider_account_id)?.created || null;
+        const imported = await syncMonzoAccount(admin, token, acc, true, opened);
         await syncMonzoBalance(admin, token, acc);
         // Live: Monzo calls bank-sync on every new transaction.
         let webhook = "registered";
@@ -125,6 +196,30 @@ serve(async (req) => {
       }
       await admin.from("bank_connections").update({ last_synced_at: new Date().toISOString() }).eq("id", conn.id);
       return corsJson({ status: "LN", accounts: result });
+    }
+
+    if (action === "ai_match") {
+      // Ask again: these lines, or every unmatched line.
+      if (!body.txn_ids?.length) await admin.from("bank_transactions").update({ ai_checked_at: null }).eq("reconciled", false);
+      const r = await aiMatch(admin, { txnIds: body.txn_ids, limit: 60 });
+      if (r.error) return corsJson({ error: r.error }, 502);
+      return corsJson(r);
+    }
+
+    if (action === "company_card") {
+      const { data: txn } = await admin.from("bank_transactions").select("*").eq("id", String(body.txn_id || "")).maybeSingle();
+      if (!txn) return corsJson({ error: "Transaction not found." }, 404);
+      const { data: person } = await admin.from("profiles").select("id").eq("id", String(body.person_id || "")).maybeSingle();
+      if (!person) return corsJson({ error: "Choose who spent it." }, 400);
+      const expenseId = await companyCardExpense(admin, txn, person.id, body.category_id || null, user.id);
+      if (body.remember && txn.payee) {
+        // "Always do this for this payee": a rule that runs after each sync.
+        await admin.from("bank_match_rules").insert({
+          payee_pattern: String(body.remember_pattern || txn.payee), create_as: "expense", assign_to: person.id,
+          category_id: body.category_id || null, auto: true, created_by: user.id,
+        });
+      }
+      return corsJson({ ok: true, expense_id: expenseId });
     }
 
     if (action === "match_invoice") {

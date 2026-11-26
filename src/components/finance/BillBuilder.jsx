@@ -24,6 +24,7 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
   // copy — picking "Draft" in the dropdown must not make Delete appear for a
   // bill that is still to_pay in the database.
   const [savedStatus, setSavedStatus] = useState(null);
+  const [newSup, setNewSup] = useState(null);   // the New supplier form, when open
   const canWrite = profile.role === 'owner' || profile.role === 'editor';
   const uk = isUkVat();
 
@@ -87,6 +88,32 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
     setBill(p => ({ ...p, supplier_id: id || null,
       category_id: p.category_id || s?.default_category_id || null,
       supplier_vat_number: p.supplier_vat_number || s?.vat_number || null }));
+  };
+
+  // New supplier from the bill. The name starts as the bill name (the bank
+  // payee when the bill came from the bank feed), tidied of card noise.
+  const startNewSupplier = () => {
+    const guess = String(bill?.description || '').replace(/\s*\*.*$/, '').replace(/\s{2,}/g, ' ').trim();
+    const dupe = suppliers.find(x => x.name.toLowerCase() === guess.toLowerCase());
+    if (dupe) { pickSupplier(dupe.id); return; }
+    setNewSup({ name: guess, vat_number: bill?.supplier_vat_number || '', email: '', default_category_id: bill?.category_id || '', saving: false, error: '' });
+  };
+  const saveNewSupplier = async () => {
+    const name = newSup.name.trim();
+    const dupe = suppliers.find(x => x.name.toLowerCase() === name.toLowerCase());
+    if (dupe) { pickSupplier(dupe.id); setNewSup(null); return; }
+    setNewSup(v => ({ ...v, saving: true, error: '' }));
+    const { data, error } = await supabase.from('inv_suppliers').insert({
+      name, vat_number: newSup.vat_number.trim().toUpperCase().replace(/\s/g, '') || null,
+      email: newSup.email.trim().toLowerCase() || null, default_category_id: newSup.default_category_id || null,
+    }).select('id, name, vat_number, default_category_id').single();
+    if (error) { setNewSup(v => ({ ...v, saving: false, error: error.message })); return; }
+    setSuppliers(list => [...list, data].sort((a, b) => a.name.localeCompare(b.name)));
+    setBill(p => ({ ...p, supplier_id: data.id,
+      category_id: p.category_id || data.default_category_id || null,
+      supplier_vat_number: p.supplier_vat_number || data.vat_number || null }));
+    setNewSup(null);
+    notify(`Added ${data.name}. Save the bill to keep it on this bill.`);
   };
 
   const save = async (extra = {}) => {
@@ -226,9 +253,31 @@ export default function BillBuilder({ billId, profile, onClose, onNavigate }) {
                   placeholder="e.g. July electricity" />
                 <div className="text-[10px] text-dim mt-1">Shown in the bills list when there's no supplier.</div></div>
               <div><label className={label}>Supplier</label>
-                <select className={input} value={bill.supplier_id || ''} onChange={e => pickSupplier(e.target.value)}>
-                  <option value="">—</option>{suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select></div>
+                {!newSup ? (
+                  <>
+                    <select className={input} value={bill.supplier_id || ''} onChange={e => (e.target.value === '__new' ? startNewSupplier() : pickSupplier(e.target.value))}>
+                      <option value="">—</option>{suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      <option value="__new">+ New supplier…</option>
+                    </select>
+                    <button type="button" onClick={startNewSupplier} className="text-[11px] text-ember font-semibold mt-1">+ New supplier</button>
+                  </>
+                ) : (
+                  // A supplier made here, without leaving the bill: most bank
+                  // lines are from someone who is not on the list yet.
+                  <div className="glass-inner rounded-xl p-3 space-y-2 border border-bdr">
+                    <input autoFocus className={input} placeholder="Supplier name" value={newSup.name} onChange={e => setNewSup(v => ({ ...v, name: e.target.value }))} />
+                    <input className={input} placeholder="VAT number (optional), e.g. GB123456789" value={newSup.vat_number} onChange={e => setNewSup(v => ({ ...v, vat_number: e.target.value }))} />
+                    <input className={input} placeholder="Email (optional)" value={newSup.email} onChange={e => setNewSup(v => ({ ...v, email: e.target.value }))} />
+                    <select className={input} value={newSup.default_category_id} onChange={e => setNewSup(v => ({ ...v, default_category_id: e.target.value }))}>
+                      <option value="">Usual category (optional)</option>{categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                    </select>
+                    <div className="flex gap-2">
+                      <button type="button" disabled={!newSup.name.trim() || newSup.saving} onClick={saveNewSupplier} className="btn-glass px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50">{newSup.saving ? 'Adding…' : 'Add supplier'}</button>
+                      <button type="button" onClick={() => setNewSup(null)} className="btn-ghost px-3 py-1.5 rounded-lg text-xs">Cancel</button>
+                    </div>
+                    {newSup.error && <div className="text-[11px] text-red-600">{newSup.error}</div>}
+                  </div>
+                )}</div>
               <div><label className={label}>Supplier ref (their invoice no.)</label><input className={input} value={bill.supplier_ref || ''} onChange={e => set('supplier_ref', e.target.value)} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={label}>Issue date</label><input type="date" className={input} value={bill.issue_date || ''} onChange={e => set('issue_date', e.target.value)} /></div>

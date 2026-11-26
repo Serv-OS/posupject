@@ -416,7 +416,7 @@ export default function Shell({ session }) {
       case 'finance_vat':
         return <VatReturnPanel profile={profile} />;
       case 'bank_feed':
-        return <BankFeedPanel profile={profile} />;
+        return <BankFeedPanel profile={profile} onNavigate={navigateTo} />;
       case 'finance_reports':
         return <ReportsPanel profile={profile} onNavigate={navigateTo} />;
       case 'bookings':

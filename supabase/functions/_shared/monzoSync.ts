@@ -40,19 +40,16 @@ export async function accessToken(admin: any, connectionId: string): Promise<str
   }
 }
 
-/** Pull one account's transactions into bank_transactions. `full` reads the
- *  whole history (only allowed in the 5 minutes after the user approves);
- *  otherwise from a week before the newest stored one, so pending payments
- *  that have since settled are updated, and never more than 89 days back. */
-export async function syncMonzoAccount(admin: any, token: string, account: Obj, full = false): Promise<number> {
-  let since: string | null = null;
-  if (!full) {
-    const { data: last } = await admin.from("bank_transactions").select("booking_date")
-      .eq("account_id", account.id).order("booking_date", { ascending: false }).limit(1).maybeSingle();
-    const floor = Date.now() - 89 * DAY;
-    const from = last?.booking_date ? Math.max(new Date(last.booking_date + "T00:00:00Z").getTime() - 7 * DAY, floor) : floor;
-    since = new Date(from).toISOString();
-  }
+/** Pull one account's transactions into bank_transactions.
+ *  Monzo pages forwards from `since` (oldest first). Without a `since` it
+ *  returns only the newest 100, which is how the first import got just 99
+ *  lines. So there is always a start:
+ *   - full: from `fullFrom` (the account's opening date). Monzo allows this
+ *     only in the 5 minutes after the user approves.
+ *   - otherwise: the last 89 days, every time. A few pages for a small
+ *     business, and it heals any gap and updates pending lines that settled. */
+export async function syncMonzoAccount(admin: any, token: string, account: Obj, full = false, fullFrom: string | null = null): Promise<number> {
+  const since = full && fullFrom ? new Date(fullFrom).toISOString() : new Date(Date.now() - 89 * DAY).toISOString();
   const txs = await listTransactions(token, account.provider_account_id, since, full ? 400 : 60);
   const now = new Date().toISOString();
   const rows = txs.map(mapMonzoTransaction).filter(Boolean)

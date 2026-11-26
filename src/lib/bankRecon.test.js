@@ -170,3 +170,20 @@ describe('matching money in to invoices', () => {
     expect(invoiceBalance({ total: 100, amount_paid: 0, amount_credited: 30 })).toBe(70);
   });
 });
+
+import { suggestPaidInvoice } from './bankRecon.js';
+describe('linking money in to an invoice already marked paid', () => {
+  const paid = [
+    { id: 'p1', invoice_number: 1140, total: 474, amount_paid: 474, paid_at: '2026-11-25T18:20:00Z', company_name: 'Herberts Yard Operations LTD' },
+    { id: 'p2', invoice_number: 1133, total: 474, amount_paid: 474, paid_at: '2026-11-25T18:18:00Z', company_name: 'Dudley DW Operations Ltd' },
+  ];
+  it('finds it by the reference', () => {
+    expect(suggestPaidInvoice({ amount: 474, payee: 'HERBERTS YARD OPER', description: '1140', booking_date: '2026-11-11' }, paid)).toMatchObject({ id: 'p1', type: 'invoice_paid' });
+    expect(suggestPaidInvoice({ amount: 474, payee: 'DUDLEY DW OPERATIO', description: '1133', booking_date: '2026-11-11' }, paid).id).toBe('p2');
+  });
+  it('never claims an invoice another line is linked to, or a different amount', () => {
+    expect(suggestPaidInvoice({ amount: 474, description: '1140' }, paid, new Set(['p1']))).toBeNull();
+    expect(suggestPaidInvoice({ amount: 470, description: '1140' }, paid)).toBeNull();
+    expect(suggestPaidInvoice({ amount: -474, description: '1140' }, paid)).toBeNull();
+  });
+});

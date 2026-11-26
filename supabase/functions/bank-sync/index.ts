@@ -12,9 +12,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { readSheet, headerIndex, mapSheetRow, corsJson } from "../_shared/gsheets.ts";
+import { brexToken, syncBrexAccount, syncBrexBalances } from "../_shared/brex.ts";
 import { accessToken, syncMonzoAccount, syncMonzoBalance } from "../_shared/monzoSync.ts";
+import { applyAutoRules } from "../_shared/bankBook.ts";
+import { aiMatch } from "../_shared/bankMatchAi.ts";
 
 serve(async (req) => {
+  // The Refresh button calls this from the browser, which asks first.
+  if (req.method === "OPTIONS") return corsJson({});
   if (req.method !== "POST") return corsJson({ error: "method" }, 405);
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const url = new URL(req.url);
@@ -52,6 +57,23 @@ serve(async (req) => {
         continue;
       }
 
+      if (conn.institution_id === "brex") {
+        try {
+          if (!tokens.has(conn.id)) tokens.set(conn.id, await brexToken(admin, conn.id));
+          const token = tokens.get(conn.id)!;
+          const n = await syncBrexAccount(admin, token, a, false);
+          await syncBrexBalances(admin, token, [a]);
+          const now = new Date().toISOString();
+          await admin.from("bank_connections").update({ last_synced_at: now }).eq("id", conn.id);
+          await admin.from("bank_tokens").update({ expires_at: new Date(Date.now() + 90 * 86400000).toISOString(), updated_at: now }).eq("connection_id", conn.id);
+          results.push({ account: a.name, synced: n });
+        } catch (e) {
+          if ((e as any).status === 401) await admin.from("bank_connections").update({ status: "EX", updated_at: new Date().toISOString() }).eq("id", conn.id);
+          results.push({ account: a.name, error: (e as Error).message });
+        }
+        continue;
+      }
+
       // Google Sheets connection.
       const sid = a.account_uid || Deno.env.get("GSHEETS_BANK_SHEET_ID");
       if (!sid) { results.push({ account: a.gc_account_id, skipped: "no sheet id" }); continue; }
@@ -73,7 +95,12 @@ serve(async (req) => {
       await admin.from("bank_connections").update({ last_synced_at: new Date().toISOString() }).eq("id", a.connection_id);
       results.push({ account: a.gc_account_id, imported: rows.length });
     }
-    return corsJson({ synced: results.length, results });
+    // After new lines arrive: rules that book by themselves, then the AI
+    // looks at anything still unmatched that it has not seen.
+    let auto = 0, ai: any = null;
+    try { auto = await applyAutoRules(admin); } catch (e) { auto = -1; console.error("auto rules", (e as Error).message); }
+    try { ai = await aiMatch(admin, { limit: 40 }); } catch (e) { ai = { error: (e as Error).message }; }
+    return corsJson({ synced: results.length, results, auto_booked: auto, ai });
   } catch (e) {
     return corsJson({ error: (e as Error).message }, 500);
   }

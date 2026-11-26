@@ -199,3 +199,34 @@ export function suggestInvoice(txn = {}, invoices = []) {
   }
   return best;
 }
+
+// Money in for an invoice that was already marked paid by hand (Peter, 25 Nov
+// 2026: "have already been marked as paid against the invoice"). The bank
+// line only needs LINKING to it, never a second payment. Suggested when the
+// reference names the invoice and the amount equals what it was paid (or its
+// total), or, without a reference, when the payer is the customer and the
+// amount is exact within 60 days of payment. linkedIds: invoices a bank line
+// is already linked to, so one invoice is never claimed twice.
+export function suggestPaidInvoice(txn = {}, paid = [], linkedIds = new Set()) {
+  const amt = round2(Number(txn.amount || 0));
+  if (amt <= 0) return null;
+  const text = `${txn.payee || ''} ${txn.description || ''}`;
+  const payer = normalizePayee(txn.payee || txn.description);
+  const txDate = txn.booking_date || txn.value_date;
+  let best = null;
+  for (const inv of paid) {
+    if (linkedIds.has(inv.id)) continue;
+    const paidAmt = round2(Number(inv.amount_paid || inv.total || 0));
+    const exact = paidAmt === amt || round2(Number(inv.total || 0)) === amt;
+    if (!exact) continue;
+    const named = referencesInvoice(text, inv.invoice_number);
+    const cust = normalizePayee(inv.company_name);
+    const sameCust = !!(cust && payer && (cust.includes(payer) || payer.includes(cust)));
+    const when = inv.paid_at || inv.due_date || inv.issue_date;
+    const days = txDate && when ? Math.abs((new Date(txDate) - new Date(String(when).slice(0, 10))) / 86400000) : 999;
+    if (!named && !(sameCust && days <= 60)) continue;
+    const score = (named ? 300 : 0) + (sameCust ? 80 : 0) + (100 - Math.min(days, 100));
+    if (!best || score > best.score) best = { type: 'invoice_paid', id: inv.id, score, named };
+  }
+  return best;
+}
