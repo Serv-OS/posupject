@@ -13,6 +13,9 @@
 //   ADYEN_MERCHANT_ACCOUNT the merchant account these payments belong to
 //   ADYEN_ENV              "test" (default) or "live"
 //   ADYEN_LIVE_PREFIX      live only: from Customer Area, Developers, API URLs
+//   ADYEN_STORE            our OWN store's reference at Adyen (16 characters at most). See storeFor.
+//   ADYEN_STORE_CURRENCIES which currencies ride that store, e.g. "GBP". Unset means every currency.
+//   ADYEN_SHOPPER_STATEMENT the name on the payer's card statement, e.g. "ServOS" (22 characters at most)
 //   ADYEN_HMAC_KEY         the webhook's HMAC key, for the signature check
 //   ADYEN_WEBHOOK_USER / ADYEN_WEBHOOK_PASSWORD   the webhook's basic auth
 
@@ -57,6 +60,14 @@ export type AdyenConfig = {
   /** false hands the Adyen processing cost to the platform's liable account,
    *  which on a reseller platform means the reseller pays for our sales. */
   feesOnUs?: boolean;
+  /** The REFERENCE of our own store at Adyen. Without a store the payment runs
+   *  as the reseller's merchant account itself: the payer's statement names the
+   *  reseller and a UK card is priced as a foreign one. See storeFor. */
+  store?: string;
+  /** The currencies that ride the store. Empty or missing means all of them. */
+  storeCurrencies?: string[];
+  /** The name on the payer's card statement. */
+  shopperStatement?: string;
 };
 
 /** Read the environment, or say plainly that Adyen is not set up here yet. */
@@ -70,7 +81,53 @@ export function adyenConfig(): AdyenConfig | null {
     livePrefix: Deno.env.get("ADYEN_LIVE_PREFIX") || undefined,
     balanceAccount: Deno.env.get("ADYEN_BALANCE_ACCOUNT") || undefined,
     feesOnUs: (Deno.env.get("ADYEN_FEES_ON_US") || "true").toLowerCase() !== "false",
+    store: (Deno.env.get("ADYEN_STORE") || "").trim() || undefined,
+    storeCurrencies: currencyList(Deno.env.get("ADYEN_STORE_CURRENCIES")),
+    shopperStatement: statementName(Deno.env.get("ADYEN_SHOPPER_STATEMENT")) || undefined,
   };
+}
+
+/** "gbp, usd" as ["GBP", "USD"]. Nothing typed is an empty list, which means every currency. */
+export function currencyList(raw: string | null | undefined): string[] {
+  return String(raw || "").split(/[\s,;]+/).map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{3}$/.test(c));
+}
+
+/**
+ * The name on the payer's card statement, as Adyen takes it: letters, numbers,
+ * spaces and . , ' _ - ? + * / only, 22 characters at most (a bank cuts a longer
+ * one), and never numbers alone. Anything that leaves nothing is no name at all.
+ */
+export function statementName(raw: string | null | undefined): string {
+  const name = String(raw || "").replace(/[^a-zA-Z0-9 .,'_\-?+*/]/g, "").replace(/\s+/g, " ").trim().slice(0, 22).trim();
+  return /[a-zA-Z]/.test(name) ? name : "";
+}
+
+/**
+ * The store this payment rides, or none.
+ *
+ * WHY A STORE (27 Nov 2026). The first three invoices went out with no store.
+ * Adyen then ran each one as the reseller's merchant account itself, a US
+ * company: the payer's statement said the reseller's name, and UK Visa cards
+ * were priced as foreign ones. Interchange 2.00% and scheme fees 2.28%, 278.80
+ * on 6,415.08. The same merchant account's online payments that DO name a
+ * store (38 of them, UK venues) cost 0.31% and 0.15%. A store carries the
+ * business line of OUR legal entity, so the schemes see a UK seller.
+ *
+ * WHY THE SPLITS STILL RIDE. A store may carry a split profile (a venue's
+ * store takes commission to the reseller). Adyen: "Any split instruction that
+ * you send in a request overrides the automatic split". paymentSplits is that
+ * instruction, so our own sale still pays no commission.
+ *
+ * Adyen takes the store's REFERENCE here, 16 characters at most, never its ST
+ * id. A reference that cannot be one is not sent: a link with no store still
+ * takes the money, a link with a broken store takes nothing.
+ */
+export function storeFor(cfg: AdyenConfig, currency: string): string | null {
+  const store = String(cfg.store || "").trim();
+  if (!store || store.length > 16 || /\s/.test(store)) return null;
+  const only = cfg.storeCurrencies || [];
+  if (only.length && !only.includes((currency || "GBP").toUpperCase())) return null;
+  return store;
 }
 
 async function call(cfg: AdyenConfig, method: string, path: string, body?: unknown, idempotencyKey?: string) {
@@ -110,9 +167,9 @@ async function call(cfg: AdyenConfig, method: string, path: string, body?: unkno
  * A chargeback is deducted from the same account, so a dispute on our sale
  * comes out of our money and not theirs.
  *
- * We never send `store`: a store carries the venue split profile (0.8% + 5p to
- * the liable account) and Adyen applies it to a payment link, which would take
- * commission out of our own invoice.
+ * These splits ride EVERY link, store or no store. When the link names a store
+ * (storeFor) they are what stops that store's own split profile from taking
+ * commission out of our invoice: a split in the request beats the profile.
  */
 export function paymentSplits(cfg: AdyenConfig, amount: number, currency: string, reference: string) {
   if (!cfg.balanceAccount) return null;
@@ -141,14 +198,18 @@ export type LinkInput = {
   metadata?: Record<string, string>;
 };
 
-/** Create the link the customer pays on. Returns { id, url, expiresAt }. */
-export async function createPaymentLink(cfg: AdyenConfig, input: LinkInput) {
+/**
+ * What we send to POST /paymentLinks, built in one pure place so a test pins it.
+ * `now` is the clock, passed in.
+ */
+export function paymentLinkBody(cfg: AdyenConfig, input: LinkInput, now: number = Date.now()): Record<string, unknown> {
   const days = Math.min(Math.max(input.expiresInDays ?? 30, 1), 70);  // Adyen's ceiling is 70 days
-  const expiresAt = new Date(Date.now() + days * 86400000).toISOString().replace(/\.\d{3}Z$/, "+00:00");
+  const expiresAt = new Date(now + days * 86400000).toISOString().replace(/\.\d{3}Z$/, "+00:00");
+  const currency = (input.currency || "GBP").toUpperCase();
   const body: Record<string, unknown> = {
     merchantAccount: cfg.merchantAccount,
     reference: input.reference,
-    amount: { currency: (input.currency || "GBP").toUpperCase(), value: minorUnits(input.amount) },
+    amount: { currency, value: minorUnits(input.amount) },
     expiresAt,
     reusable: false,                    // one successful payment per link
   };
@@ -158,17 +219,50 @@ export async function createPaymentLink(cfg: AdyenConfig, input: LinkInput) {
   if (input.countryCode) body.countryCode = input.countryCode;
   if (input.returnUrl) body.returnUrl = input.returnUrl;
   if (input.metadata) body.metadata = input.metadata;
+  // Our own store: the payer sees our name and the card is priced as a home sale.
+  const store = storeFor(cfg, currency);
+  if (store) body.store = store;
+  const statement = statementName(cfg.shopperStatement);
+  if (statement) body.shopperStatement = statement;
   const splits = paymentSplits(cfg, input.amount, input.currency, input.reference);
   if (splits) {
     body.splits = splits;
     // A dispute on our sale is ours, not the platform's.
     body.platformChargebackLogic = { behavior: "deductFromOneBalanceAccount", targetAccount: cfg.balanceAccount };
   }
-  // Keyed on reference AND money. Adyen replays the first response for a key
-  // for 7 days, so keying on the invoice alone would hand back last week's
-  // link at last week's price after a re-price, a deposit, or a credit note.
-  const key = `link-${input.reference}-${minorUnits(input.amount)}-${(input.currency || "GBP").toUpperCase()}`;
-  return await call(cfg, "POST", "/paymentLinks", body, key);
+  return body;
+}
+
+/**
+ * Keyed on reference AND money. Adyen replays the first response for a key
+ * for 7 days, so keying on the invoice alone would hand back last week's
+ * link at last week's price after a re-price, a deposit, or a credit note.
+ *
+ * The store and the statement name are in the key for the same reason: a link
+ * made before the store was set would otherwise come back for a week, still
+ * with no store on it. With neither set the key is exactly what it always was.
+ */
+export function linkIdempotencyKey(cfg: AdyenConfig, input: LinkInput): string {
+  const currency = (input.currency || "GBP").toUpperCase();
+  const base = `link-${input.reference}-${minorUnits(input.amount)}-${currency}`;
+  const store = storeFor(cfg, currency);
+  const statement = statementName(cfg.shopperStatement);
+  if (!store && !statement) return base;
+  // Five characters, not the words: Adyen stops a key at 64 characters and the
+  // invoice id already takes most of them.
+  return `${base}-${shortHash(`${store || ""}|${statement}`)}`;
+}
+
+/** A short, steady fingerprint of a string (FNV-1a, base 36, five characters). Not a secret. */
+export function shortHash(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return (h % 60466176).toString(36).padStart(5, "0");
+}
+
+/** Create the link the customer pays on. Returns { id, url, expiresAt }. */
+export async function createPaymentLink(cfg: AdyenConfig, input: LinkInput) {
+  return await call(cfg, "POST", "/paymentLinks", paymentLinkBody(cfg, input), linkIdempotencyKey(cfg, input));
 }
 
 export const getPaymentLink = (cfg: AdyenConfig, linkId: string) =>
