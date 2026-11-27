@@ -146,7 +146,9 @@ async function call(cfg: AdyenConfig, method: string, path: string, body?: unkno
   if (!r.ok) {
     // Adyen errors carry message + errorCode; both belong in the log.
     const msg = data?.message || text.slice(0, 300) || `HTTP ${r.status}`;
-    throw new Error(`adyen ${method} ${path} failed (${r.status}${data?.errorCode ? ` ${data.errorCode}` : ""}): ${msg}`);
+    const err = new Error(`adyen ${method} ${path} failed (${r.status}${data?.errorCode ? ` ${data.errorCode}` : ""}): ${msg}`);
+    (err as Error & { status?: number }).status = r.status;
+    throw err;
   }
   return data;
 }
@@ -262,7 +264,21 @@ export function shortHash(text: string): string {
 
 /** Create the link the customer pays on. Returns { id, url, expiresAt }. */
 export async function createPaymentLink(cfg: AdyenConfig, input: LinkInput) {
-  return await call(cfg, "POST", "/paymentLinks", paymentLinkBody(cfg, input), linkIdempotencyKey(cfg, input));
+  const body = paymentLinkBody(cfg, input);
+  try {
+    return await call(cfg, "POST", "/paymentLinks", body, linkIdempotencyKey(cfg, input));
+  } catch (e) {
+    // A customer must always be able to pay. If Adyen refuses the link while it
+    // names our store (the store was renamed, closed, or cannot take this
+    // currency), make the link the old way, with no store, and say so loudly:
+    // the money still arrives, at the dearer rate, until the store is put right.
+    const status = (e as Error & { status?: number }).status ?? 0;
+    if (!body.store || status < 400 || status >= 500) throw e;
+    console.error(`adyen: link refused with store ${body.store} (${(e as Error).message}); made again with no store`);
+    const plain: AdyenConfig = { ...cfg, store: undefined };
+    const again: LinkInput = { ...input, metadata: { ...(input.metadata || {}), store_refused: String(body.store) } };
+    return await call(cfg, "POST", "/paymentLinks", paymentLinkBody(plain, again), linkIdempotencyKey(plain, input));
+  }
 }
 
 export const getPaymentLink = (cfg: AdyenConfig, linkId: string) =>

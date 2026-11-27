@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   minorUnits, fromMinorUnits, checkoutBase, paymentSplits,
-  storeFor, statementName, currencyList, paymentLinkBody, linkIdempotencyKey, shortHash,
+  storeFor, statementName, currencyList, paymentLinkBody, linkIdempotencyKey, shortHash, createPaymentLink,
 } from '../../supabase/functions/_shared/adyen.ts';
 import {
   isTrue, signedPayload, plainSignedPayload, hexToBytes, verifyItem,
@@ -304,5 +304,54 @@ describe('our own store, so the payer sees our name and the card is priced as a 
     expect(linkIdempotencyKey(c, input({ amount: 999999.99 })).length).toBeLessThanOrEqual(64);
     expect(shortHash('a')).toHaveLength(5);
     expect(shortHash('a')).not.toBe(shortHash('b'));
+  });
+});
+
+describe('a customer can always pay, even if Adyen refuses our store', () => {
+  const BA = 'BA32C5F22322CJ5PXF2BD7FKK';
+  const cfg = (o = {}) => ({ apiKey: 'k', merchantAccount: 'FranPOS_QSR_UK', env: 'test', balanceAccount: BA, ...o });
+  const input = { amount: 100, currency: 'GBP', reference: 'inv-7315f047-8c77-4392-9d0b-a9866265071d', metadata: { invoice_number: '1023' } };
+  const reply = (status, data) => ({ ok: status < 400, status, text: async () => JSON.stringify(data) });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('makes one call when the store is accepted', async () => {
+    const fetchMock = vi.fn(async () => reply(201, { id: 'PL1', url: 'https://pay/1' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const link = await createPaymentLink(cfg({ store: 'SV-1007' }), input);
+    expect(link.url).toBe('https://pay/1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).store).toBe('SV-1007');
+  });
+
+  it('makes the link again with no store when Adyen refuses the store', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(reply(422, { status: 422, errorCode: '910', message: 'Invalid Store' }))
+      .mockResolvedValueOnce(reply(201, { id: 'PL2', url: 'https://pay/2' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const link = await createPaymentLink(cfg({ store: 'GONE' }), input);
+    expect(link.url).toBe('https://pay/2');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect('store' in second).toBe(false);
+    expect(second.metadata).toEqual({ invoice_number: '1023', store_refused: 'GONE' });
+    expect(second.splits.map((s) => s.type)).toEqual(['BalanceAccount', 'PaymentFee']);
+    // a different key, so Adyen does not replay the refusal
+    expect(fetchMock.mock.calls[1][1].headers['Idempotency-Key']).not.toBe(fetchMock.mock.calls[0][1].headers['Idempotency-Key']);
+    expect(console.error).toHaveBeenCalled();
+  });
+
+  it('does not try twice when there was no store to blame', async () => {
+    const fetchMock = vi.fn(async () => reply(422, { message: 'bad amount' }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(createPaymentLink(cfg(), input)).rejects.toThrow(/bad amount/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not hide an Adyen outage behind a second call', async () => {
+    const fetchMock = vi.fn(async () => reply(503, { message: 'down' }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(createPaymentLink(cfg({ store: 'SV-1007' }), input)).rejects.toThrow(/503/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
