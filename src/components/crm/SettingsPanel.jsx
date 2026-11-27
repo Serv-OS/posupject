@@ -769,6 +769,27 @@ export default function SettingsPanel({ profile }) {
                             onBlur={e => saveRegion(r.code, { business_address: e.target.value || null })}
                             placeholder="Falls back to the global setting" />
                         </div>
+                        {/* Peter, 27 Nov 2026: the UK and US companies are separate,
+                            each with its own registration. Printed under the
+                            address on every invoice, credit note and quote. */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                          <div>
+                            <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">{r.currency === 'USD' ? 'State file number' : 'Company number'}</label>
+                            <input className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember placeholder-dim"
+                              value={r.company_number || ''}
+                              onChange={e => upd({ company_number: e.target.value })}
+                              onBlur={e => saveRegion(r.code, { company_number: e.target.value.trim() || null })}
+                              placeholder={r.currency === 'USD' ? 'Optional' : 'e.g. 12345678'} />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">{r.currency === 'USD' ? 'EIN' : 'VAT number'}</label>
+                            <input className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember placeholder-dim"
+                              value={r.tax_number || ''}
+                              onChange={e => upd({ tax_number: e.target.value })}
+                              onBlur={e => saveRegion(r.code, { tax_number: e.target.value.trim() || null })}
+                              placeholder={r.currency === 'USD' ? 'e.g. 12-3456789' : 'e.g. GB123456789'} />
+                          </div>
+                        </div>
                         {/* Peter, 25 Nov 2026: each company bills with its own
                             terms, bank details and footer. The invoice currency
                             picks the company (USD = US, GBP = UK). */}
@@ -788,7 +809,16 @@ export default function SettingsPanel({ profile }) {
                             value={r.invoice_footer || ''}
                             onChange={e => upd({ invoice_footer: e.target.value })}
                             onBlur={e => saveRegion(r.code, { invoice_footer: e.target.value || null })}
-                            placeholder={r.currency === 'USD' ? 'e.g. ServOS App Inc · Delaware · EIN 00-0000000' : 'e.g. ServOS App Ltd · Registered in England 00000000 · VAT GB000000000'} />
+                            placeholder={r.currency === 'USD' ? 'e.g. Thank you for your business' : 'e.g. Thank you for your business'} />
+                        </div>
+                        <div className="mt-2">
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-dim mb-1 block">Quote terms</label>
+                          <textarea rows={5}
+                            className="w-full px-3 py-2 bg-card border border-bdr rounded-xl text-sm text-paper focus:outline-none focus:border-ember placeholder-dim"
+                            value={r.quote_terms || ''}
+                            onChange={e => upd({ quote_terms: e.target.value })}
+                            onBlur={e => saveRegion(r.code, { quote_terms: e.target.value || null })}
+                            placeholder={`Shown on every ${r.currency === 'USD' ? 'dollar' : 'pound'} quote. Falls back to the global quote terms`} />
                         </div>
                       </div>
                     </div>

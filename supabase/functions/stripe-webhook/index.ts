@@ -4,6 +4,7 @@
 // Required secrets: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { invoiceSeller } from "../_shared/region.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@14?target=deno";
 import { invoiceEmailHtml, sendInvoiceEmail, moneyFor } from "../_shared/invoiceEmail.ts";
@@ -61,8 +62,7 @@ async function createPaidInvoiceForQuote(supabase: any, quoteId: string, paidAmo
   // Email the receipt to the customer (best effort)
   const recipient = inv.email_to || await quoteContactEmail(supabase, q);
   if (recipient) {
-    const { data: seller } = await supabase.from("support_settings")
-      .select("business_name, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle();
+    const { data: seller } = await invoiceSeller(supabase, inv.currency);
     const appUrl = Deno.env.get("APP_URL") || "https://posupject.vercel.app";
     const { subject, html } = invoiceEmailHtml(inv, seller || {}, `${appUrl}/i/${inv.public_token}`, { paid: inv.status === "paid" });
     await sendInvoiceEmail(supabase, recipient, subject, html);

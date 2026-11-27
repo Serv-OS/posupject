@@ -35,7 +35,9 @@ serve(async (req) => {
         quote.company_id ? supabase.from("companies").select("name, address, city, postcode").eq("id", quote.company_id).maybeSingle() : Promise.resolve({ data: null }),
         quote.contact_id ? supabase.from("contacts").select("first_name, last_name, email, phone").eq("id", quote.contact_id).maybeSingle() : Promise.resolve({ data: null }),
         quote.location_id ? supabase.from("locations").select("name, address, city, postcode").eq("id", quote.location_id).maybeSingle() : Promise.resolve({ data: null }),
-        supabase.from("support_settings").select("quote_terms, business_name, business_address, business_email, business_phone, quote_accent, logo_url").eq("id", 1).maybeSingle(),
+        // The billing company follows the quote currency (USD = the US company,
+        // GBP = the UK one), the same rule as invoices (Peter, 27 Nov 2026).
+        invoiceSeller(supabase, quote.currency),
       ]);
       if (quote.status === "sent") await supabase.from("quotes").update({ status: "viewed" }).eq("id", quote.id);
       const expired = quote.valid_until && new Date(quote.valid_until) < new Date(new Date().toDateString()) && !["won", "paid", "signed"].includes(quote.status);
@@ -65,6 +67,7 @@ serve(async (req) => {
           name: s.business_name || "ServOS", address: s.business_address || "",
           email: s.business_email || "", phone: s.business_phone || "", accent: s.quote_accent || "#E8743C",
           logo_url: s.logo_url || null,
+          footer: s.invoice_footer || "",
         },
         company: company ? { name: company.name, address: [company.address, company.city, company.postcode].filter(Boolean).join(", ") } : null,
         contact: contact ? { name: [contact.first_name, contact.last_name].filter(Boolean).join(" "), email: contact.email, phone: contact.phone } : null,

@@ -61,6 +61,34 @@ export function localTimeForPhone(raw, regions) {
 // Re-exported here so every existing `import { toE164 } from '…/region'` works.
 export { toE164 } from './phoneFormat';
 
+/** The legal line a company invoice must carry (UK: Companies Act 2006 s82
+ *  and the Company Names Regulations want the registered number and, with VAT,
+ *  the VAT number; US: the EIN is customary on B2B invoices). Empty fields are
+ *  left out; no fields, no line. */
+export function registrationLine(r) {
+  if (!r) return null;
+  const co = String(r.company_number || '').trim();
+  const tax = String(r.tax_number || '').trim();
+  const us = r.currency === 'USD' || r.code === 'US';
+  const parts = us
+    ? [co ? `File no. ${co}` : '', tax ? `EIN ${tax}` : '']
+    : [co ? `Registered in England and Wales no. ${co}` : '', tax ? `VAT no. ${tax}` : ''];
+  const line = parts.filter(Boolean).join(' · ');
+  return line || null;
+}
+
+/** The company's own address, with its registration line under it, so every
+ *  document that prints the address (PDFs, public pages, quotes) carries it.
+ *  Once a company has its own name, the global address is NOT borrowed: the
+ *  global one is the other company's, and a UK invoice printed the Delaware
+ *  address (26 Nov 2026). */
+function sellerAddress(r, base) {
+  const own = String(r.business_address || '').trim();
+  const named = String(r.business_name || '').trim();
+  const addr = own || (named ? '' : String(base.business_address || '').trim());
+  return [addr, registrationLine(r)].filter(Boolean).join('\n') || null;
+}
+
 /** Who is billing: the invoice currency picks the company (USD = the US
  *  company, GBP = the UK one). The region's name, address, email, phone,
  *  terms and footer win; anything empty falls back to the global settings.
@@ -75,11 +103,14 @@ export function mergeSeller(settings, regions, currency) {
     ...base,
     region_code: r.code,
     business_name: pick(r.business_name, base.business_name),
-    business_address: pick(r.business_address, base.business_address),
+    business_address: sellerAddress(r, base),
     business_email: pick(r.business_email, base.business_email),
     business_phone: pick(r.business_phone, base.business_phone),
     invoice_terms: pick(r.invoice_terms, base.invoice_terms),
     quote_terms: pick(r.quote_terms, base.quote_terms),
     invoice_footer: pick(r.invoice_footer, base.invoice_footer ?? null),
+      company_number: r.company_number || null,
+      tax_number: r.tax_number || null,
+      registration: registrationLine(r),
   };
 }
